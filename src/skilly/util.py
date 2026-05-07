@@ -11,7 +11,35 @@ def get_project_skills(
     venv_path: Path = Path(".venv"),
     file_system: FileSystem = DEFAULT_FILE_SYSTEM,
 ) -> List[Skill]:
+    """
+    Get skills matching project dependencies.
+    Args:
+        pyproject_toml_path: path to `pyproject.toml`
+        venv_path: path to virtual environment
+        file_system: file system to use.
+
+    Returns:
+        list of skills in the virtual environment matching `pyproject.toml`.
+    """
     toml = parse_toml(pyproject_toml_path, file_system=file_system)
     info = PyProjectInfo.from_pyproject_toml(toml)
     venv_skills = VenvSkills.from_dir(venv_path, file_system=file_system)
     return [s.skill for s in venv_skills.filter_skills(info.dependencies)]
+
+
+def get_venv_skills(
+    venv_path: Path = Path(".venv"),
+    file_system: FileSystem = DEFAULT_FILE_SYSTEM,
+) -> List[Skill]:
+    """
+    Get skills in the virtual environment.
+    Args:
+        venv_path: path to virtual environment
+        file_system: file system to use.
+
+    Returns:
+        list of skills in the virtual environment.
+
+    """
+    venv_skills = VenvSkills.from_dir(venv_path, file_system=file_system)
+    return [s.skill for s in venv_skills.skills]

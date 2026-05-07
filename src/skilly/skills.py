@@ -14,7 +14,7 @@ class Skill:
     name: str
     description: str
     path: Path
-    body: str = ""
+    content: str = ""
     license: str | None = None
     compatibility: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
@@ -54,7 +54,7 @@ class Skill:
             if isinstance(raw_metadata.get("description"), str)
             else "",
             path=skill_path,
-            body=body,
+            content=body,
             license=raw_metadata.get("license")
             if isinstance(raw_metadata.get("license"), str)
             else None,

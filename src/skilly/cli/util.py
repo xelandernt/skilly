@@ -26,6 +26,8 @@ def venv(path: Path = Path(".venv")) -> None:
     from skilly.skills import VenvSkills
 
     skills = VenvSkills.from_dir(path)
+
+    print(f"Found {len(skills.skills)} skills:")
     for skill in skills.skills:
         print(
             f"{skill.skill.name}[{skill.package_name}=={skill.package_version}]: {skill.skill.description}"

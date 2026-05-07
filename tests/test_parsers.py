@@ -20,7 +20,7 @@ Use the parser.
     assert skill.name == "parser-skill"
     assert skill.description.startswith("Parse structured input.")
     assert skill.metadata == {"owner": "docs"}
-    assert skill.body == "Use the parser."
+    assert skill.content == "Use the parser."
     assert skill.path == Path("/workspace/parser-skill/SKILL.md")
 
 
@@ -52,7 +52,7 @@ Relaxed instructions.
 
     assert skill.name == "relaxed-skill"
     assert skill.description == "Use when parsing should be permissive."
-    assert skill.body == "Relaxed instructions."
+    assert skill.content == "Relaxed instructions."
 
 
 def test_skill_from_dir_reads_skill_md(tmp_path: Path) -> None:
@@ -71,7 +71,7 @@ Directory based instructions.
 
     assert skill.name == "folder-skill"
     assert skill.path == (skill_dir / "SKILL.md").resolve()
-    assert skill.body == "Directory based instructions."
+    assert skill.content == "Directory based instructions."
 
 
 def test_venv_skills_from_dir_discovers_recorded_skill(tmp_path: Path) -> None:
@@ -116,7 +116,7 @@ Use this skill carefully.
     assert discovered.skill.metadata == {"author": "example-org", "version": "1.0"}
     assert discovered.skill.allowed_tools == "Bash(git:*) Read"
     assert discovered.skill.path == skill_path.resolve()
-    assert "Use this skill carefully." in discovered.skill.body
+    assert "Use this skill carefully." in discovered.skill.content
 
 
 def test_venv_skills_from_dir_keeps_skills_with_unknown_fields(
