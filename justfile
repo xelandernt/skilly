@@ -35,3 +35,9 @@ hook:
 # uninstall pre-commit hooks
 unhook:
     uv run prek uninstall
+
+# publish project on pypi
+publish:
+    rm -rf dist
+    uv build
+    uv publish --token $PYPI_TOKEN
