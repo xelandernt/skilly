@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 
 [project]
-name = "libi"
+name = "skilly"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -17,7 +17,7 @@ dependencies = [
 dynamic = ["version"]
 
 [project.scripts]
-libi = "libi.cli.root:cli"
+skilly = "skilly.cli.root:cli"
 
 [dependency-groups]
 dev = [
@@ -44,4 +44,4 @@ source = "vcs"
 fallback-version = "0.0.1"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/libi"]
+packages = ["src/skilly"]

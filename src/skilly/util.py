@@ -1,9 +1,9 @@
 from pathlib import Path
 from typing import List
 
-from libi.filesystem import FileSystem, DEFAULT_FILE_SYSTEM
-from libi.parsers import parse_toml, PyProjectInfo
-from libi.skills import Skill, VenvSkills
+from skilly.filesystem import FileSystem, DEFAULT_FILE_SYSTEM
+from skilly.parsers import parse_toml, PyProjectInfo
+from skilly.skills import Skill, VenvSkills
 
 
 def get_project_skills(

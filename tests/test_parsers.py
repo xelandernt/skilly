@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from libi.filesystem import FileSystem
-from libi.skills import Skill, VenvSkills
+from skilly.filesystem import FileSystem
+from skilly.skills import Skill, VenvSkills
 
 
 def test_skill_from_text_returns_skill_object() -> None:
