@@ -1,0 +1,47 @@
+[build-system]
+requires = [
+    "hatchling", "hatch-vcs"
+]
+build-backend = "hatchling.build"
+
+
+[project]
+name = "libi"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "cyclopts>=4.11.2",
+    "fastapi>=0.136.1",
+    "niquests>=3.18.7",
+]
+dynamic = ["version"]
+
+[project.scripts]
+libi = "libi.cli.root:cli"
+
+[dependency-groups]
+dev = [
+    "prek>=0.3.13",
+    "pyrefly>=0.64.0",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "ruff>=0.15.12",
+]
+
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+    "--ignore=.tox/",
+    "--ignore=tmp/"
+]
+pythonpath=["src", "tests"]
+
+
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.0.1"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/libi"]
