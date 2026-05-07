@@ -1,2 +1,3 @@
 # libi
-Library Skills 
+
+Read agent skills from dependencies.
