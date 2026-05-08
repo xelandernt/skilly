@@ -10,6 +10,14 @@ from .filesystem import DEFAULT_FILE_SYSTEM, FileSystem
 
 
 @dataclass(frozen=True)
+class SkillResource:
+    path: Path
+    relative_path: PurePosixPath
+    kind: str
+    content: str
+
+
+@dataclass(frozen=True)
 class Skill:
     name: str
     description: str
@@ -19,6 +27,24 @@ class Skill:
     compatibility: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
     allowed_tools: str | None = None
+    resources: list[SkillResource] = field(default_factory=list)
+    resource_warnings: list[str] = field(default_factory=list)
+
+    @property
+    def directory(self) -> Path:
+        return self.path.parent
+
+    @property
+    def scripts(self) -> list[SkillResource]:
+        return [resource for resource in self.resources if resource.kind == "script"]
+
+    @property
+    def references(self) -> list[SkillResource]:
+        return [resource for resource in self.resources if resource.kind == "reference"]
+
+    @property
+    def assets(self) -> list[SkillResource]:
+        return [resource for resource in self.resources if resource.kind == "asset"]
 
     @classmethod
     def from_text(
@@ -46,6 +72,13 @@ class Skill:
         else:
             skill_metadata = {}
 
+        skill_resources: list[SkillResource] = []
+        resource_warnings: list[str] = []
+        if path is not None:
+            skill_resources, resource_warnings = _load_skill_resources(
+                skill_path, file_system=file_system
+            )
+
         return cls(
             name=raw_metadata.get("name")
             if isinstance(raw_metadata.get("name"), str)
@@ -65,6 +98,8 @@ class Skill:
             allowed_tools=raw_metadata.get("allowed-tools")
             if isinstance(raw_metadata.get("allowed-tools"), str)
             else None,
+            resources=skill_resources,
+            resource_warnings=resource_warnings,
         )
 
     @classmethod
@@ -168,6 +203,13 @@ class _DistributionInfo:
 class _ScanResult:
     skills: list[DiscoveredSkill] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+
+
+_RESOURCE_KIND_BY_DIRECTORY = {
+    "scripts": "script",
+    "references": "reference",
+    "assets": "asset",
+}
 
 
 def _get_site_packages_dir(venv_path: Path, *, file_system: FileSystem) -> Path | None:
@@ -298,6 +340,91 @@ def _load_discovered_skill(
         ),
         None,
     )
+
+
+def _load_skill_resources(
+    skill_path: Path, *, file_system: FileSystem
+) -> tuple[list[SkillResource], list[str]]:
+    skill_dir = skill_path.parent
+    if not file_system.is_dir(skill_dir):
+        return [], []
+    try:
+        child_names = sorted(file_system.list_files(skill_dir))
+    except OSError as exc:
+        return [], [f"{skill_dir}: could not list bundled resources ({exc})"]
+
+    resources: list[SkillResource] = []
+    warnings: list[str] = []
+    for child_name in child_names:
+        if child_name == "SKILL.md":
+            continue
+        _collect_skill_resources(
+            root_dir=skill_dir,
+            current_path=skill_dir / child_name,
+            file_system=file_system,
+            resources=resources,
+            warnings=warnings,
+        )
+
+    resources.sort(key=lambda resource: resource.relative_path.as_posix())
+    warnings.sort()
+    return resources, warnings
+
+
+def _collect_skill_resources(
+    *,
+    root_dir: Path,
+    current_path: Path,
+    file_system: FileSystem,
+    resources: list[SkillResource],
+    warnings: list[str],
+) -> None:
+    if file_system.is_dir(current_path):
+        try:
+            child_names = sorted(file_system.list_files(current_path))
+        except OSError as exc:
+            warnings.append(f"{current_path}: could not list bundled resources ({exc})")
+            return
+        for child_name in child_names:
+            _collect_skill_resources(
+                root_dir=root_dir,
+                current_path=current_path / child_name,
+                file_system=file_system,
+                resources=resources,
+                warnings=warnings,
+            )
+        return
+
+    relative_path = PurePosixPath(*current_path.relative_to(root_dir).parts)
+    try:
+        content = file_system.read_file(current_path)
+    except (OSError, UnicodeDecodeError) as exc:
+        warnings.append(f"{current_path}: could not read bundled resource ({exc})")
+        return
+    resources.append(
+        SkillResource(
+            path=file_system.resolve(current_path),
+            relative_path=relative_path,
+            kind=_resource_kind(relative_path),
+            content=content,
+        )
+    )
+
+
+def _resource_kind(relative_path: PurePosixPath) -> str:
+    if not relative_path.parts:
+        return "other"
+    return _RESOURCE_KIND_BY_DIRECTORY.get(relative_path.parts[0], "other")
+
+
+def _to_relative_resource_path(
+    path: str | Path | PurePosixPath,
+) -> PurePosixPath:
+    if isinstance(path, PurePosixPath):
+        return path
+    if isinstance(path, Path):
+        return PurePosixPath(*path.parts)
+    return PurePosixPath(path)
 
 
 def _split_frontmatter(text: str) -> tuple[list[str], str]:

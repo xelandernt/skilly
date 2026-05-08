@@ -21,7 +21,7 @@ def dependencies(
 
 
 @util_cli.command()
-def venv(path: Path = Path(".venv")) -> None:
+def venv(path: Path = Path(".venv"), detailed: bool = False) -> None:
 
     from skilly.skills import VenvSkills
 
@@ -30,5 +30,12 @@ def venv(path: Path = Path(".venv")) -> None:
     print(f"Found {len(skills.skills)} skills:")
     for skill in skills.skills:
         print(
-            f"{skill.skill.name}[{skill.package_name}=={skill.package_version}]: {skill.skill.description}"
+            f"{skill.skill.name}[{skill.package_name}=={skill.package_version}]:\n{skill.skill.description}"
         )
+        if detailed:
+            print("\tResources:")
+            for resource in skill.skill.resources:
+                content_length = len(resource.content.split("\n"))
+                print(
+                    f"\t\t{resource.relative_path} [{resource.kind}]: {content_length} lines."
+                )

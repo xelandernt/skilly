@@ -74,6 +74,55 @@ Directory based instructions.
     assert skill.content == "Directory based instructions."
 
 
+def test_skill_from_dir_collects_bundled_resources(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "folder-skill"
+    _write_skill(
+        skill_dir / "SKILL.md",
+        """---
+name: folder-skill
+description: Use when reading a skill from a directory.
+---
+Directory based instructions.
+""",
+    )
+    _write_skill(skill_dir / "scripts/extract.py", "print('extract')\n")
+    _write_skill(skill_dir / "references/REFERENCE.md", "# Reference\n")
+    _write_skill(skill_dir / "assets/template.txt", "template\n")
+    _write_skill(skill_dir / "tool-config.json", "{}\n")
+
+    skill = Skill.from_dir(skill_dir)
+
+    assert skill.directory == skill_dir.resolve()
+    assert [resource.relative_path.as_posix() for resource in skill.resources] == [
+        "assets/template.txt",
+        "references/REFERENCE.md",
+        "scripts/extract.py",
+        "tool-config.json",
+    ]
+    assert [resource.kind for resource in skill.resources] == [
+        "asset",
+        "reference",
+        "script",
+        "other",
+    ]
+    assert [resource.content for resource in skill.resources] == [
+        "template\n",
+        "# Reference\n",
+        "print('extract')\n",
+        "{}\n",
+    ]
+    assert [resource.relative_path.as_posix() for resource in skill.scripts] == [
+        "scripts/extract.py"
+    ]
+    assert [resource.relative_path.as_posix() for resource in skill.references] == [
+        "references/REFERENCE.md"
+    ]
+    assert [resource.relative_path.as_posix() for resource in skill.assets] == [
+        "assets/template.txt"
+    ]
+    assert skill.read_resource("scripts/extract.py") == "print('extract')\n"
+
+
 def test_venv_skills_from_dir_discovers_recorded_skill(tmp_path: Path) -> None:
     venv_path, site_packages = _make_venv(tmp_path)
     skill_path = site_packages / "sample_pkg/.agents/skills/sample-skill/SKILL.md"
@@ -93,6 +142,9 @@ allowed-tools: Bash(git:*) Read
 Use this skill carefully.
 """,
     )
+    _write_skill(skill_path.parent / "scripts/extract.py", "print('sample')\n")
+    _write_skill(skill_path.parent / "references/REFERENCE.md", "# Sample reference\n")
+    _write_skill(skill_path.parent / "assets/form.json", "{}\n")
     _write_distribution(
         site_packages=site_packages,
         package_name="sample-pkg",
@@ -117,6 +169,18 @@ Use this skill carefully.
     assert discovered.skill.allowed_tools == "Bash(git:*) Read"
     assert discovered.skill.path == skill_path.resolve()
     assert "Use this skill carefully." in discovered.skill.content
+    assert [
+        resource.relative_path.as_posix() for resource in discovered.skill.resources
+    ] == [
+        "assets/form.json",
+        "references/REFERENCE.md",
+        "scripts/extract.py",
+    ]
+    assert [resource.content for resource in discovered.skill.resources] == [
+        "{}\n",
+        "# Sample reference\n",
+        "print('sample')\n",
+    ]
 
 
 def test_venv_skills_from_dir_keeps_skills_with_unknown_fields(
@@ -177,11 +241,30 @@ description: Use when the task mentions demos.
 Demo instructions.
 """,
     )
+    file_system.add_file(
+        site_packages / "demo_pkg/.agents/skills/demo-skill/scripts/demo.py",
+        "print('demo')\n",
+    )
+    file_system.add_file(
+        site_packages / "demo_pkg/.agents/skills/demo-skill/references/REFERENCE.md",
+        "# Demo reference\n",
+    )
 
     info = VenvSkills.from_dir(venv_path, file_system=file_system)
 
     assert [discovered.package_name for discovered in info.skills] == ["demo-pkg"]
     assert info.skills[0].skill.name == "demo-skill"
+    assert [
+        resource.relative_path.as_posix() for resource in info.skills[0].skill.resources
+    ] == [
+        "references/REFERENCE.md",
+        "scripts/demo.py",
+    ]
+    assert [resource.content for resource in info.skills[0].skill.resources] == [
+        "# Demo reference\n",
+        "print('demo')\n",
+    ]
+    assert info.skills[0].skill.read_resource("scripts/demo.py") == "print('demo')\n"
     assert info.warnings == []
 
 
