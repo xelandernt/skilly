@@ -14,7 +14,7 @@ class SkillResource:
     path: Path
     relative_path: PurePosixPath
     kind: str
-    content: str
+    content: str = ""
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,28 @@ class Skill:
     @property
     def assets(self) -> list[SkillResource]:
         return [resource for resource in self.resources if resource.kind == "asset"]
+
+    def get_resource(
+        self, relative_path: str | Path | PurePosixPath
+    ) -> SkillResource | None:
+        normalized_path = _to_relative_resource_path(relative_path)
+        for resource in self.resources:
+            if resource.relative_path == normalized_path:
+                return resource
+        return None
+
+    def read_resource(
+        self,
+        relative_path: str | Path | PurePosixPath,
+        *,
+        file_system: FileSystem = DEFAULT_FILE_SYSTEM,
+    ) -> str:
+        resource = self.get_resource(relative_path)
+        if resource is None:
+            raise FileNotFoundError(
+                f"{relative_path} is not bundled with skill {self.name}"
+            )
+        return resource.content
 
     @classmethod
     def from_text(
@@ -298,6 +320,7 @@ def _scan_distribution_records(
         )
         if discovered_skill is not None:
             skills.append(discovered_skill)
+            warnings.extend(discovered_skill.skill.resource_warnings)
         elif warning is not None:
             warnings.append(warning)
 
