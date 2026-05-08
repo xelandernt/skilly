@@ -120,7 +120,6 @@ Directory based instructions.
     assert [resource.relative_path.as_posix() for resource in skill.assets] == [
         "assets/template.txt"
     ]
-    assert skill.read_resource("scripts/extract.py") == "print('extract')\n"
 
 
 def test_venv_skills_from_dir_discovers_recorded_skill(tmp_path: Path) -> None:
@@ -264,7 +263,6 @@ Demo instructions.
         "# Demo reference\n",
         "print('demo')\n",
     ]
-    assert info.skills[0].skill.read_resource("scripts/demo.py") == "print('demo')\n"
     assert info.warnings == []
 
 

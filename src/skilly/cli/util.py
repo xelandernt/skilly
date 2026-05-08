@@ -2,7 +2,7 @@ from typing import Sequence
 from pathlib import Path
 from cyclopts import App
 
-util_cli = App("util")
+util_cli = App("util", help="Useful utilities")
 
 
 @util_cli.command()

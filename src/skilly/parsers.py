@@ -5,7 +5,7 @@ from typing import Any, Sequence
 
 from packaging.requirements import Requirement
 
-from .filesystem import DEFAULT_FILE_SYSTEM, FileSystem
+from skilly.filesystem import FileSystem, DEFAULT_FILE_SYSTEM
 
 
 @dataclass(frozen=True)

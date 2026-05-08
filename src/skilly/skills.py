@@ -2,10 +2,24 @@ import csv
 from dataclasses import dataclass, field
 from email.parser import Parser
 from pathlib import Path, PurePosixPath
-from typing import Sequence
+from typing import Protocol, Sequence
+from urllib.parse import unquote, urlparse
 
 from packaging.requirements import Requirement
 
+from .constants import (
+    DEFAULT_SKILLS_PATH,
+    SKILLY_GITHUB_URL_METADATA_KEY,
+    SKILLY_SKILLSMP_ID_METADATA_KEY,
+    SKILLY_MANAGED_METADATA_KEY,
+    SKILLY_MANAGED_METADATA_VALUE,
+    SKILLY_SOURCE_METADATA_KEY,
+    SKILLY_SOURCE_DEPENDENCY,
+    SKILLY_SOURCE_SKILLSMP,
+    SKILLY_UNKNOWN_SOURCE,
+    SKILLY_DEPENDENCY_PACKAGE_NAME_METADATA_KEY,
+    SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY,
+)
 from .filesystem import DEFAULT_FILE_SYSTEM, FileSystem
 
 
@@ -54,19 +68,6 @@ class Skill:
             if resource.relative_path == normalized_path:
                 return resource
         return None
-
-    def read_resource(
-        self,
-        relative_path: str | Path | PurePosixPath,
-        *,
-        file_system: FileSystem = DEFAULT_FILE_SYSTEM,
-    ) -> str:
-        resource = self.get_resource(relative_path)
-        if resource is None:
-            raise FileNotFoundError(
-                f"{relative_path} is not bundled with skill {self.name}"
-            )
-        return resource.content
 
     @classmethod
     def from_text(
@@ -213,6 +214,592 @@ class VenvSkills:
             site_packages_dir=site_packages_dir,
             warnings=warnings,
         )
+
+
+@dataclass(frozen=True)
+class GitHubSkillLocation:
+    owner: str
+    repo: str
+    ref: str
+    path: PurePosixPath
+    url: str
+
+    @property
+    def skill_name(self) -> str:
+        return self.path.name
+
+
+@dataclass(frozen=True)
+class GitHubContentItem:
+    type: str
+    name: str
+    path: PurePosixPath
+
+
+@dataclass(frozen=True)
+class GitHubFileBlob:
+    path: PurePosixPath
+    content: bytes
+    size: int
+
+
+@dataclass(frozen=True)
+class DownloadedSkillFile:
+    source_path: PurePosixPath
+    destination_path: Path
+    size: int
+
+
+@dataclass(frozen=True)
+class DownloadedSkill:
+    source: GitHubSkillLocation
+    destination: Path
+    files: list[DownloadedSkillFile]
+
+
+@dataclass(frozen=True)
+class InstalledSkill:
+    directory: Path
+    skill: Skill
+
+    @property
+    def directory_name(self) -> str:
+        return self.directory.name
+
+    @property
+    def github_url(self) -> str | None:
+        return self.skill.metadata.get(SKILLY_GITHUB_URL_METADATA_KEY)
+
+    @property
+    def skillsmp_id(self) -> str | None:
+        return self.skill.metadata.get(SKILLY_SKILLSMP_ID_METADATA_KEY)
+
+    @property
+    def managed_by_skilly(self) -> bool:
+        return (
+            self.skill.metadata.get(SKILLY_MANAGED_METADATA_KEY)
+            == SKILLY_MANAGED_METADATA_VALUE
+        )
+
+    @property
+    def source(self) -> str:
+        source = self.skill.metadata.get(SKILLY_SOURCE_METADATA_KEY)
+        if source in {SKILLY_SOURCE_DEPENDENCY, SKILLY_SOURCE_SKILLSMP}:
+            return source
+        if self.skillsmp_id is not None:
+            return SKILLY_SOURCE_SKILLSMP
+        return SKILLY_UNKNOWN_SOURCE
+
+    @property
+    def dependency_package_name(self) -> str | None:
+        return self.skill.metadata.get(SKILLY_DEPENDENCY_PACKAGE_NAME_METADATA_KEY)
+
+    @property
+    def dependency_package_version(self) -> str | None:
+        return self.skill.metadata.get(SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY)
+
+
+@dataclass(frozen=True)
+class DependencySkillUpdate:
+    installed_skill: InstalledSkill
+    discovered_skill: DiscoveredSkill
+
+    @property
+    def package_name(self) -> str:
+        return self.discovered_skill.package_name
+
+    @property
+    def installed_version(self) -> str:
+        return self.installed_skill.dependency_package_version or ""
+
+    @property
+    def available_version(self) -> str:
+        return self.discovered_skill.package_version
+
+
+class GitHubSkillFetcher(Protocol):
+    def fetch_github_directory(
+        self,
+        location: GitHubSkillLocation,
+        current_path: PurePosixPath,
+    ) -> list[GitHubContentItem]:
+        """Fetch directory entries for a GitHub skill path."""
+
+    def fetch_github_file(
+        self,
+        location: GitHubSkillLocation,
+        path: PurePosixPath,
+    ) -> GitHubFileBlob:
+        """Fetch a GitHub skill file."""
+
+
+class SkillsMpInstallableSkill(Protocol):
+    id: str
+    githubUrl: str
+
+
+@dataclass(frozen=True)
+class ManagedSkills:
+    file_system: FileSystem = DEFAULT_FILE_SYSTEM
+
+    def parse_github_url(self, github_url: str) -> GitHubSkillLocation:
+        parsed_url = urlparse(github_url)
+        if parsed_url.netloc != "github.com":
+            raise ValueError(f"Unsupported GitHub URL host: {parsed_url.netloc}")
+
+        parts = [unquote(part) for part in parsed_url.path.split("/") if part]
+        if len(parts) < 5 or parts[2] != "tree":
+            raise ValueError(
+                "GitHub skill URLs must look like "
+                "https://github.com/<owner>/<repo>/tree/<ref>/<path>"
+            )
+
+        path = PurePosixPath(*parts[4:])
+        if str(path) in {"", "."}:
+            raise ValueError("GitHub skill URL must include a directory path")
+
+        return GitHubSkillLocation(
+            owner=parts[0],
+            repo=parts[1],
+            ref=parts[3],
+            path=path,
+            url=github_url,
+        )
+
+    def download_skill(
+        self,
+        fetcher: GitHubSkillFetcher,
+        github_url: str,
+        *,
+        directory: Path | None = None,
+        skill_name: str | None = None,
+        overwrite: bool = False,
+        skillsmp_id: str | None = None,
+    ) -> DownloadedSkill:
+        location = self.parse_github_url(github_url)
+        destination = self._get_download_destination(
+            location,
+            directory=directory,
+            skill_name=skill_name,
+        )
+        files = self._download_github_directory(
+            fetcher,
+            location=location,
+            current_path=location.path,
+            destination=destination,
+            overwrite=overwrite,
+            skillsmp_id=skillsmp_id,
+        )
+        return DownloadedSkill(source=location, destination=destination, files=files)
+
+    def install_skill(
+        self,
+        fetcher: GitHubSkillFetcher,
+        skill: SkillsMpInstallableSkill,
+        *,
+        directory: Path = DEFAULT_SKILLS_PATH,
+        skill_name: str | None = None,
+        overwrite: bool = False,
+    ) -> DownloadedSkill:
+        return self.download_skill(
+            fetcher,
+            skill.githubUrl,
+            directory=directory,
+            skill_name=skill_name,
+            overwrite=overwrite,
+            skillsmp_id=skill.id,
+        )
+
+    def install_discovered_skill(
+        self,
+        discovered_skill: DiscoveredSkill,
+        *,
+        directory: Path = DEFAULT_SKILLS_PATH,
+        skill_name: str | None = None,
+        overwrite: bool = False,
+    ) -> InstalledSkill:
+        destination = self.file_system.resolve(
+            self.file_system.resolve(directory)
+            / (skill_name or discovered_skill.skill.name)
+        )
+        metadata_updates = {
+            SKILLY_MANAGED_METADATA_KEY: SKILLY_MANAGED_METADATA_VALUE,
+            SKILLY_SOURCE_METADATA_KEY: SKILLY_SOURCE_DEPENDENCY,
+            SKILLY_DEPENDENCY_PACKAGE_NAME_METADATA_KEY: discovered_skill.package_name,
+            SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY: discovered_skill.package_version,
+        }
+        self._copy_local_skill_directory(
+            source_directory=discovered_skill.skill.directory,
+            current_directory=discovered_skill.skill.directory,
+            destination=destination,
+            overwrite=overwrite,
+            metadata_updates=metadata_updates,
+        )
+        return InstalledSkill(
+            directory=destination,
+            skill=Skill.from_dir(destination, file_system=self.file_system),
+        )
+
+    def list_installed_skills(
+        self, directory: Path = DEFAULT_SKILLS_PATH
+    ) -> list[InstalledSkill]:
+        root = self.file_system.resolve(directory)
+        if not self.file_system.exists(root):
+            return []
+        if not self.file_system.is_dir(root):
+            raise NotADirectoryError(root)
+
+        installed_skills: list[InstalledSkill] = []
+        for child_name in sorted(self.file_system.list_files(root)):
+            child = self.file_system.resolve(root / child_name)
+            if not self.file_system.is_dir(child):
+                continue
+            skill_md_path = self._find_skill_md_path(child)
+            if skill_md_path is None:
+                continue
+            installed_skills.append(
+                InstalledSkill(
+                    directory=child,
+                    skill=Skill.from_file(skill_md_path, file_system=self.file_system),
+                )
+            )
+        return installed_skills
+
+    def find_installed_skill(
+        self, name: str, *, directory: Path = DEFAULT_SKILLS_PATH
+    ) -> InstalledSkill | None:
+        try:
+            return self._resolve_installed_skill(name, directory=directory)
+        except FileNotFoundError:
+            return None
+
+    def update_installed_skill(
+        self,
+        fetcher: GitHubSkillFetcher,
+        name: str,
+        *,
+        directory: Path = DEFAULT_SKILLS_PATH,
+    ) -> DownloadedSkill:
+        installed_skill = self._resolve_installed_skill(name, directory=directory)
+        if installed_skill.github_url is None:
+            raise ValueError(
+                f"Installed skill {installed_skill.directory_name} does not have a stored GitHub URL"
+            )
+        return self.download_skill(
+            fetcher,
+            installed_skill.github_url,
+            directory=directory,
+            skill_name=installed_skill.directory_name,
+            overwrite=True,
+            skillsmp_id=installed_skill.skillsmp_id,
+        )
+
+    def list_dependency_skill_updates(
+        self,
+        discovered_skills: Sequence[DiscoveredSkill],
+        *,
+        directory: Path = DEFAULT_SKILLS_PATH,
+    ) -> list[DependencySkillUpdate]:
+        discovered_by_key = {
+            (
+                discovered_skill.package_name,
+                discovered_skill.skill.name,
+            ): discovered_skill
+            for discovered_skill in discovered_skills
+        }
+        updates: list[DependencySkillUpdate] = []
+        for installed_skill in self.list_installed_skills(directory):
+            if installed_skill.source != SKILLY_SOURCE_DEPENDENCY:
+                continue
+            package_name = installed_skill.dependency_package_name
+            if package_name is None:
+                continue
+            discovered_skill = discovered_by_key.get(
+                (package_name, installed_skill.skill.name)
+            )
+            if discovered_skill is None:
+                continue
+            if (
+                discovered_skill.package_version
+                == installed_skill.dependency_package_version
+            ):
+                continue
+            updates.append(
+                DependencySkillUpdate(
+                    installed_skill=installed_skill,
+                    discovered_skill=discovered_skill,
+                )
+            )
+        updates.sort(
+            key=lambda item: (
+                item.package_name,
+                item.installed_skill.directory_name,
+                item.available_version,
+            )
+        )
+        return updates
+
+    def update_dependency_skills(
+        self,
+        discovered_skills: Sequence[DiscoveredSkill],
+        *,
+        directory: Path = DEFAULT_SKILLS_PATH,
+    ) -> list[InstalledSkill]:
+        updated_skills: list[InstalledSkill] = []
+        for dependency_update in self.list_dependency_skill_updates(
+            discovered_skills,
+            directory=directory,
+        ):
+            self.file_system.remove_tree(dependency_update.installed_skill.directory)
+            updated_skills.append(
+                self.install_discovered_skill(
+                    dependency_update.discovered_skill,
+                    directory=directory,
+                    skill_name=dependency_update.installed_skill.directory_name,
+                    overwrite=True,
+                )
+            )
+        return updated_skills
+
+    def remove_installed_skill(
+        self, name: str, *, directory: Path = DEFAULT_SKILLS_PATH
+    ) -> InstalledSkill:
+        installed_skill = self._resolve_installed_skill(name, directory=directory)
+        self.file_system.remove_tree(installed_skill.directory)
+        return installed_skill
+
+    def _get_download_destination(
+        self,
+        location: GitHubSkillLocation,
+        *,
+        directory: Path | None,
+        skill_name: str | None,
+    ) -> Path:
+        download_directory = (
+            self.file_system.resolve(directory)
+            if directory is not None
+            else self.file_system.resolve(Path("."))
+        )
+        return self.file_system.resolve(
+            download_directory / (skill_name or location.skill_name)
+        )
+
+    def _copy_local_skill_directory(
+        self,
+        *,
+        source_directory: Path,
+        current_directory: Path,
+        destination: Path,
+        overwrite: bool,
+        metadata_updates: dict[str, str],
+    ) -> None:
+        for child_name in sorted(self.file_system.list_files(current_directory)):
+            child = self.file_system.resolve(current_directory / child_name)
+            if self.file_system.is_dir(child):
+                self._copy_local_skill_directory(
+                    source_directory=source_directory,
+                    current_directory=child,
+                    destination=destination,
+                    overwrite=overwrite,
+                    metadata_updates=metadata_updates,
+                )
+                continue
+
+            relative_path = child.relative_to(source_directory)
+            destination_path = self.file_system.resolve(destination / relative_path)
+            self._write_managed_file(
+                content=self.file_system.read_bytes(child),
+                destination_path=destination_path,
+                overwrite=overwrite,
+                metadata_updates=metadata_updates,
+            )
+
+    def _download_github_directory(
+        self,
+        fetcher: GitHubSkillFetcher,
+        *,
+        location: GitHubSkillLocation,
+        current_path: PurePosixPath,
+        destination: Path,
+        overwrite: bool,
+        skillsmp_id: str | None,
+    ) -> list[DownloadedSkillFile]:
+        downloaded_files: list[DownloadedSkillFile] = []
+        for entry in fetcher.fetch_github_directory(location, current_path):
+            if entry.type == "dir":
+                downloaded_files.extend(
+                    self._download_github_directory(
+                        fetcher,
+                        location=location,
+                        current_path=entry.path,
+                        destination=destination,
+                        overwrite=overwrite,
+                        skillsmp_id=skillsmp_id,
+                    )
+                )
+                continue
+            if entry.type != "file":
+                continue
+
+            file_blob = fetcher.fetch_github_file(location, entry.path)
+            relative_path = file_blob.path.relative_to(location.path)
+            destination_path = self.file_system.resolve(
+                destination / Path(*relative_path.parts)
+            )
+            metadata_updates = {
+                SKILLY_MANAGED_METADATA_KEY: SKILLY_MANAGED_METADATA_VALUE,
+            }
+            if location.url is not None:
+                metadata_updates[SKILLY_GITHUB_URL_METADATA_KEY] = location.url
+            if skillsmp_id is not None:
+                metadata_updates[SKILLY_SKILLSMP_ID_METADATA_KEY] = skillsmp_id
+                metadata_updates[SKILLY_SOURCE_METADATA_KEY] = SKILLY_SOURCE_SKILLSMP
+            self._write_managed_file(
+                content=file_blob.content,
+                destination_path=destination_path,
+                overwrite=overwrite,
+                metadata_updates=metadata_updates,
+            )
+            downloaded_files.append(
+                DownloadedSkillFile(
+                    source_path=file_blob.path,
+                    destination_path=destination_path,
+                    size=file_blob.size,
+                )
+            )
+        return downloaded_files
+
+    def _write_managed_file(
+        self,
+        *,
+        content: bytes,
+        destination_path: Path,
+        overwrite: bool,
+        metadata_updates: dict[str, str],
+    ) -> None:
+        self.file_system.make_dir(destination_path.parent, parents=True, exist_ok=True)
+        if self.file_system.exists(destination_path) and not overwrite:
+            raise FileExistsError(
+                f"Refusing to overwrite existing file: {destination_path}"
+            )
+        if _is_skill_md_name(destination_path.name):
+            content = _update_skill_md_metadata(content, metadata_updates)
+        self.file_system.write_bytes(destination_path, content)
+
+    def _find_skill_md_path(self, directory: Path) -> Path | None:
+        if not self.file_system.is_dir(directory):
+            return None
+        for child_name in sorted(self.file_system.list_files(directory)):
+            child = self.file_system.resolve(directory / child_name)
+            if not self.file_system.is_dir(child) and _is_skill_md_name(child_name):
+                return child
+        return None
+
+    def _resolve_installed_skill(
+        self, name: str, *, directory: Path = DEFAULT_SKILLS_PATH
+    ) -> InstalledSkill:
+        installed_skills = self.list_installed_skills(directory)
+        for installed_skill in installed_skills:
+            if installed_skill.directory_name == name:
+                return installed_skill
+
+        matching_skills = [
+            installed_skill
+            for installed_skill in installed_skills
+            if installed_skill.skill.name == name
+        ]
+        if len(matching_skills) == 1:
+            return matching_skills[0]
+        if len(matching_skills) > 1:
+            raise ValueError(f"Multiple installed skills match name: {name}")
+        raise FileNotFoundError(f"Installed skill not found: {name}")
+
+
+def _is_skill_md_name(name: str) -> bool:
+    return name.lower() == "skill.md"
+
+
+def _update_skill_md_metadata(
+    content: bytes, metadata_updates: dict[str, str]
+) -> bytes:
+    text = content.decode("utf-8")
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        raise ValueError("SKILL.md must start with YAML frontmatter")
+
+    closing_index: int | None = None
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            closing_index = index
+            break
+
+    if closing_index is None:
+        raise ValueError("SKILL.md has unterminated YAML frontmatter")
+
+    frontmatter = lines[1:closing_index]
+    body = lines[closing_index + 1 :]
+    metadata_index: int | None = None
+    metadata_indent = "  "
+    insert_index = len(frontmatter)
+
+    line_index = 0
+    while line_index < len(frontmatter):
+        line = frontmatter[line_index]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            line_index += 1
+            continue
+        if stripped == "metadata:":
+            metadata_index = line_index
+            insert_index = line_index + 1
+            while insert_index < len(frontmatter):
+                current_line = frontmatter[insert_index]
+                current_stripped = current_line.strip()
+                if not current_stripped or current_stripped.startswith("#"):
+                    insert_index += 1
+                    continue
+                if not current_line.startswith((" ", "\t")):
+                    break
+                if current_line.startswith("  "):
+                    metadata_indent = current_line[
+                        : len(current_line) - len(current_line.lstrip())
+                    ]
+                insert_index += 1
+            break
+        line_index += 1
+
+    if metadata_index is not None:
+        existing_indices: dict[str, int] = {}
+        for index in range(metadata_index + 1, insert_index):
+            candidate = frontmatter[index].strip()
+            for key in metadata_updates:
+                if candidate.startswith(f"{key}:"):
+                    existing_indices[key] = index
+
+        pending_insertions: list[str] = []
+        for key, value in metadata_updates.items():
+            metadata_entry = f"{metadata_indent}{key}: {value}"
+            existing_index = existing_indices.get(key)
+            if existing_index is not None:
+                frontmatter[existing_index] = metadata_entry
+            else:
+                pending_insertions.append(metadata_entry)
+        if pending_insertions:
+            frontmatter[insert_index:insert_index] = pending_insertions
+    else:
+        frontmatter.extend(["metadata:"])
+        frontmatter.extend(
+            [
+                f"{metadata_indent}{key}: {value}"
+                for key, value in metadata_updates.items()
+            ]
+        )
+
+    updated_lines = ["---", *frontmatter, "---", *body]
+    updated_text = "\n".join(updated_lines)
+    if text.endswith("\n"):
+        updated_text += "\n"
+    return updated_text.encode("utf-8")
 
 
 @dataclass(frozen=True)
