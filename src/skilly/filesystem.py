@@ -8,11 +8,8 @@ class FileSystem(Protocol):
     def read_file(self, path: Path) -> str:
         """Read a file and return its contents."""
 
-    def read_bytes(self, path: Path) -> bytes:
-        """Read a file and return its bytes."""
-
-    def write_bytes(self, path: Path, content: bytes) -> None:
-        """Write bytes to a file path."""
+    def write_file(self, path: Path, content: str) -> None:
+        """Write text to a file path."""
 
     def list_files(self, path: Path) -> Sequence[str]:
         """List child entry names in a directory."""
@@ -40,12 +37,8 @@ class DefaultFileSystem(FileSystem):
         with open(path, encoding="utf-8") as file_handle:
             return file_handle.read()
 
-    def read_bytes(self, path: Path) -> bytes:
-        with open(path, "rb") as file_handle:
-            return file_handle.read()
-
-    def write_bytes(self, path: Path, content: bytes) -> None:
-        with open(path, "wb") as file_handle:
+    def write_file(self, path: Path, content: str) -> None:
+        with open(path, "w", encoding="utf-8") as file_handle:
             file_handle.write(content)
 
     def list_files(self, path: Path) -> Sequence[str]:

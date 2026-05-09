@@ -159,7 +159,7 @@ def _normalize_query_value(value: object) -> QueryParamValue:
     raise TypeError(f"Unsupported query parameter type: {type(value)!r}")
 
 
-def _decode_github_file_content(file_content: GitHubFileContent) -> bytes:
+def _decode_github_file_content(file_content: GitHubFileContent) -> str:
     if file_content.content is None:
         raise ValueError(
             f"GitHub file response for {file_content.path} is missing content"
@@ -169,7 +169,7 @@ def _decode_github_file_content(file_content: GitHubFileContent) -> bytes:
             f"Unsupported GitHub file encoding for {file_content.path}: {file_content.encoding}"
         )
     normalized_content = file_content.content.replace("\n", "")
-    return base64.b64decode(normalized_content)
+    return base64.b64decode(normalized_content).decode("utf-8")
 
 
 class _SkillsMpBase(abc.ABC):

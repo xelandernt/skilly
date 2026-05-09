@@ -5,13 +5,14 @@ import niquests
 import pytest
 
 from skilly.filesystem import FileSystem
+from skilly.repository import SkillRepository
 from skilly.skills import (
-    DownloadedSkill,
-    ManagedSkills,
     SKILLY_GITHUB_URL_METADATA_KEY,
     SKILLY_MANAGED_METADATA_KEY,
     SKILLY_MANAGED_METADATA_VALUE,
     SKILLY_SKILLSMP_ID_METADATA_KEY,
+    Skill,
+    parse_github_skill_url,
 )
 from skilly.skillsmp.client import (
     AsyncSkillsMp,
@@ -160,7 +161,7 @@ class FakeAsyncSession:
 class FakeFileSystem(FileSystem):
     def __init__(self) -> None:
         self._dirs: set[Path] = {Path("/")}
-        self._files: dict[Path, bytes] = {}
+        self._files: dict[Path, str] = {}
 
     def add_dir(self, path: Path) -> None:
         current = self.resolve(path)
@@ -174,9 +175,9 @@ class FakeFileSystem(FileSystem):
         resolved = self.resolve(path)
         if resolved not in self._files:
             raise FileNotFoundError(resolved)
-        return self._files[resolved].decode("utf-8")
+        return self._files[resolved]
 
-    def write_bytes(self, path: Path, content: bytes) -> None:
+    def write_file(self, path: Path, content: str) -> None:
         resolved = self.resolve(path)
         self.add_dir(resolved.parent)
         self._files[resolved] = content
@@ -230,12 +231,6 @@ class FakeFileSystem(FileSystem):
 
     def resolve(self, path: Path) -> Path:
         return Path("/").joinpath(path).resolve() if not path.is_absolute() else path
-
-    def read_bytes(self, path: Path) -> bytes:
-        resolved = self.resolve(path)
-        if resolved not in self._files:
-            raise FileNotFoundError(resolved)
-        return self._files[resolved]
 
 
 def _download_responses(
@@ -336,9 +331,7 @@ def test_skillsmp_search_builds_request_and_parses_response() -> None:
 
 
 def test_parse_github_url_returns_skill_location() -> None:
-    managed_skills = ManagedSkills()
-
-    location = managed_skills.parse_github_url(
+    location = parse_github_skill_url(
         "https://github.com/example/project/tree/main/.agents/skills/python"
     )
 
@@ -354,26 +347,24 @@ def test_download_skill_downloads_all_files(tmp_path: Path) -> None:
     api_base = "https://api.github.com/repos/example/project/contents"
     session = FakeSession(responses=_download_responses(api_base))
     client = SkillsMp(session)
-    managed_skills = ManagedSkills()
+    repository = SkillRepository()
 
-    downloaded = managed_skills.download_skill(client, skill_url, directory=tmp_path)
+    installed = repository.install(
+        Skill.from_github(client, skill_url), directory=tmp_path
+    )
 
-    assert isinstance(downloaded, DownloadedSkill)
-    assert downloaded.destination == (tmp_path / "python").resolve()
-    assert [file.source_path.as_posix() for file in downloaded.files] == [
-        ".agents/skills/python/SKILL.md",
-        ".agents/skills/python/scripts/extract.py",
-    ]
-    skill_md = (tmp_path / "python" / "SKILL.md").read_text(encoding="utf-8")
+    assert installed.directory == (tmp_path / "python").resolve()
+    skill_md = installed.directory.joinpath("SKILL.md").read_text(encoding="utf-8")
     assert "name: python" in skill_md
     assert "metadata:" in skill_md
     assert (
         f"  {SKILLY_MANAGED_METADATA_KEY}: {SKILLY_MANAGED_METADATA_VALUE}" in skill_md
     )
     assert f"  {SKILLY_GITHUB_URL_METADATA_KEY}: {skill_url}" in skill_md
-    assert (tmp_path / "python" / "scripts/extract.py").read_text(
-        encoding="utf-8"
-    ) == "print('hi')\n"
+    assert (
+        installed.directory.joinpath("scripts/extract.py").read_text(encoding="utf-8")
+        == "print('hi')\n"
+    )
 
 
 def test_download_skill_uses_custom_skill_name(tmp_path: Path) -> None:
@@ -381,16 +372,15 @@ def test_download_skill_uses_custom_skill_name(tmp_path: Path) -> None:
     api_base = "https://api.github.com/repos/example/project/contents"
     session = FakeSession(responses=_download_responses(api_base))
     client = SkillsMp(session)
-    managed_skills = ManagedSkills()
+    repository = SkillRepository()
 
-    downloaded = managed_skills.download_skill(
-        client,
-        skill_url,
+    installed = repository.install(
+        Skill.from_github(client, skill_url),
         directory=tmp_path,
         skill_name="custom-skill",
     )
 
-    assert downloaded.destination == (tmp_path / "custom-skill").resolve()
+    assert installed.directory == (tmp_path / "custom-skill").resolve()
     assert (tmp_path / "custom-skill" / "SKILL.md").exists()
 
 
@@ -401,12 +391,14 @@ def test_install_skill_stores_skillsmp_metadata(tmp_path: Path) -> None:
         responses=_download_responses(api_base, skill_dir="skills/python"),
     )
     client = SkillsMp(session)
-    managed_skills = ManagedSkills()
+    repository = SkillRepository()
     skill = client.search("python").parsed_data.data.skills[0]
 
-    downloaded = managed_skills.install_skill(client, skill, directory=tmp_path)
+    installed = repository.install(
+        Skill.from_skillsmp(client, skill), directory=tmp_path
+    )
 
-    skill_md = downloaded.destination.joinpath("SKILL.md").read_text(encoding="utf-8")
+    skill_md = installed.directory.joinpath("SKILL.md").read_text(encoding="utf-8")
     assert f"  {SKILLY_SKILLSMP_ID_METADATA_KEY}: {skill.id}" in skill_md
     assert f"  {SKILLY_GITHUB_URL_METADATA_KEY}: {skill.githubUrl}" in skill_md
 
@@ -419,28 +411,34 @@ def test_list_update_and_remove_installed_skill(tmp_path: Path) -> None:
         responses=_download_responses(api_base, skill_dir="skills/python"),
     )
     client = SkillsMp(session)
-    managed_skills = ManagedSkills()
+    repository = SkillRepository()
     skill = client.search("python").parsed_data.data.skills[0]
 
-    managed_skills.install_skill(client, skill, directory=install_directory)
+    repository.install(Skill.from_skillsmp(client, skill), directory=install_directory)
 
-    installed_skills = managed_skills.list_installed_skills(install_directory)
+    installed_skills = repository.list(install_directory)
     assert [installed_skill.directory_name for installed_skill in installed_skills] == [
         "python"
     ]
-    assert installed_skills[0].managed_by_skilly is True
+    assert installed_skills[0].is_installed() is True
     assert installed_skills[0].skillsmp_id == skill.id
 
-    updated = managed_skills.update_installed_skill(
-        client, "python", directory=install_directory
+    updated = repository.install(
+        Skill.from_github(
+            client,
+            installed_skills[0].github_url,
+            source=installed_skills[0].source,
+            skillsmp_id=installed_skills[0].skillsmp_id,
+        ),
+        directory=install_directory,
+        skill_name="python",
+        replace=True,
     )
-    assert updated.destination == (install_directory / "python").resolve()
+    assert updated.directory == (install_directory / "python").resolve()
 
-    removed = managed_skills.remove_installed_skill(
-        "python", directory=install_directory
-    )
+    removed = repository.remove("python", directory=install_directory)
     assert removed.directory_name == "python"
-    assert managed_skills.list_installed_skills(install_directory) == []
+    assert repository.list(install_directory) == []
 
 
 def test_skillsmp_client_uses_injected_file_system() -> None:
@@ -452,23 +450,23 @@ def test_skillsmp_client_uses_injected_file_system() -> None:
         responses=_download_responses(api_base, skill_dir="skills/python"),
     )
     client = SkillsMp(session)
-    managed_skills = ManagedSkills(file_system=file_system)
+    repository = SkillRepository(file_system=file_system)
     skill = client.search("python").parsed_data.data.skills[0]
 
-    downloaded = managed_skills.install_skill(
-        client, skill, directory=install_directory
+    installed = repository.install(
+        Skill.from_skillsmp(client, skill), directory=install_directory
     )
 
-    skill_md_path = downloaded.destination / "SKILL.md"
+    skill_md_path = installed.directory / "SKILL.md"
     assert skill_md_path == Path("/workspace/.agents/skills/python/SKILL.md")
     skill_md = file_system.read_file(skill_md_path)
     assert f"  {SKILLY_SKILLSMP_ID_METADATA_KEY}: {skill.id}" in skill_md
-    assert managed_skills.list_installed_skills(install_directory)[0].directory == Path(
+    assert repository.list(install_directory)[0].directory == Path(
         "/workspace/.agents/skills/python"
     )
 
-    managed_skills.remove_installed_skill("python", directory=install_directory)
-    assert managed_skills.list_installed_skills(install_directory) == []
+    repository.remove("python", directory=install_directory)
+    assert repository.list(install_directory) == []
 
 
 def test_skillsmp_ai_search_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

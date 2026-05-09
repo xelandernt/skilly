@@ -1,18 +1,12 @@
+from __future__ import annotations
+
 from pathlib import Path, PurePosixPath
 
 import pytest
 
 from skilly.cli import root
-from skilly.skills import (
-    DiscoveredSkill,
-    GitHubContentItem,
-    GitHubFileBlob,
-    GitHubSkillLocation,
-    ManagedSkills,
-    SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY,
-    SKILLY_SOURCE_DEPENDENCY,
-    Skill,
-)
+from skilly.repository import SkillMatch, SkillRepository
+from skilly.skills import GitHubContentItem, GitHubFileBlob, GitHubSkillLocation, Skill
 
 
 def test_scan_installs_selected_dependency_skill(
@@ -20,34 +14,30 @@ def test_scan_installs_selected_dependency_skill(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    discovered_skill = _make_discovered_skill(
+    available = make_skill(
         tmp_path,
         package_name="sample-pkg",
         package_version="1.2.3",
         skill_name="sample-skill",
     )
-    monkeypatch.setattr(
-        root,
-        "get_project_discovered_skills",
-        lambda **kwargs: [discovered_skill],
-    )
+    repository = FakeRepository(matches=[SkillMatch(available=available)])
+    monkeypatch.setattr(root, "SkillRepository", lambda: repository)
     monkeypatch.setattr(
         root,
         "questionary",
-        _QuestionaryModule(["sample-skill [sample-pkg==1.2.3]"]),
+        QuestionaryModule([root.scan_choice_label(repository.matches[0])]),
     )
 
     install_directory = tmp_path / ".agents" / "skills"
     root.scan(directory=install_directory)
 
-    installed_skill = ManagedSkills().find_installed_skill(
-        "sample-skill",
-        directory=install_directory,
+    installed_skill = SkillRepository().find(
+        "sample-skill", directory=install_directory
     )
     assert installed_skill is not None
-    assert installed_skill.source == SKILLY_SOURCE_DEPENDENCY
-    assert installed_skill.dependency_package_name == "sample-pkg"
-    assert installed_skill.dependency_package_version == "1.2.3"
+    assert installed_skill.is_dependency() is True
+    assert installed_skill.package_name == "sample-pkg"
+    assert installed_skill.package_version == "1.2.3"
     assert (install_directory / "sample-skill" / "scripts" / "extract.py").read_text(
         encoding="utf-8"
     ) == "print('sample')\n"
@@ -58,18 +48,15 @@ def test_scan_exit_choice_skips_install(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    discovered_skill = _make_discovered_skill(
+    available = make_skill(
         tmp_path,
         package_name="sample-pkg",
         package_version="1.2.3",
         skill_name="sample-skill",
     )
-    monkeypatch.setattr(
-        root,
-        "get_project_discovered_skills",
-        lambda **kwargs: [discovered_skill],
-    )
-    monkeypatch.setattr(root, "questionary", _QuestionaryModule(["exit"]))
+    repository = FakeRepository(matches=[SkillMatch(available=available)])
+    monkeypatch.setattr(root, "SkillRepository", lambda: repository)
+    monkeypatch.setattr(root, "questionary", QuestionaryModule(["exit"]))
 
     install_directory = tmp_path / ".agents" / "skills"
     root.scan(directory=install_directory)
@@ -83,29 +70,21 @@ def test_list_removes_selected_skill(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     install_directory = tmp_path / ".agents" / "skills"
-    _write_file(
-        install_directory / "dependency-skill" / "SKILL.md",
-        """---
-name: dependency-skill
-description: From a dependency.
-metadata:
-  skilly-managed-by: skilly
-  skilly-source: dependency
-  skilly-package-name: dep-pkg
-  skilly-package-version: 1.2.3
----
-Body
-""",
+    repository = FakeRepository()
+    installed = repository.install(
+        make_skill(
+            tmp_path,
+            package_name="dep-pkg",
+            package_version="1.2.3",
+            skill_name="dependency-skill",
+        ),
+        directory=install_directory,
     )
+    monkeypatch.setattr(root, "SkillRepository", lambda: repository)
     monkeypatch.setattr(
         root,
         "questionary",
-        _QuestionaryModule(
-            [
-                "dependency-skill: dependency-skill [dependency] (dep-pkg==1.2.3)",
-                "remove",
-            ]
-        ),
+        QuestionaryModule([root.installed_skill_label(installed), "remove"]),
     )
 
     root.list(directory=install_directory)
@@ -120,44 +99,34 @@ def test_list_updates_dependency_skill(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     install_directory = tmp_path / ".agents" / "skills"
-    original_skill = _make_discovered_skill(
+    repository = FakeRepository()
+    original = make_skill(
         tmp_path,
         package_name="dep-pkg",
         package_version="1.2.3",
         skill_name="dependency-skill",
         body="Original body.\n",
     )
-    ManagedSkills().install_discovered_skill(
-        original_skill, directory=install_directory
-    )
-    updated_skill = _make_discovered_skill(
+    installed = repository.install(original, directory=install_directory)
+    repository.available_skill = make_skill(
         tmp_path,
         package_name="dep-pkg",
         package_version="1.2.4",
         skill_name="dependency-skill",
         body="Updated body.\n",
     )
-    monkeypatch.setattr(root, "get_project_discovered_skills", lambda: [updated_skill])
+    monkeypatch.setattr(root, "SkillRepository", lambda: repository)
     monkeypatch.setattr(
         root,
         "questionary",
-        _QuestionaryModule(
-            [
-                "dependency-skill: dependency-skill [dependency] (dep-pkg==1.2.3)",
-                "update",
-                "exit",
-            ]
-        ),
+        QuestionaryModule([root.installed_skill_label(installed), "update", "exit"]),
     )
 
     root.list(directory=install_directory)
 
-    installed_skill = ManagedSkills().find_installed_skill(
-        "dependency-skill",
-        directory=install_directory,
-    )
-    assert installed_skill is not None
-    assert installed_skill.dependency_package_version == "1.2.4"
+    refreshed = SkillRepository().find("dependency-skill", directory=install_directory)
+    assert refreshed is not None
+    assert refreshed.package_version == "1.2.4"
     assert "Updated dependency-skill to 1.2.4" in capsys.readouterr().out
 
 
@@ -167,32 +136,29 @@ def test_list_updates_skillsmp_skill(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     install_directory = tmp_path / ".agents" / "skills"
-    _write_file(
-        install_directory / "skillsmp-skill" / "SKILL.md",
-        """---
+    repository = FakeRepository()
+    installed = repository.install(
+        Skill.from_text(
+            """---
 name: skillsmp-skill
 description: From SkillsMP.
-metadata:
-  skilly-managed-by: skilly
-  skilly-source: skillsmp
-  skilly-skillsmp-id: skill-1
-  skilly-github-url: https://github.com/example/project/tree/main/.agents/skills/skillsmp-skill
 ---
 Body
 """,
+            path=tmp_path / "skillsmp-source" / "SKILL.md",
+            source="skillsmp",
+            github_url="https://github.com/example/project/tree/main/.agents/skills/skillsmp-skill",
+            skillsmp_id="skill-1",
+        ),
+        directory=install_directory,
     )
+    monkeypatch.setattr(root, "SkillRepository", lambda: repository)
     monkeypatch.setattr(
         root,
         "questionary",
-        _QuestionaryModule(
-            [
-                "skillsmp-skill: skillsmp-skill [skillsmp] (id=skill-1)",
-                "update",
-                "exit",
-            ]
-        ),
+        QuestionaryModule([root.installed_skill_label(installed), "update", "exit"]),
     )
-    monkeypatch.setattr(root, "SkillsMp", lambda: _FakeGitHubFetcher())
+    monkeypatch.setattr(root, "SkillsMp", lambda: FakeGitHubFetcher())
 
     root.list(directory=install_directory)
 
@@ -208,37 +174,32 @@ def test_update_force_updates_outdated_dependency_skills(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     install_directory = tmp_path / ".agents" / "skills"
-    original_skill = _make_discovered_skill(
-        tmp_path,
-        package_name="sample-pkg",
-        package_version="1.2.3",
-        skill_name="sample-skill",
-        body="Original body.\n",
+    repository = FakeRepository()
+    installed = repository.install(
+        make_skill(
+            tmp_path,
+            package_name="sample-pkg",
+            package_version="1.2.3",
+            skill_name="sample-skill",
+            body="Original body.\n",
+        ),
+        directory=install_directory,
     )
-    ManagedSkills().install_discovered_skill(
-        original_skill, directory=install_directory
-    )
-
-    updated_skill = _make_discovered_skill(
+    available = make_skill(
         tmp_path,
         package_name="sample-pkg",
         package_version="1.2.4",
         skill_name="sample-skill",
         body="Updated body.\n",
     )
-    monkeypatch.setattr(root, "get_project_discovered_skills", lambda: [updated_skill])
+    repository.matches = [SkillMatch(available=available, installed=installed)]
+    monkeypatch.setattr(root, "SkillRepository", lambda: repository)
 
     root.update(directory=install_directory, force=True)
 
-    installed_skill = ManagedSkills().find_installed_skill(
-        "sample-skill",
-        directory=install_directory,
-    )
-    assert installed_skill is not None
-    assert installed_skill.dependency_package_version == "1.2.4"
-    assert (install_directory / "sample-skill" / "SKILL.md").read_text(
-        encoding="utf-8"
-    ).find(f"{SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY}: 1.2.4") != -1
+    refreshed = SkillRepository().find("sample-skill", directory=install_directory)
+    assert refreshed is not None
+    assert refreshed.package_version == "1.2.4"
     output = capsys.readouterr().out
     assert "sample-skill: sample-pkg 1.2.3 -> 1.2.4" in output
     assert "Updated sample-skill to 1.2.4" in output
@@ -250,49 +211,47 @@ def test_update_without_force_only_previews_changes(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     install_directory = tmp_path / ".agents" / "skills"
-    original_skill = _make_discovered_skill(
-        tmp_path,
-        package_name="sample-pkg",
-        package_version="1.2.3",
-        skill_name="sample-skill",
-        body="Original body.\n",
+    repository = FakeRepository()
+    installed = repository.install(
+        make_skill(
+            tmp_path,
+            package_name="sample-pkg",
+            package_version="1.2.3",
+            skill_name="sample-skill",
+            body="Original body.\n",
+        ),
+        directory=install_directory,
     )
-    ManagedSkills().install_discovered_skill(
-        original_skill, directory=install_directory
-    )
-
-    updated_skill = _make_discovered_skill(
+    available = make_skill(
         tmp_path,
         package_name="sample-pkg",
         package_version="1.2.4",
         skill_name="sample-skill",
         body="Updated body.\n",
     )
-    monkeypatch.setattr(root, "get_project_discovered_skills", lambda: [updated_skill])
+    repository.matches = [SkillMatch(available=available, installed=installed)]
+    monkeypatch.setattr(root, "SkillRepository", lambda: repository)
 
     root.update(directory=install_directory)
 
-    installed_skill = ManagedSkills().find_installed_skill(
-        "sample-skill",
-        directory=install_directory,
-    )
-    assert installed_skill is not None
-    assert installed_skill.dependency_package_version == "1.2.3"
+    refreshed = SkillRepository().find("sample-skill", directory=install_directory)
+    assert refreshed is not None
+    assert refreshed.package_version == "1.2.3"
     output = capsys.readouterr().out
     assert "sample-skill: sample-pkg 1.2.3 -> 1.2.4" in output
     assert "Run with --force to apply these updates" in output
 
 
-def _make_discovered_skill(
+def make_skill(
     root_path: Path,
     *,
     package_name: str,
     package_version: str,
     skill_name: str,
     body: str = "Use this skill.\n",
-) -> DiscoveredSkill:
+) -> Skill:
     source_directory = root_path / package_name / ".agents" / "skills" / skill_name
-    _write_file(
+    write_file(
         source_directory / "SKILL.md",
         "\n".join(
             [
@@ -305,20 +264,21 @@ def _make_discovered_skill(
             ]
         ),
     )
-    _write_file(source_directory / "scripts" / "extract.py", "print('sample')\n")
-    return DiscoveredSkill(
+    write_file(source_directory / "scripts" / "extract.py", "print('sample')\n")
+    return Skill.from_dir(
+        source_directory,
+        source="dependency",
         package_name=package_name,
         package_version=package_version,
-        skill=Skill.from_dir(source_directory),
     )
 
 
-def _write_file(path: Path, content: str) -> None:
+def write_file(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
 
-class _QuestionaryPrompt:
+class QuestionaryPrompt:
     def __init__(self, response: list[str] | str) -> None:
         self._response = response
 
@@ -326,25 +286,25 @@ class _QuestionaryPrompt:
         return self._response
 
 
-class _QuestionaryModule:
+class QuestionaryModule:
     def __init__(self, responses: list[str] | list[list[str]]) -> None:
         self._responses = list(responses)
 
-    def _next_response(self) -> list[str] | str:
+    def next_response(self) -> list[str] | str:
         if not self._responses:
             raise AssertionError("No more questionary responses configured")
         return self._responses.pop(0)
 
-    def checkbox(self, *args: object, **kwargs: object) -> _QuestionaryPrompt:
+    def checkbox(self, *args: object, **kwargs: object) -> QuestionaryPrompt:
         del args, kwargs
-        return _QuestionaryPrompt(self._next_response())
+        return QuestionaryPrompt(self.next_response())
 
-    def select(self, *args: object, **kwargs: object) -> _QuestionaryPrompt:
+    def select(self, *args: object, **kwargs: object) -> QuestionaryPrompt:
         del args, kwargs
-        return _QuestionaryPrompt(self._next_response())
+        return QuestionaryPrompt(self.next_response())
 
 
-class _FakeGitHubFetcher:
+class FakeGitHubFetcher:
     def fetch_github_directory(
         self,
         location: GitHubSkillLocation,
@@ -380,13 +340,41 @@ class _FakeGitHubFetcher:
         if str(path).endswith("SKILL.md"):
             return GitHubFileBlob(
                 path=path,
-                content=(
-                    b"---\nname: skillsmp-skill\ndescription: Updated.\n---\nUpdated body\n"
-                ),
+                content="---\nname: skillsmp-skill\ndescription: Updated.\n---\nUpdated body\n",
                 size=61,
             )
         return GitHubFileBlob(
             path=path,
-            content=b"print('updated')\n",
+            content="print('updated')\n",
             size=17,
         )
+
+
+class FakeRepository:
+    def __init__(self, matches: list[SkillMatch] | None = None) -> None:
+        self.delegate = SkillRepository()
+        self.matches = matches or []
+        self.available_skill: Skill | None = None
+
+    def scan_project(self, **kwargs: object) -> list[SkillMatch]:
+        del kwargs
+        return self.matches
+
+    def list(self, directory: Path) -> list[Skill]:
+        return self.delegate.list(directory)
+
+    def install(self, skill: Skill, **kwargs: object) -> Skill:
+        return self.delegate.install(skill, **kwargs)
+
+    def remove(self, name: str, *, directory: Path) -> Skill:
+        return self.delegate.remove(name, directory=directory)
+
+    def dependency_updates(self, **kwargs: object) -> list[SkillMatch]:
+        del kwargs
+        return self.matches
+
+    def available_dependency_skill(
+        self, skill: Skill, **kwargs: object
+    ) -> Skill | None:
+        del skill, kwargs
+        return self.available_skill

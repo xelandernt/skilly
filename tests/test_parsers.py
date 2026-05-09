@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from skilly.filesystem import FileSystem
-from skilly.skills import Skill, VenvSkills
+from skilly.skills import Skill, discover_venv_skills
 
 
 def test_skill_from_text_returns_skill_object() -> None:
@@ -36,6 +36,7 @@ In-memory instructions.
 
     assert skill.name == "in-memory-skill"
     assert skill.path == Path("SKILL.md")
+    assert skill.package_reference() is None
 
 
 def test_skill_from_text_ignores_unknown_fields() -> None:
@@ -57,7 +58,7 @@ Relaxed instructions.
 
 def test_skill_from_dir_reads_skill_md(tmp_path: Path) -> None:
     skill_dir = tmp_path / "folder-skill"
-    _write_skill(
+    write_skill(
         skill_dir / "SKILL.md",
         """---
 name: folder-skill
@@ -76,7 +77,7 @@ Directory based instructions.
 
 def test_skill_from_dir_collects_bundled_resources(tmp_path: Path) -> None:
     skill_dir = tmp_path / "folder-skill"
-    _write_skill(
+    write_skill(
         skill_dir / "SKILL.md",
         """---
 name: folder-skill
@@ -85,10 +86,10 @@ description: Use when reading a skill from a directory.
 Directory based instructions.
 """,
     )
-    _write_skill(skill_dir / "scripts/extract.py", "print('extract')\n")
-    _write_skill(skill_dir / "references/REFERENCE.md", "# Reference\n")
-    _write_skill(skill_dir / "assets/template.txt", "template\n")
-    _write_skill(skill_dir / "tool-config.json", "{}\n")
+    write_skill(skill_dir / "scripts/extract.py", "print('extract')\n")
+    write_skill(skill_dir / "references/REFERENCE.md", "# Reference\n")
+    write_skill(skill_dir / "assets/template.txt", "template\n")
+    write_skill(skill_dir / "tool-config.json", "{}\n")
 
     skill = Skill.from_dir(skill_dir)
 
@@ -122,10 +123,10 @@ Directory based instructions.
     ]
 
 
-def test_venv_skills_from_dir_discovers_recorded_skill(tmp_path: Path) -> None:
-    venv_path, site_packages = _make_venv(tmp_path)
+def test_discover_venv_returns_dependency_skills(tmp_path: Path) -> None:
+    venv_path, site_packages = make_venv(tmp_path)
     skill_path = site_packages / "sample_pkg/.agents/skills/sample-skill/SKILL.md"
-    _write_skill(
+    write_skill(
         skill_path,
         """---
 name: sample-skill
@@ -141,53 +142,43 @@ allowed-tools: Bash(git:*) Read
 Use this skill carefully.
 """,
     )
-    _write_skill(skill_path.parent / "scripts/extract.py", "print('sample')\n")
-    _write_skill(skill_path.parent / "references/REFERENCE.md", "# Sample reference\n")
-    _write_skill(skill_path.parent / "assets/form.json", "{}\n")
-    _write_distribution(
+    write_skill(skill_path.parent / "scripts/extract.py", "print('sample')\n")
+    write_skill(skill_path.parent / "references/REFERENCE.md", "# Sample reference\n")
+    write_skill(skill_path.parent / "assets/form.json", "{}\n")
+    write_distribution(
         site_packages=site_packages,
         package_name="sample-pkg",
         package_version="1.2.3",
         record_rows=["sample_pkg/.agents/skills/sample-skill/SKILL.md,,"],
     )
 
-    info = VenvSkills.from_dir(venv_path)
+    skills = discover_venv_skills(venv_path)
 
-    assert info.path == venv_path.resolve()
-    assert info.site_packages_dir == site_packages
-    assert info.warnings == []
-    assert [discovered.package_name for discovered in info.skills] == ["sample-pkg"]
-
-    discovered = info.skills[0]
-    assert discovered.package_version == "1.2.3"
-    assert discovered.skill.name == "sample-skill"
-    assert discovered.skill.description.startswith("Parse PDFs and forms.")
-    assert discovered.skill.license == "Apache-2.0"
-    assert discovered.skill.compatibility == "Requires Python 3.13+ and uv"
-    assert discovered.skill.metadata == {"author": "example-org", "version": "1.0"}
-    assert discovered.skill.allowed_tools == "Bash(git:*) Read"
-    assert discovered.skill.path == skill_path.resolve()
-    assert "Use this skill carefully." in discovered.skill.content
-    assert [
-        resource.relative_path.as_posix() for resource in discovered.skill.resources
-    ] == [
+    assert len(skills) == 1
+    skill = skills[0]
+    assert skill.package_name == "sample-pkg"
+    assert skill.package_version == "1.2.3"
+    assert skill.package_reference() == "sample-pkg==1.2.3"
+    assert skill.is_dependency() is True
+    assert skill.name == "sample-skill"
+    assert skill.description.startswith("Parse PDFs and forms.")
+    assert skill.license == "Apache-2.0"
+    assert skill.compatibility == "Requires Python 3.13+ and uv"
+    assert skill.metadata == {"author": "example-org", "version": "1.0"}
+    assert skill.allowed_tools == "Bash(git:*) Read"
+    assert skill.path == skill_path.resolve()
+    assert "Use this skill carefully." in skill.content
+    assert [resource.relative_path.as_posix() for resource in skill.resources] == [
         "assets/form.json",
         "references/REFERENCE.md",
         "scripts/extract.py",
     ]
-    assert [resource.content for resource in discovered.skill.resources] == [
-        "{}\n",
-        "# Sample reference\n",
-        "print('sample')\n",
-    ]
 
 
-def test_venv_skills_from_dir_keeps_skills_with_unknown_fields(
-    tmp_path: Path,
-) -> None:
-    venv_path, site_packages = _make_venv(tmp_path)
+def test_discover_venv_keeps_skills_with_unknown_fields(tmp_path: Path) -> None:
+    venv_path, site_packages = make_venv(tmp_path)
     skill_path = site_packages / "broken_pkg/.agents/skills/broken-skill/SKILL.md"
-    _write_skill(
+    write_skill(
         skill_path,
         """---
 name: broken-skill
@@ -197,21 +188,20 @@ trigger: pdf
 Invalid extra field.
 """,
     )
-    _write_distribution(
+    write_distribution(
         site_packages=site_packages,
         package_name="broken-pkg",
         package_version="9.9.9",
         record_rows=["broken_pkg/.agents/skills/broken-skill/SKILL.md,,"],
     )
 
-    info = VenvSkills.from_dir(venv_path)
+    skills = discover_venv_skills(venv_path)
 
-    assert info.warnings == []
-    assert len(info.skills) == 1
-    assert info.skills[0].skill.name == "broken-skill"
+    assert len(skills) == 1
+    assert skills[0].name == "broken-skill"
 
 
-def test_venv_skills_from_dir_uses_filesystem_protocol_for_traversal() -> None:
+def test_discover_venv_uses_filesystem_protocol_for_traversal() -> None:
     file_system = FakeFileSystem()
     venv_path = Path("/workspace/.venv")
     site_packages = Path("/workspace/.venv/lib/python3.13/site-packages")
@@ -249,31 +239,53 @@ Demo instructions.
         "# Demo reference\n",
     )
 
-    info = VenvSkills.from_dir(venv_path, file_system=file_system)
+    skills = discover_venv_skills(venv_path, file_system=file_system)
 
-    assert [discovered.package_name for discovered in info.skills] == ["demo-pkg"]
-    assert info.skills[0].skill.name == "demo-skill"
-    assert [
-        resource.relative_path.as_posix() for resource in info.skills[0].skill.resources
-    ] == [
+    assert [skill.package_name for skill in skills] == ["demo-pkg"]
+    assert skills[0].name == "demo-skill"
+    assert [resource.relative_path.as_posix() for resource in skills[0].resources] == [
         "references/REFERENCE.md",
         "scripts/demo.py",
     ]
-    assert [resource.content for resource in info.skills[0].skill.resources] == [
-        "# Demo reference\n",
-        "print('demo')\n",
-    ]
-    assert info.warnings == []
 
 
-def _make_venv(root: Path) -> tuple[Path, Path]:
+def test_installed_skill_state_comes_from_metadata(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "installed-skill"
+    write_skill(
+        skill_dir / "SKILL.md",
+        """---
+name: installed-skill
+description: Installed skill.
+metadata:
+  skilly-managed-by: skilly
+  skilly-source: skillsmp
+  skilly-github-url: https://github.com/example/project/tree/main/.agents/skills/installed-skill
+  skilly-skillsmp-id: skill-1
+---
+Body
+""",
+    )
+
+    skill = Skill.from_dir(skill_dir)
+
+    assert skill.is_installed() is True
+    assert skill.is_skillsmp() is True
+    assert skill.can_update() is True
+    assert (
+        skill.github_url
+        == "https://github.com/example/project/tree/main/.agents/skills/installed-skill"
+    )
+    assert skill.skillsmp_id == "skill-1"
+
+
+def make_venv(root: Path) -> tuple[Path, Path]:
     venv_path = root / ".venv"
     site_packages = venv_path / "lib/python3.13/site-packages"
     site_packages.mkdir(parents=True)
     return venv_path, site_packages.resolve()
 
 
-def _write_distribution(
+def write_distribution(
     *,
     site_packages: Path,
     package_name: str,
@@ -296,7 +308,7 @@ def _write_distribution(
     (dist_info / "RECORD").write_text("\n".join(record_rows), encoding="utf-8")
 
 
-def _write_skill(path: Path, content: str) -> None:
+def write_skill(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
@@ -325,6 +337,9 @@ class FakeFileSystem(FileSystem):
             raise FileNotFoundError(resolved)
         return self._files[resolved]
 
+    def write_file(self, path: Path, content: str) -> None:
+        self.add_file(path, content)
+
     def list_files(self, path: Path) -> list[str]:
         resolved = self.resolve(path)
         if resolved not in self._dirs:
@@ -339,8 +354,37 @@ class FakeFileSystem(FileSystem):
                 children.add(file_path.name)
         return sorted(children)
 
+    def exists(self, path: Path) -> bool:
+        resolved = self.resolve(path)
+        return resolved in self._dirs or resolved in self._files
+
     def is_dir(self, path: Path) -> bool:
         return self.resolve(path) in self._dirs
+
+    def make_dir(
+        self, path: Path, *, parents: bool = False, exist_ok: bool = False
+    ) -> None:
+        del exist_ok
+        resolved = self.resolve(path)
+        if parents:
+            self.add_dir(resolved)
+            return
+        if resolved.parent not in self._dirs:
+            raise FileNotFoundError(resolved.parent)
+        self._dirs.add(resolved)
+
+    def remove_tree(self, path: Path) -> None:
+        resolved = self.resolve(path)
+        self._files = {
+            file_path: content
+            for file_path, content in self._files.items()
+            if not file_path.is_relative_to(resolved)
+        }
+        self._dirs = {
+            directory
+            for directory in self._dirs
+            if not directory.is_relative_to(resolved) or directory == Path("/")
+        }
 
     def resolve(self, path: Path) -> Path:
         return Path("/").joinpath(path).resolve() if not path.is_absolute() else path

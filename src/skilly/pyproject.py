@@ -10,6 +10,8 @@ from skilly.filesystem import FileSystem, DEFAULT_FILE_SYSTEM
 
 @dataclass(frozen=True)
 class PyProjectInfo:
+    """Parsed dependency information from pyproject.toml."""
+
     dependencies: list[Requirement]
 
     @classmethod
@@ -34,6 +36,16 @@ class PyProjectInfo:
         include_dev: bool = False,
         include_extras: Sequence[str] = (),
     ) -> "PyProjectInfo":
+        """Parse dependency information from pyproject content.
+
+        Args:
+            toml: Parsed pyproject.toml content.
+            include_dev: Whether the `dev` dependency group should be included.
+            include_extras: Additional dependency groups to include.
+
+        Returns:
+            Parsed project dependency information.
+        """
         dependencies = []
         for dep in toml.get("project", {}).get("dependencies", []):
             dependencies.append(Requirement(dep))
@@ -50,5 +62,14 @@ def parse_toml(
     path: Path,
     file_system: FileSystem = DEFAULT_FILE_SYSTEM,
 ) -> dict[str, Any]:
+    """Read and parse a TOML file.
+
+    Args:
+        path: Path to the TOML file.
+        file_system: File system abstraction used for file access.
+
+    Returns:
+        Parsed TOML content.
+    """
     data = file_system.read_file(path)
     return tomllib.loads(data)

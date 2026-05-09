@@ -23,7 +23,21 @@ uvx skilly --help
 
 ### python
 
+```python
+from pathlib import Path
 
+from skilly import Skill, SkillRepository
+
+skill = Skill.from_dir(Path(".agents/skills/my-skill"))
+github_skill = Skill.from_github(
+    fetcher,
+    "https://github.com/example/project/tree/main/.agents/skills/my-skill",
+)
+
+repository = SkillRepository()
+for match in repository.scan_project():
+    print(match.available.name, match.status)
+```
 
 ## Development
 

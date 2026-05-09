@@ -10,7 +10,7 @@ def dependencies(
     file: Path = Path("pyproject.toml"), dev: bool = False, extras: Sequence[str] = ()
 ) -> None:
     # Todo: Sequence[str] might be wrong here for now
-    from skilly.parsers import parse_toml, PyProjectInfo
+    from skilly.pyproject import parse_toml, PyProjectInfo
 
     toml = parse_toml(file)
     info = PyProjectInfo.from_pyproject_toml(
@@ -22,19 +22,17 @@ def dependencies(
 
 @util_cli.command()
 def venv(path: Path = Path(".venv"), detailed: bool = False) -> None:
+    from skilly.skills import discover_venv_skills
 
-    from skilly.skills import VenvSkills
+    skills = discover_venv_skills(path)
 
-    skills = VenvSkills.from_dir(path)
-
-    print(f"Found {len(skills.skills)} skills:")
-    for skill in skills.skills:
-        print(
-            f"{skill.skill.name}[{skill.package_name}=={skill.package_version}]:\n{skill.skill.description}"
-        )
+    print(f"Found {len(skills)} skills:")
+    for skill in skills:
+        package_reference = skill.package_reference() or "unknown"
+        print(f"{skill.name}[{package_reference}]:\n{skill.description}")
         if detailed:
             print("\tResources:")
-            for resource in skill.skill.resources:
+            for resource in skill.resources:
                 content_length = len(resource.content.split("\n"))
                 print(
                     f"\t\t{resource.relative_path} [{resource.kind}]: {content_length} lines."
