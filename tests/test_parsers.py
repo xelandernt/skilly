@@ -249,6 +249,35 @@ Demo instructions.
     ]
 
 
+def test_discover_venv_supports_windows_site_packages_and_record_paths(
+    tmp_path: Path,
+) -> None:
+    venv_path, site_packages = make_venv(
+        tmp_path, site_packages_relative=Path("Lib/site-packages")
+    )
+    skill_path = site_packages / "sample_pkg/.agents/skills/sample-skill/SKILL.md"
+    write_skill(
+        skill_path,
+        """---
+name: sample-skill
+description: Parse PDFs and forms. Use when the task mentions PDFs, forms, or extraction.
+---
+Use this skill carefully.
+""",
+    )
+    write_distribution(
+        site_packages=site_packages,
+        package_name="sample-pkg",
+        package_version="1.2.3",
+        record_rows=[r"sample_pkg\.agents\skills\sample-skill\SKILL.md,,"],
+    )
+
+    skills = discover_venv_skills(venv_path)
+
+    assert [skill.name for skill in skills] == ["sample-skill"]
+    assert skills[0].path == skill_path.resolve()
+
+
 def test_installed_skill_state_comes_from_metadata(tmp_path: Path) -> None:
     skill_dir = tmp_path / "installed-skill"
     write_skill(
@@ -278,9 +307,13 @@ Body
     assert skill.skillsmp_id == "skill-1"
 
 
-def make_venv(root: Path) -> tuple[Path, Path]:
+def make_venv(
+    root: Path,
+    *,
+    site_packages_relative: Path = Path("lib/python3.13/site-packages"),
+) -> tuple[Path, Path]:
     venv_path = root / ".venv"
-    site_packages = venv_path / "lib/python3.13/site-packages"
+    site_packages = venv_path / site_packages_relative
     site_packages.mkdir(parents=True)
     return venv_path, site_packages.resolve()
 

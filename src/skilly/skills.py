@@ -689,7 +689,7 @@ def to_relative_path(path: str | Path | PurePosixPath) -> PurePosixPath:
         return path
     if isinstance(path, Path):
         return PurePosixPath(*path.parts)
-    return PurePosixPath(path)
+    return PurePosixPath(path.replace("\\", "/"))
 
 
 def split_frontmatter(text: str) -> tuple[list[str], str]:
@@ -864,7 +864,7 @@ def read_distribution_info(
 
 def is_skill_record(installed_path: str) -> bool:
     """Return whether a RECORD entry points at a skill file."""
-    parts = PurePosixPath(installed_path).parts
+    parts = to_relative_path(installed_path).parts
     for index, part in enumerate(parts):
         if part == ".agents" and len(parts) > index + 3:
             return parts[index + 1] == "skills" and parts[-1] == "SKILL.md"
@@ -879,7 +879,7 @@ def resolve_record_path(
 ) -> Path:
     """Resolve a RECORD entry relative to a site-packages directory."""
     path = site_packages
-    for part in PurePosixPath(installed_path).parts:
+    for part in to_relative_path(installed_path).parts:
         path /= part
     return file_system.resolve(path)
 
