@@ -5,6 +5,7 @@ from pathlib import Path, PurePosixPath
 from typing import Sequence
 
 from packaging.requirements import Requirement
+from yaml import YAMLError, safe_load
 
 from .filesystem import DEFAULT_FILE_SYSTEM, FileSystem
 
@@ -35,36 +36,31 @@ class Skill:
 
         frontmatter, body = _split_frontmatter(text)
         raw_metadata = _parse_frontmatter(frontmatter)
+        name = _string_frontmatter_value(raw_metadata.get("name"))
+        description = _string_frontmatter_value(raw_metadata.get("description"))
+        license_value = _string_frontmatter_value(raw_metadata.get("license"))
+        compatibility = _string_frontmatter_value(raw_metadata.get("compatibility"))
+        allowed_tools = _string_frontmatter_value(raw_metadata.get("allowed-tools"))
 
         raw_skill_metadata = raw_metadata.get("metadata")
         if isinstance(raw_skill_metadata, dict):
             skill_metadata = {
-                str(key): value
+                str(key): _string_frontmatter_value(value)
                 for key, value in raw_skill_metadata.items()
-                if isinstance(value, str)
+                if _string_frontmatter_value(value) is not None
             }
         else:
             skill_metadata = {}
 
         return cls(
-            name=raw_metadata.get("name")
-            if isinstance(raw_metadata.get("name"), str)
-            else "",
-            description=raw_metadata.get("description")
-            if isinstance(raw_metadata.get("description"), str)
-            else "",
+            name=name or "",
+            description=description or "",
             path=skill_path,
             content=body,
-            license=raw_metadata.get("license")
-            if isinstance(raw_metadata.get("license"), str)
-            else None,
-            compatibility=raw_metadata.get("compatibility")
-            if isinstance(raw_metadata.get("compatibility"), str)
-            else None,
+            license=license_value,
+            compatibility=compatibility,
             metadata=skill_metadata,
-            allowed_tools=raw_metadata.get("allowed-tools")
-            if isinstance(raw_metadata.get("allowed-tools"), str)
-            else None,
+            allowed_tools=allowed_tools,
         )
 
     @classmethod
@@ -313,85 +309,22 @@ def _split_frontmatter(text: str) -> tuple[list[str], str]:
 
 
 def _parse_frontmatter(lines: list[str]) -> dict[str, object]:
-    metadata: dict[str, object] = {}
-    line_index = 0
-    while line_index < len(lines):
-        line = lines[line_index]
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            line_index += 1
-            continue
-        if line[:1].isspace():
-            raise ValueError("top-level frontmatter fields must not be indented")
+    try:
+        parsed = safe_load("\n".join(lines))
+    except YAMLError as exc:
+        raise ValueError(f"invalid YAML frontmatter: {exc}") from exc
 
-        key, separator, raw_value = line.partition(":")
-        if not separator:
-            raise ValueError(f"invalid frontmatter line: {line}")
-
-        key = key.strip()
-        value = raw_value.lstrip()
-        if key == "metadata" and not value:
-            parsed_metadata, line_index = _parse_metadata_block(
-                lines,
-                start_index=line_index + 1,
-            )
-            metadata[key] = parsed_metadata
-            continue
-
-        parsed_value = _parse_scalar(value)
-        if not isinstance(parsed_value, str):
-            raise ValueError(f"{key} must be a string")
-        metadata[key] = parsed_value
-        line_index += 1
-
-    return metadata
+    if parsed is None:
+        return {}
+    if not isinstance(parsed, dict):
+        raise ValueError("frontmatter must be a mapping")
+    return parsed
 
 
-def _parse_metadata_block(
-    lines: list[str],
-    *,
-    start_index: int,
-) -> tuple[dict[str, str], int]:
-    metadata: dict[str, str] = {}
-    line_index = start_index
-
-    while line_index < len(lines):
-        line = lines[line_index]
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            line_index += 1
-            continue
-        if not line.startswith((" ", "\t")):
-            break
-        if line.startswith("\t"):
-            raise ValueError("metadata entries must be indented with spaces")
-
-        indentation = len(line) - len(line.lstrip(" "))
-        if indentation < 2:
-            raise ValueError("metadata entries must be indented by at least two spaces")
-
-        key, separator, raw_value = line[indentation:].partition(":")
-        if not separator:
-            raise ValueError(f"invalid metadata line: {line.strip()}")
-
-        parsed_value = _parse_scalar(raw_value.lstrip())
-        if not isinstance(parsed_value, str):
-            raise ValueError("metadata values must be strings")
-        metadata[key.strip()] = parsed_value
-        line_index += 1
-
-    return metadata, line_index
-
-
-def _parse_scalar(value: str) -> str | None:
-    value = value.strip()
-    if value == "null":
+def _string_frontmatter_value(value: object) -> str | None:
+    if not isinstance(value, str):
         return None
-    if value.startswith("'") and value.endswith("'") and len(value) >= 2:
-        return value[1:-1].replace("''", "'")
-    if value.startswith('"') and value.endswith('"') and len(value) >= 2:
-        return bytes(value[1:-1], "utf-8").decode("unicode_escape")
-    return value
+    return value.rstrip("\n")
 
 
 def _find_dist_info_dirs(
