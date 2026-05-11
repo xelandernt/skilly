@@ -126,10 +126,9 @@ async def test_skillsmp_search_installs_selected_skill_with_live_preview(
             },
         }
     )
-    search_client = FakeAsyncSearchClient(search_result)
+    search_client = FakeSkillsMpClient(search_result)
     ui = FakeInteractiveUi([search_result.data.skills[0], "install", None])
-    monkeypatch.setattr(skillsmp_cli, "AsyncSkillsMp", lambda: search_client)
-    monkeypatch.setattr(skillsmp_cli, "SkillsMp", lambda: FakeGitHubFetcher())
+    monkeypatch.setattr(skillsmp_cli, "SkillsMp", lambda: search_client)
     monkeypatch.setattr(skillsmp_cli, "cli_ui", ui)
 
     await skillsmp_cli.search("demo", directory=install_directory)
@@ -149,26 +148,24 @@ async def test_skillsmp_search_installs_selected_skill_with_live_preview(
     assert "Installed skillsmp-skill to" in capsys.readouterr().out
 
 
-class FakeAsyncSearchResponse:
+class FakeSearchResponse:
     def __init__(self, parsed_data: SkillsMpSearchApiResponse) -> None:
         self._parsed_data = parsed_data
 
     @property
-    async def parsed_data(self) -> SkillsMpSearchApiResponse:
+    def parsed_data(self) -> SkillsMpSearchApiResponse:
         return self._parsed_data
 
 
-class FakeAsyncSearchClient:
+class FakeSkillsMpClient:
     def __init__(self, parsed_data: SkillsMpSearchApiResponse) -> None:
         self._parsed_data = parsed_data
         self.queries: list[str] = []
 
-    async def search(self, query: str) -> FakeAsyncSearchResponse:
+    def search(self, query: str) -> FakeSearchResponse:
         self.queries.append(query)
-        return FakeAsyncSearchResponse(self._parsed_data)
+        return FakeSearchResponse(self._parsed_data)
 
-
-class FakeGitHubFetcher:
     def fetch_github_directory(
         self, location: object, current_path: object
     ) -> list[object]:
