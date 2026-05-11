@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
+from typing import cast
 
 import pytest
 
 from skilly.cli import root
+from skilly.cli.ui import Menu, MenuValue
 from skilly.repository import SkillMatch, SkillRepository
 from skilly.skills import GitHubContentItem, GitHubFileBlob, GitHubSkillLocation, Skill
 
@@ -22,11 +25,8 @@ def test_scan_installs_selected_dependency_skill(
     )
     repository = FakeRepository(matches=[SkillMatch(available=available)])
     monkeypatch.setattr(root, "SkillRepository", lambda: repository)
-    monkeypatch.setattr(
-        root,
-        "questionary",
-        QuestionaryModule([root.scan_choice_label(repository.matches[0])]),
-    )
+    ui = FakeInteractiveUi([repository.matches[0], "install"])
+    monkeypatch.setattr(root, "cli_ui", ui)
 
     install_directory = tmp_path / ".agents" / "skills"
     root.scan(directory=install_directory)
@@ -44,7 +44,32 @@ def test_scan_installs_selected_dependency_skill(
     assert "Installed sample-skill" in capsys.readouterr().out
 
 
-def test_scan_exit_choice_skips_install(
+def test_scan_cancel_skips_install(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    available = make_skill(
+        tmp_path,
+        package_name="sample-pkg",
+        package_version="1.2.3",
+        skill_name="sample-skill",
+    )
+    repository = FakeRepository(matches=[SkillMatch(available=available)])
+    monkeypatch.setattr(root, "SkillRepository", lambda: repository)
+    ui = FakeInteractiveUi([None])
+    monkeypatch.setattr(root, "cli_ui", ui)
+
+    install_directory = tmp_path / ".agents" / "skills"
+    root.scan(directory=install_directory)
+
+    assert not (install_directory / "sample-skill").exists()
+    assert capsys.readouterr().out == ""
+    assert ui.menus[0].items[0].label == root.scan_choice_label(repository.matches[0])
+    assert ui.menus[0].items[-1].label == root.EXIT_CHOICE
+
+
+def test_scan_preview_includes_selected_skill_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -56,12 +81,16 @@ def test_scan_exit_choice_skips_install(
     )
     repository = FakeRepository(matches=[SkillMatch(available=available)])
     monkeypatch.setattr(root, "SkillRepository", lambda: repository)
-    monkeypatch.setattr(root, "questionary", QuestionaryModule(["exit"]))
+    ui = FakeInteractiveUi([None])
+    monkeypatch.setattr(root, "cli_ui", ui)
 
     install_directory = tmp_path / ".agents" / "skills"
     root.scan(directory=install_directory)
 
-    assert not (install_directory / "sample-skill").exists()
+    preview_lines = ui.menus[0].items[0].preview_lines
+    assert "Files:" in preview_lines
+    assert "  SKILL.md" in preview_lines
+    assert "  scripts/extract.py" in preview_lines
 
 
 def test_list_removes_selected_skill(
@@ -81,11 +110,8 @@ def test_list_removes_selected_skill(
         directory=install_directory,
     )
     monkeypatch.setattr(root, "SkillRepository", lambda: repository)
-    monkeypatch.setattr(
-        root,
-        "questionary",
-        QuestionaryModule([root.installed_skill_label(installed), "remove"]),
-    )
+    ui = FakeInteractiveUi([installed, "remove"])
+    monkeypatch.setattr(root, "cli_ui", ui)
 
     root.list(directory=install_directory)
 
@@ -116,11 +142,8 @@ def test_list_updates_dependency_skill(
         body="Updated body.\n",
     )
     monkeypatch.setattr(root, "SkillRepository", lambda: repository)
-    monkeypatch.setattr(
-        root,
-        "questionary",
-        QuestionaryModule([root.installed_skill_label(installed), "update", "exit"]),
-    )
+    ui = FakeInteractiveUi([installed, "update", None])
+    monkeypatch.setattr(root, "cli_ui", ui)
 
     root.list(directory=install_directory)
 
@@ -153,11 +176,8 @@ Body
         directory=install_directory,
     )
     monkeypatch.setattr(root, "SkillRepository", lambda: repository)
-    monkeypatch.setattr(
-        root,
-        "questionary",
-        QuestionaryModule([root.installed_skill_label(installed), "update", "exit"]),
-    )
+    ui = FakeInteractiveUi([installed, "update", None])
+    monkeypatch.setattr(root, "cli_ui", ui)
     monkeypatch.setattr(root, "SkillsMp", lambda: FakeGitHubFetcher())
 
     root.list(directory=install_directory)
@@ -166,6 +186,32 @@ Body
         encoding="utf-8"
     ) == "print('updated')\n"
     assert "Updated skillsmp-skill with 2 files" in capsys.readouterr().out
+
+
+def test_list_preview_includes_installed_skill_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_directory = tmp_path / ".agents" / "skills"
+    repository = FakeRepository()
+    installed = repository.install(
+        make_skill(
+            tmp_path,
+            package_name="dep-pkg",
+            package_version="1.2.3",
+            skill_name="dependency-skill",
+        ),
+        directory=install_directory,
+    )
+    monkeypatch.setattr(root, "SkillRepository", lambda: repository)
+    ui = FakeInteractiveUi([None])
+    monkeypatch.setattr(root, "cli_ui", ui)
+
+    root.list(directory=install_directory)
+
+    assert ui.menus[0].items[0].label == root.installed_skill_label(installed)
+    assert "  scripts/extract.py" in ui.menus[0].items[0].preview_lines
+    assert ui.menus[0].items[-1].label == root.EXIT_CHOICE
 
 
 def test_update_force_updates_outdated_dependency_skills(
@@ -278,30 +324,19 @@ def write_file(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-class QuestionaryPrompt:
-    def __init__(self, response: list[str] | str) -> None:
-        self._response = response
-
-    def ask(self) -> list[str] | str:
-        return self._response
-
-
-class QuestionaryModule:
-    def __init__(self, responses: list[str] | list[list[str]]) -> None:
+class FakeInteractiveUi:
+    def __init__(self, responses: Sequence[object | None]) -> None:
         self._responses = list(responses)
+        self.menus: list[object] = []
 
-    def next_response(self) -> list[str] | str:
+    def select(self, menu: Menu[MenuValue]) -> MenuValue | None:
+        self.menus.append(menu)
         if not self._responses:
-            raise AssertionError("No more questionary responses configured")
-        return self._responses.pop(0)
+            raise AssertionError("No more UI responses configured")
+        return cast(MenuValue | None, self._responses.pop(0))
 
-    def checkbox(self, *args: object, **kwargs: object) -> QuestionaryPrompt:
-        del args, kwargs
-        return QuestionaryPrompt(self.next_response())
-
-    def select(self, *args: object, **kwargs: object) -> QuestionaryPrompt:
-        del args, kwargs
-        return QuestionaryPrompt(self.next_response())
+    async def select_async(self, menu: Menu[MenuValue]) -> MenuValue | None:
+        return self.select(menu)
 
 
 class FakeGitHubFetcher:

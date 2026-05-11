@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 from pathlib import Path
 
-import questionary
 from cyclopts import App
 
 from skilly.cli.choices import (
@@ -10,6 +11,12 @@ from skilly.cli.choices import (
     INSTALL_CHOICE,
     UPDATE_CHOICE,
 )
+from skilly.cli.previews import (
+    installed_skill_preview_lines,
+    skillsmp_installable_preview_lines,
+    skillsmp_search_preview_lines,
+)
+from skilly.cli.ui import Menu, MenuItem, cli_ui
 from skilly.constants import DEFAULT_SKILLS_PATH
 from skilly.repository import SkillRepository
 from skilly.skills import Skill
@@ -27,25 +34,6 @@ def installed_skill_label(skill: Skill) -> str:
     return f"{skill.directory_name}: {skill.name}"
 
 
-def print_search_skill(skill: SkillsMpSkill) -> None:
-    print(f"Name: {skill.name}")
-    print(f"Description: {skill.description}")
-    print(f"Url: {skill.skillUrl}")
-    print(f"GitHub Url: {skill.githubUrl}")
-    print(f"Author: {skill.author}")
-    print(f"Id: {skill.id}")
-
-
-def print_installed_skill(skill: Skill) -> None:
-    print(f"Name: {skill.name}")
-    print(f"Directory: {skill.directory}")
-    print(f"Installed: {skill.is_installed()}")
-    if skill.github_url is not None:
-        print(f"GitHub Url: {skill.github_url}")
-    if skill.skillsmp_id is not None:
-        print(f"SkillsMP Id: {skill.skillsmp_id}")
-
-
 @skillsmp_cli.command()
 async def search(
     query: str,
@@ -58,35 +46,69 @@ async def search(
     repository = SkillRepository()
     response = await search_client.search(query)
     data = await response.parsed_data
-    skills_by_label = {search_skill_label(skill): skill for skill in data.data.skills}
+    if not data.data.skills:
+        print(f"No SkillsMP skills found for {query}")
+        return
 
+    installable_skills: dict[str, Skill] = {}
+    messages: list[str] = []
+    status_message: str | None = None
     while True:
-        selection = await questionary.select(
-            "Select a skill",
-            default=EXIT_CHOICE,
-            choices=[*skills_by_label, EXIT_CHOICE],
-        ).ask_async()
-        if selection in {None, EXIT_CHOICE}:
-            return
+        skill = await cli_ui.select_async(
+            Menu(
+                title=f'Select a skill for "{query}"',
+                items=tuple(
+                    [
+                        *search_skill_menu_items(data.data.skills),
+                        exit_menu_item("Exit search"),
+                    ]
+                ),
+                default=data.data.skills[0],
+                preview_title="SkillsMP result",
+                status=status_message,
+            )
+        )
+        if skill is None or skill == EXIT_CHOICE:
+            break
 
-        skill = skills_by_label[selection]
-        print_search_skill(skill)
-        action = await questionary.select(
-            "Choose an action",
-            default=BACK_CHOICE,
-            choices=[INSTALL_CHOICE, BACK_CHOICE, EXIT_CHOICE],
-        ).ask_async()
+        installable = installable_skills.get(skill.id)
+        if installable is None:
+            installable = Skill.from_skillsmp(install_client, skill)
+            installable_skills[skill.id] = installable
+
+        action = await cli_ui.select_async(
+            Menu(
+                title=f"Choose an action for {skill.name}",
+                items=tuple(
+                    MenuItem(
+                        value=item,
+                        label=item,
+                        preview_lines=skillsmp_installable_preview_lines(
+                            skill, installable
+                        ),
+                    )
+                    for item in [INSTALL_CHOICE, BACK_CHOICE, EXIT_CHOICE]
+                ),
+                default=INSTALL_CHOICE,
+                preview_title=skill.name,
+                status=status_message,
+            )
+        )
         if action in {None, BACK_CHOICE}:
             continue
         if action == EXIT_CHOICE:
-            return
+            break
 
         installed = repository.install(
-            Skill.from_skillsmp(install_client, skill),
+            installable,
             directory=directory,
             overwrite=overwrite,
         )
-        print(f"Installed {installed.name} to {installed.directory}")
+        status_message = f"Installed {installed.name} to {installed.directory}"
+        messages.append(status_message)
+
+    if messages:
+        print("\n".join(messages))
 
 
 @skillsmp_cli.command()
@@ -113,38 +135,56 @@ def list(directory: Path = DEFAULT_SKILLS_PATH) -> None:
     """List installed skills with skillsmp."""
     client = SkillsMp()
     repository = SkillRepository()
+    messages: list[str] = []
+    status_message: str | None = None
 
     while True:
         installed_skills = [
             skill for skill in repository.list(directory) if skill.is_skillsmp()
         ]
         if not installed_skills:
+            if messages:
+                break
             print(f"No SkillsMP-installed skills found in {directory.resolve()}")
             return
 
-        skills_by_label = {
-            installed_skill_label(installed_skill): installed_skill
-            for installed_skill in installed_skills
-        }
-        selection = questionary.select(
-            "Select an installed skill",
-            default=EXIT_CHOICE,
-            choices=[*skills_by_label, EXIT_CHOICE],
-        ).ask()
-        if selection in {None, EXIT_CHOICE}:
-            return
+        skill = cli_ui.select(
+            Menu(
+                title="Select an installed SkillsMP skill",
+                items=tuple(
+                    [
+                        *installed_skill_menu_items(installed_skills),
+                        exit_menu_item("Exit list"),
+                    ]
+                ),
+                default=installed_skills[0],
+                preview_title="Installed skill",
+                status=status_message,
+            )
+        )
+        if skill is None or skill == EXIT_CHOICE:
+            break
 
-        skill = skills_by_label[selection]
-        print_installed_skill(skill)
-        action = questionary.select(
-            "Choose an action",
-            default=BACK_CHOICE,
-            choices=[UPDATE_CHOICE, DELETE_CHOICE, BACK_CHOICE, EXIT_CHOICE],
-        ).ask()
+        action = cli_ui.select(
+            Menu(
+                title=f"Choose an action for {skill.directory_name}",
+                items=tuple(
+                    MenuItem(
+                        value=item,
+                        label=item,
+                        preview_lines=installed_skill_preview_lines(skill),
+                    )
+                    for item in [UPDATE_CHOICE, DELETE_CHOICE, BACK_CHOICE, EXIT_CHOICE]
+                ),
+                default=UPDATE_CHOICE,
+                preview_title=skill.directory_name,
+                status=status_message,
+            )
+        )
         if action in {None, BACK_CHOICE}:
             continue
         if action == EXIT_CHOICE:
-            return
+            break
         if action == UPDATE_CHOICE:
             updated = repository.install(
                 Skill.from_github(
@@ -157,10 +197,45 @@ def list(directory: Path = DEFAULT_SKILLS_PATH) -> None:
                 skill_name=skill.directory_name,
                 replace=True,
             )
-            print(
-                f"Updated {updated.directory_name} with {len(updated.resources) + 1} files"
-            )
+            status_message = f"Updated {updated.directory_name} with {len(updated.resources) + 1} files"
+            messages.append(status_message)
             continue
 
         removed = repository.remove(skill.directory_name, directory=directory)
-        print(f"Removed {removed.directory_name}")
+        status_message = f"Removed {removed.directory_name}"
+        messages.append(status_message)
+
+    if messages:
+        print("\n".join(messages))
+
+
+def search_skill_menu_items(
+    skills: list[SkillsMpSkill],
+) -> list[MenuItem[SkillsMpSkill | str]]:
+    return [
+        MenuItem(
+            value=skill,
+            label=search_skill_label(skill),
+            preview_lines=skillsmp_search_preview_lines(skill),
+        )
+        for skill in skills
+    ]
+
+
+def installed_skill_menu_items(skills: list[Skill]) -> list[MenuItem[Skill | str]]:
+    return [
+        MenuItem(
+            value=skill,
+            label=installed_skill_label(skill),
+            preview_lines=installed_skill_preview_lines(skill),
+        )
+        for skill in skills
+    ]
+
+
+def exit_menu_item(preview_label: str) -> MenuItem[str]:
+    return MenuItem(
+        value=EXIT_CHOICE,
+        label=EXIT_CHOICE,
+        preview_lines=(preview_label,),
+    )
