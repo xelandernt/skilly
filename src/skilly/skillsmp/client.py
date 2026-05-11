@@ -116,6 +116,7 @@ class GitHubContentEntry(BaseModel):
     name: str
     path: str
     url: str
+    html_url: str | None = None
     size: int | None = None
     download_url: str | None = None
 
@@ -130,6 +131,7 @@ class GitHubFileContent(BaseModel):
     type: str
     name: str
     path: str
+    html_url: str | None = None
     size: int | None = None
     encoding: str | None = None
     content: str | None = None
@@ -170,6 +172,17 @@ def _decode_github_file_content(file_content: GitHubFileContent) -> str:
         )
     normalized_content = file_content.content.replace("\n", "")
     return base64.b64decode(normalized_content).decode("utf-8")
+
+
+def _extract_commit_sha_from_html_url(html_url: str | None) -> str | None:
+    if html_url is None:
+        return None
+    parts = [part for part in html_url.split("/") if part]
+    if len(parts) < 6 or parts[0] not in {"http:", "https:"}:
+        return None
+    if parts[1] != "github.com" or parts[4] not in {"blob", "tree"}:
+        return None
+    return parts[5]
 
 
 class _SkillsMpBase(abc.ABC):
@@ -235,10 +248,12 @@ class _SkillsMpBase(abc.ABC):
         location: GitHubSkillLocation,
         path: PurePosixPath,
     ) -> str:
-        return (
-            f"{GITHUB_API_BASE_URL}/repos/{location.owner}/{location.repo}/contents/"
-            f"{path.as_posix()}"
+        base_url = (
+            f"{GITHUB_API_BASE_URL}/repos/{location.owner}/{location.repo}/contents"
         )
+        if str(path) in {"", "."}:
+            return base_url
+        return f"{base_url}/{path.as_posix()}"
 
 
 class AsyncSkillsMp(_SkillsMpBase):
@@ -332,7 +347,7 @@ class AsyncSkillsMp(_SkillsMpBase):
         response = await self._github_request(
             self._build_github_api_url(location, current_path),
             GitHubContentEntries,
-            params={"ref": location.ref},
+            params={"ref": location.ref} if location.ref is not None else {},
         )
         entries = (await response.parsed_data).root
         return [
@@ -340,6 +355,7 @@ class AsyncSkillsMp(_SkillsMpBase):
                 type=entry.type,
                 name=entry.name,
                 path=PurePosixPath(entry.path),
+                commit_sha=_extract_commit_sha_from_html_url(entry.html_url),
             )
             for entry in entries
         ]
@@ -352,13 +368,14 @@ class AsyncSkillsMp(_SkillsMpBase):
         response = await self._github_request(
             self._build_github_api_url(location, path),
             GitHubFileContent,
-            params={"ref": location.ref},
+            params={"ref": location.ref} if location.ref is not None else {},
         )
         file_content = await response.parsed_data
         return GitHubFileBlob(
             path=PurePosixPath(file_content.path),
             content=_decode_github_file_content(file_content),
             size=file_content.size or 0,
+            commit_sha=_extract_commit_sha_from_html_url(file_content.html_url),
         )
 
 
@@ -453,13 +470,14 @@ class SkillsMp(_SkillsMpBase):
         response = self._github_request(
             self._build_github_api_url(location, current_path),
             GitHubContentEntries,
-            params={"ref": location.ref},
+            params={"ref": location.ref} if location.ref is not None else {},
         )
         return [
             GitHubContentItem(
                 type=entry.type,
                 name=entry.name,
                 path=PurePosixPath(entry.path),
+                commit_sha=_extract_commit_sha_from_html_url(entry.html_url),
             )
             for entry in response.parsed_data.root
         ]
@@ -472,11 +490,12 @@ class SkillsMp(_SkillsMpBase):
         response = self._github_request(
             self._build_github_api_url(location, path),
             GitHubFileContent,
-            params={"ref": location.ref},
+            params={"ref": location.ref} if location.ref is not None else {},
         )
         file_content = response.parsed_data
         return GitHubFileBlob(
             path=PurePosixPath(file_content.path),
             content=_decode_github_file_content(file_content),
             size=file_content.size or 0,
+            commit_sha=_extract_commit_sha_from_html_url(file_content.html_url),
         )

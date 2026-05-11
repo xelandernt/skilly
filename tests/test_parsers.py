@@ -56,6 +56,25 @@ Relaxed instructions.
     assert skill.content == "Relaxed instructions."
 
 
+def test_skill_from_text_parses_literal_block_scalars() -> None:
+    skill = Skill.from_text(
+        """---
+name: block-skill
+description: |
+  First line.
+  Second line.
+metadata:
+  owner: docs
+---
+Block instructions.
+""",
+        path=Path("/workspace/block-skill/SKILL.md"),
+    )
+
+    assert skill.description == "First line.\nSecond line."
+    assert skill.metadata == {"owner": "docs"}
+
+
 def test_skill_from_dir_reads_skill_md(tmp_path: Path) -> None:
     skill_dir = tmp_path / "folder-skill"
     write_skill(
@@ -289,6 +308,7 @@ metadata:
   skilly-managed-by: skilly
   skilly-source: skillsmp
   skilly-github-url: https://github.com/example/project/tree/main/.agents/skills/installed-skill
+  skilly-github-commit-sha: 0123456789abcdef0123456789abcdef01234567
   skilly-skillsmp-id: skill-1
 ---
 Body
@@ -304,6 +324,7 @@ Body
         skill.github_url
         == "https://github.com/example/project/tree/main/.agents/skills/installed-skill"
     )
+    assert skill.github_commit_sha == "0123456789abcdef0123456789abcdef01234567"
     assert skill.skillsmp_id == "skill-1"
 
 

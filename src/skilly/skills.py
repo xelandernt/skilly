@@ -15,6 +15,7 @@ from .constants import (
     ResourceKind,
     SKILLY_DEPENDENCY_PACKAGE_NAME_METADATA_KEY,
     SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY,
+    SKILLY_GITHUB_COMMIT_SHA_METADATA_KEY,
     SKILLY_GITHUB_URL_METADATA_KEY,
     SKILLY_MANAGED_METADATA_KEY,
     SKILLY_MANAGED_METADATA_VALUE,
@@ -44,14 +45,14 @@ class GitHubSkillLocation:
 
     owner: str
     repo: str
-    ref: str
+    ref: str | None
     path: PurePosixPath
     url: str
 
     @property
     def skill_name(self) -> str:
         """Return the skill directory name from the GitHub path."""
-        return self.path.name
+        return self.path.name if str(self.path) not in {"", "."} else self.repo
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ class GitHubContentItem:
     type: str
     name: str
     path: PurePosixPath
+    commit_sha: str | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,7 @@ class GitHubFileBlob:
     path: PurePosixPath
     content: str
     size: int
+    commit_sha: str | None = None
 
 
 class GitHubSkillFetcher(Protocol):
@@ -111,6 +114,7 @@ class Skill:
     package_name: str | None = None
     package_version: str | None = None
     github_url: str | None = None
+    github_commit_sha: str | None = None
     skillsmp_id: str | None = None
 
     @property
@@ -237,6 +241,8 @@ class Skill:
             )
         if self.github_url is not None:
             metadata[SKILLY_GITHUB_URL_METADATA_KEY] = self.github_url
+        if self.github_commit_sha is not None:
+            metadata[SKILLY_GITHUB_COMMIT_SHA_METADATA_KEY] = self.github_commit_sha
         if self.skillsmp_id is not None:
             metadata[SKILLY_SKILLSMP_ID_METADATA_KEY] = self.skillsmp_id
         return metadata
@@ -322,6 +328,7 @@ class Skill:
         package_name: str | None = None,
         package_version: str | None = None,
         github_url: str | None = None,
+        github_commit_sha: str | None = None,
         skillsmp_id: str | None = None,
     ) -> "Skill":
         """Build a skill from SKILL.md text.
@@ -334,6 +341,7 @@ class Skill:
             package_name: Explicit dependency package name.
             package_version: Explicit dependency package version.
             github_url: Explicit GitHub source URL.
+            github_commit_sha: Explicit GitHub commit SHA.
             skillsmp_id: Explicit SkillsMP identifier.
 
         Returns:
@@ -357,6 +365,9 @@ class Skill:
             SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY
         )
         skill_github_url = github_url or metadata.get(SKILLY_GITHUB_URL_METADATA_KEY)
+        skill_github_commit_sha = github_commit_sha or metadata.get(
+            SKILLY_GITHUB_COMMIT_SHA_METADATA_KEY
+        )
         skill_skillsmp_id = skillsmp_id or metadata.get(SKILLY_SKILLSMP_ID_METADATA_KEY)
 
         resources: list[SkillResource] = []
@@ -381,6 +392,7 @@ class Skill:
             package_name=skill_package_name,
             package_version=skill_package_version,
             github_url=skill_github_url,
+            github_commit_sha=skill_github_commit_sha,
             skillsmp_id=skill_skillsmp_id,
         )
 
@@ -394,6 +406,7 @@ class Skill:
         package_name: str | None = None,
         package_version: str | None = None,
         github_url: str | None = None,
+        github_commit_sha: str | None = None,
         skillsmp_id: str | None = None,
     ) -> "Skill":
         """Build a skill from a SKILL.md file."""
@@ -405,6 +418,7 @@ class Skill:
             package_name=package_name,
             package_version=package_version,
             github_url=github_url,
+            github_commit_sha=github_commit_sha,
             skillsmp_id=skillsmp_id,
         )
 
@@ -418,6 +432,7 @@ class Skill:
         package_name: str | None = None,
         package_version: str | None = None,
         github_url: str | None = None,
+        github_commit_sha: str | None = None,
         skillsmp_id: str | None = None,
     ) -> "Skill":
         """Build a skill from a directory containing SKILL.md."""
@@ -429,6 +444,7 @@ class Skill:
             package_name=package_name,
             package_version=package_version,
             github_url=github_url,
+            github_commit_sha=github_commit_sha,
             skillsmp_id=skillsmp_id,
         )
 
@@ -442,30 +458,18 @@ class Skill:
         skillsmp_id: str | None = None,
     ) -> "Skill":
         """Build a skill from a GitHub skill directory URL."""
-        location = parse_github_skill_url(github_url)
-        files = collect_github_files(fetcher, location, location.path)
-        skill_blob = files.get(location.path / "SKILL.md")
-        if skill_blob is None:
-            raise FileNotFoundError(f"SKILL.md not found at {github_url}")
-
-        skill = cls.from_text(
-            skill_blob.content,
-            path=Path(location.path.as_posix()) / "SKILL.md",
+        skills = discover_github_skills(
+            fetcher,
+            github_url,
             source=source,
-            github_url=github_url,
             skillsmp_id=skillsmp_id,
         )
-        resources = [
-            SkillResource(
-                path=Path(blob.path.as_posix()),
-                relative_path=blob.path.relative_to(location.path),
-                kind=classify_resource_kind(blob.path.relative_to(location.path)),
-                content=blob.content,
+        if len(skills) != 1:
+            raise ValueError(
+                f"GitHub URL resolves to {len(skills)} skills; "
+                "use a direct skill directory URL instead"
             )
-            for path, blob in sorted(files.items())
-            if path != location.path / "SKILL.md"
-        ]
-        return replace(skill, resources=resources)
+        return skills[0]
 
     @classmethod
     def from_skillsmp(
@@ -727,6 +731,14 @@ def parse_frontmatter(lines: list[str]) -> dict[str, object]:
             block, line_index = parse_metadata_block(lines, start_index=line_index + 1)
             metadata[key] = block
             continue
+        if value in {"|", ">"}:
+            block, line_index = parse_block_scalar(
+                lines,
+                start_index=line_index + 1,
+                folded=value == ">",
+            )
+            metadata[key] = block
+            continue
 
         parsed_value = parse_scalar(value)
         if parsed_value is None:
@@ -734,6 +746,74 @@ def parse_frontmatter(lines: list[str]) -> dict[str, object]:
         metadata[key] = parsed_value
         line_index += 1
     return metadata
+
+
+def parse_block_scalar(
+    lines: list[str],
+    *,
+    start_index: int,
+    folded: bool = False,
+) -> tuple[str, int]:
+    """Parse a YAML-style literal or folded block scalar."""
+    block_lines: list[str] = []
+    indentation: int | None = None
+    line_index = start_index
+    while line_index < len(lines):
+        line = lines[line_index]
+        stripped = line.strip()
+        if not stripped:
+            block_lines.append("")
+            line_index += 1
+            continue
+        if line.startswith("\t"):
+            raise ValueError("block scalar lines must be indented with spaces")
+        if not line.startswith(" "):
+            break
+
+        leading_spaces = len(line) - len(line.lstrip(" "))
+        if indentation is None:
+            indentation = leading_spaces
+        if indentation == 0:
+            raise ValueError("block scalar lines must be indented")
+        if leading_spaces < indentation:
+            break
+
+        block_lines.append(line[indentation:])
+        line_index += 1
+
+    if indentation is None:
+        return "", line_index
+    if not folded:
+        return "\n".join(block_lines), line_index
+    return fold_block_scalar_lines(block_lines), line_index
+
+
+def fold_block_scalar_lines(lines: list[str]) -> str:
+    """Fold YAML-style block scalar lines using spaces between non-blank lines."""
+    paragraphs: list[str] = []
+    current: list[str] = []
+    for line in lines:
+        if line == "":
+            if current:
+                paragraphs.append(" ".join(current))
+                current = []
+            paragraphs.append("")
+            continue
+        current.append(line)
+    if current:
+        paragraphs.append(" ".join(current))
+
+    folded_lines: list[str] = []
+    blank_run = False
+    for paragraph in paragraphs:
+        if paragraph == "":
+            if folded_lines and not blank_run:
+                folded_lines.append("")
+            blank_run = True
+            continue
+        folded_lines.append(paragraph)
+        blank_run = False
+    return "\n".join(folded_lines)
 
 
 def parse_metadata_block(
@@ -901,37 +981,182 @@ def collect_github_files(
     return files
 
 
+def find_github_skill_roots(
+    fetcher: GitHubSkillFetcher,
+    location: GitHubSkillLocation,
+    current_path: PurePosixPath,
+) -> list[PurePosixPath]:
+    """Recursively discover skill root directories without fetching file blobs."""
+    entries = fetcher.fetch_github_directory(location, current_path)
+    if any(entry.type == "file" and entry.name == "SKILL.md" for entry in entries):
+        return [current_path]
+
+    skill_roots: list[PurePosixPath] = []
+    for entry in entries:
+        if entry.type == "dir":
+            skill_roots.extend(find_github_skill_roots(fetcher, location, entry.path))
+    return skill_roots
+
+
+def build_github_skill_url(
+    location: GitHubSkillLocation,
+    path: PurePosixPath,
+) -> str | None:
+    """Build a canonical GitHub web URL for a skill path when the ref is known."""
+    base_url = f"https://github.com/{location.owner}/{location.repo}"
+    if str(path) in {"", "."}:
+        return (
+            f"{base_url}/tree/{location.ref}" if location.ref is not None else base_url
+        )
+    if location.ref is None:
+        return None
+    return f"{base_url}/tree/{location.ref}/{path.as_posix()}"
+
+
+def find_github_skill_dirs(
+    files: dict[PurePosixPath, GitHubFileBlob],
+    *,
+    root: PurePosixPath,
+) -> list[PurePosixPath]:
+    """Find skill directories by locating SKILL.md files under a fetched root."""
+    return sorted(
+        {
+            path.parent
+            for path in files
+            if path.name == "SKILL.md"
+            and (str(root) in {"", "."} or path.is_relative_to(root))
+        },
+        key=lambda path: path.as_posix(),
+    )
+
+
+def build_skill_from_github_files(
+    files: dict[PurePosixPath, GitHubFileBlob],
+    skill_dir: PurePosixPath,
+    *,
+    source: str,
+    github_url: str | None,
+    skillsmp_id: str | None,
+) -> Skill:
+    """Build a skill from already-fetched GitHub file blobs."""
+    skill_blob = files.get(skill_dir / "SKILL.md")
+    if skill_blob is None:
+        raise FileNotFoundError(f"SKILL.md not found at {skill_dir.as_posix()}")
+    github_commit_sha = skill_blob.commit_sha or next(
+        (
+            blob.commit_sha
+            for path, blob in sorted(files.items())
+            if path.is_relative_to(skill_dir) and blob.commit_sha is not None
+        ),
+        None,
+    )
+
+    skill = Skill.from_text(
+        skill_blob.content,
+        path=Path(skill_dir.as_posix()) / "SKILL.md",
+        source=source,
+        github_url=github_url,
+        github_commit_sha=github_commit_sha,
+        skillsmp_id=skillsmp_id,
+    )
+    resources = [
+        SkillResource(
+            path=Path(blob.path.as_posix()),
+            relative_path=blob.path.relative_to(skill_dir),
+            kind=classify_resource_kind(blob.path.relative_to(skill_dir)),
+            content=blob.content,
+        )
+        for path, blob in sorted(files.items())
+        if path != skill_dir / "SKILL.md" and path.is_relative_to(skill_dir)
+    ]
+    return replace(skill, resources=resources)
+
+
+def github_versions_match(installed: Skill, available: Skill) -> bool:
+    """Return whether two GitHub-backed skills resolve to the same commit."""
+    return (
+        installed.github_commit_sha is not None
+        and installed.github_commit_sha == available.github_commit_sha
+    )
+
+
+def discover_github_skills(
+    fetcher: GitHubSkillFetcher,
+    github_url: str,
+    *,
+    source: str = SKILLY_SOURCE_GITHUB,
+    skillsmp_id: str | None = None,
+) -> list[Skill]:
+    """Discover one or more skills from a GitHub repo, directory, or skill URL."""
+    location = parse_github_skill_url(github_url)
+    skill_dirs = find_github_skill_roots(fetcher, location, location.path)
+    if not skill_dirs:
+        raise FileNotFoundError(f"No SKILL.md found at {github_url}")
+    if skillsmp_id is not None and len(skill_dirs) != 1:
+        raise ValueError("SkillsMP metadata can only be attached to a single skill")
+
+    return [
+        build_skill_from_github_files(
+            collect_github_files(fetcher, location, skill_dir),
+            skill_dir,
+            source=source,
+            github_url=(
+                github_url
+                if len(skill_dirs) == 1 and skill_dir == location.path
+                else build_github_skill_url(location, skill_dir)
+            ),
+            skillsmp_id=skillsmp_id if len(skill_dirs) == 1 else None,
+        )
+        for skill_dir in skill_dirs
+    ]
+
+
 def parse_github_skill_url(github_url: str) -> GitHubSkillLocation:
     """Parse a GitHub skill directory URL.
 
     Args:
-        github_url: GitHub URL in `/tree/<ref>/<path>` form.
+        github_url: GitHub URL in repo or `/tree/<ref>[/<path>]` form.
 
     Returns:
         The parsed GitHub location.
 
     Raises:
-        ValueError: If the URL does not point to a GitHub tree directory.
+        ValueError: If the URL does not point to a supported GitHub repository URL.
     """
     parsed = urlparse(github_url)
     if parsed.netloc != "github.com":
         raise ValueError(f"Unsupported GitHub URL host: {parsed.netloc}")
 
     parts = [unquote(part) for part in parsed.path.split("/") if part]
-    if len(parts) < 5 or parts[2] != "tree":
+    if len(parts) < 2:
         raise ValueError(
             "GitHub skill URLs must look like "
+            "https://github.com/<owner>/<repo> or "
             "https://github.com/<owner>/<repo>/tree/<ref>/<path>"
         )
 
-    path = PurePosixPath(*parts[4:])
-    if str(path) in {"", "."}:
-        raise ValueError("GitHub skill URLs must include a directory path")
+    ref: str | None = None
+    path = PurePosixPath(".")
+    if len(parts) >= 3:
+        if parts[2] != "tree":
+            raise ValueError(
+                "GitHub skill URLs must look like "
+                "https://github.com/<owner>/<repo> or "
+                "https://github.com/<owner>/<repo>/tree/<ref>/<path>"
+            )
+        if len(parts) < 4:
+            raise ValueError(
+                "GitHub tree URLs must include a ref like "
+                "https://github.com/<owner>/<repo>/tree/<ref>"
+            )
+        ref = parts[3]
+        if len(parts) > 4:
+            path = PurePosixPath(*parts[4:])
 
     return GitHubSkillLocation(
         owner=parts[0],
         repo=parts[1],
-        ref=parts[3],
+        ref=ref,
         path=path,
         url=github_url,
     )

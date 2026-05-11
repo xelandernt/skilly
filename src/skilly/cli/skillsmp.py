@@ -19,7 +19,7 @@ from skilly.cli.previews import (
 from skilly.cli.ui import Menu, MenuItem, cli_ui
 from skilly.constants import DEFAULT_SKILLS_PATH
 from skilly.repository import SkillRepository
-from skilly.skills import Skill
+from skilly.skills import Skill, discover_github_skills, github_versions_match
 from skilly.skillsmp import SkillsMp, SkillsMpSkill
 
 
@@ -120,13 +120,32 @@ def download(
     """Download a skill using its github url."""
     client = SkillsMp()
     repository = SkillRepository()
-    installed = repository.install(
-        Skill.from_github(client, github_url),
-        directory=directory,
-        skill_name=skill_name,
-        overwrite=overwrite,
-    )
-    print(f"Downloaded {len(installed.resources) + 1} files to {installed.directory}")
+    skills = discover_github_skills(client, github_url)
+    if skill_name is not None and len(skills) != 1:
+        raise ValueError(
+            "Custom skill names can only be used when downloading a single skill"
+        )
+
+    installed_skills = [
+        repository.install(
+            skill,
+            directory=directory,
+            skill_name=skill_name if len(skills) == 1 else None,
+            overwrite=overwrite,
+        )
+        for skill in skills
+    ]
+    if len(installed_skills) == 1:
+        installed = installed_skills[0]
+        print(
+            f"Downloaded {len(installed.resources) + 1} files to {installed.directory}"
+        )
+        return
+    for installed in installed_skills:
+        print(
+            f"Downloaded {installed.directory_name} "
+            f"with {len(installed.resources) + 1} files to {installed.directory}"
+        )
 
 
 @skillsmp_cli.command()
@@ -185,13 +204,21 @@ def list(directory: Path = DEFAULT_SKILLS_PATH) -> None:
         if action == EXIT_CHOICE:
             break
         if action == UPDATE_CHOICE:
+            refreshed = Skill.from_github(
+                client,
+                skill.github_url,
+                source=skill.source,
+                skillsmp_id=skill.skillsmp_id,
+            )
+            if github_versions_match(skill, refreshed):
+                status_message = (
+                    f"{skill.directory_name} is already up to date "
+                    f"({skill.github_commit_sha})"
+                )
+                messages.append(status_message)
+                continue
             updated = repository.install(
-                Skill.from_github(
-                    client,
-                    skill.github_url,
-                    source=skill.source,
-                    skillsmp_id=skill.skillsmp_id,
-                ),
+                refreshed,
                 directory=directory,
                 skill_name=skill.directory_name,
                 replace=True,

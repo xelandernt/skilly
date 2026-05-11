@@ -56,6 +56,8 @@ def skill_preview_lines(
         lines.append(f"Package: {package_reference}")
     if skill.github_url is not None:
         lines.append(f"GitHub Url: {skill.github_url}")
+    if skill.github_commit_sha is not None:
+        lines.append(f"GitHub Commit: {skill.github_commit_sha}")
     if skill.skillsmp_id is not None:
         lines.append(f"SkillsMP Id: {skill.skillsmp_id}")
     if extra_lines:

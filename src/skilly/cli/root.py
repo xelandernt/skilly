@@ -17,7 +17,7 @@ from skilly.cli.ui import Menu, MenuItem, cli_ui
 from skilly.cli.util import util_cli
 from skilly.constants import DEFAULT_SKILLS_PATH, SkillInstallStatus
 from skilly.repository import SkillMatch, SkillRepository
-from skilly.skills import Skill
+from skilly.skills import Skill, github_versions_match
 from skilly.skillsmp import SkillsMp
 
 
@@ -300,6 +300,11 @@ def update_skill(
             source=skill.source,
             skillsmp_id=skill.skillsmp_id,
         )
+        if github_versions_match(skill, refreshed):
+            return (
+                f"{skill.directory_name} is already up to date "
+                f"({skill.github_commit_sha})"
+            )
         updated = repository.install(
             refreshed,
             directory=directory,

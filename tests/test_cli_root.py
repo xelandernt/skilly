@@ -188,6 +188,45 @@ Body
     assert "Updated skillsmp-skill with 2 files" in capsys.readouterr().out
 
 
+def test_list_skips_github_update_when_commit_matches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    install_directory = tmp_path / ".agents" / "skills"
+    repository = FakeRepository()
+    installed = repository.install(
+        Skill.from_text(
+            """---
+name: skillsmp-skill
+description: From SkillsMP.
+---
+Body
+""",
+            path=tmp_path / "skillsmp-source" / "SKILL.md",
+            source="skillsmp",
+            github_url="https://github.com/example/project/tree/main/.agents/skills/skillsmp-skill",
+            github_commit_sha="0123456789abcdef0123456789abcdef01234567",
+            skillsmp_id="skill-1",
+        ),
+        directory=install_directory,
+    )
+    monkeypatch.setattr(root, "SkillRepository", lambda: repository)
+    ui = FakeInteractiveUi([installed, "update", None])
+    monkeypatch.setattr(root, "cli_ui", ui)
+    monkeypatch.setattr(root, "SkillsMp", lambda: FakePinnedGitHubFetcher())
+
+    root.list(directory=install_directory)
+
+    assert not (
+        install_directory / "skillsmp-skill" / "scripts" / "updated.py"
+    ).exists()
+    assert (
+        "skillsmp-skill is already up to date "
+        "(0123456789abcdef0123456789abcdef01234567)" in capsys.readouterr().out
+    )
+
+
 def test_list_preview_includes_installed_skill_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -382,6 +421,36 @@ class FakeGitHubFetcher:
             path=path,
             content="print('updated')\n",
             size=17,
+        )
+
+
+class FakePinnedGitHubFetcher:
+    def fetch_github_directory(
+        self,
+        location: GitHubSkillLocation,
+        current_path: PurePosixPath,
+    ) -> list[GitHubContentItem]:
+        del location
+        return [
+            GitHubContentItem(
+                type="file",
+                name="SKILL.md",
+                path=current_path / "SKILL.md",
+                commit_sha="0123456789abcdef0123456789abcdef01234567",
+            )
+        ]
+
+    def fetch_github_file(
+        self,
+        location: GitHubSkillLocation,
+        path: PurePosixPath,
+    ) -> GitHubFileBlob:
+        del location
+        return GitHubFileBlob(
+            path=path,
+            content="---\nname: skillsmp-skill\ndescription: From SkillsMP.\n---\nBody\n",
+            size=58,
+            commit_sha="0123456789abcdef0123456789abcdef01234567",
         )
 
 
