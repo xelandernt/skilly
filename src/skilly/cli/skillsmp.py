@@ -20,7 +20,7 @@ from skilly.cli.ui import Menu, MenuItem, cli_ui
 from skilly.constants import DEFAULT_SKILLS_PATH
 from skilly.repository import SkillRepository
 from skilly.skills import Skill
-from skilly.skillsmp import AsyncSkillsMp, SkillsMp, SkillsMpSkill
+from skilly.skillsmp import SkillsMp, SkillsMpSkill
 
 
 skillsmp_cli = App("skillsmp", help="Manage skills with skillsmp.")
@@ -41,11 +41,10 @@ async def search(
     overwrite: bool = False,
 ) -> None:
     """Search the skillsmp database for skills."""
-    search_client = AsyncSkillsMp()
-    install_client = SkillsMp()
+    skillsmp_client = SkillsMp()
     repository = SkillRepository()
-    response = await search_client.search(query)
-    data = await response.parsed_data
+    response = skillsmp_client.search(query)
+    data = response.parsed_data
     if not data.data.skills:
         print(f"No SkillsMP skills found for {query}")
         return
@@ -73,7 +72,7 @@ async def search(
 
         installable = installable_skills.get(skill.id)
         if installable is None:
-            installable = Skill.from_skillsmp(install_client, skill)
+            installable = Skill.from_skillsmp(skillsmp_client, skill)
             installable_skills[skill.id] = installable
 
         action = await cli_ui.select_async(
