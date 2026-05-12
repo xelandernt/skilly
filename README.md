@@ -66,7 +66,7 @@ for match in repository.scan_project():
 
 To see a list of useful commands run:
 ```shell
-just install-dev
+just
 ```
 
 
