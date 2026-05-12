@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from skilly.constants import DEFAULT_SKILLS_PATH
 from skilly.filesystem import DEFAULT_FILE_SYSTEM, FileSystem
 from skilly.repository import SkillRepository
 from skilly.skills import Skill, discover_venv_skills
@@ -44,3 +45,20 @@ def get_venv_skills(
         Skills discovered under the virtual environment's site-packages directory.
     """
     return discover_venv_skills(venv_path, file_system=file_system)
+
+
+def get_skills_from_directory(
+    directory: Path = DEFAULT_SKILLS_PATH,
+    file_system: FileSystem = DEFAULT_FILE_SYSTEM,
+) -> list[Skill]:
+    """Return installed skills discovered in a directory.
+
+    Args:
+        directory: Directory containing installed skills.
+        file_system: File system abstraction used for file access.
+
+    Returns:
+        Skills discovered under the target directory.
+    """
+    repository = SkillRepository(file_system=file_system)
+    return repository.list(directory)
