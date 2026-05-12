@@ -242,10 +242,14 @@ def _extract_github_archive_files(
                 if extracted is None:
                     continue
                 content_bytes = extracted.read()
+                try:
+                    content = content_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
                 relative_path = PurePosixPath(*member_path.parts[1:])
                 files[relative_path] = GitHubFileBlob(
                     path=relative_path,
-                    content=content_bytes.decode("utf-8"),
+                    content=content,
                     size=len(content_bytes),
                     commit_sha=commit_sha,
                 )

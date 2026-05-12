@@ -315,11 +315,11 @@ def _download_repo_responses(api_base: str) -> dict[tuple[str, str], FakeRespons
     }
 
 
-def _build_tarball_bytes(files: dict[str, str], *, root_dir: str) -> bytes:
+def _build_tarball_bytes(files: dict[str, str | bytes], *, root_dir: str) -> bytes:
     archive = io.BytesIO()
     with tarfile.open(fileobj=archive, mode="w:gz") as tar:
         for path, content in sorted(files.items()):
-            data = content.encode("utf-8")
+            data = content.encode("utf-8") if isinstance(content, str) else content
             info = tarfile.TarInfo(name=f"{root_dir}/{path}")
             info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
@@ -428,6 +428,49 @@ def test_download_skill_uses_custom_skill_name(tmp_path: Path) -> None:
 
     assert installed.directory == (tmp_path / "custom-skill").resolve()
     assert (tmp_path / "custom-skill" / "SKILL.md").exists()
+
+
+def test_download_skill_ignores_unrelated_binary_files_in_tarball(
+    tmp_path: Path,
+) -> None:
+    skill_url = (
+        "https://github.com/example/project/tree/main/targetSkills/crypto-market-data"
+    )
+    api_base = "https://api.github.com/repos/example/project"
+    commit_sha = "0123456789abcdef0123456789abcdef01234567"
+    tarball = _build_tarball_bytes(
+        {
+            "targetSkills/crypto-market-data/SKILL.md": (
+                "---\nname: crypto-market-data\ndescription: Market data.\n---\nBody\n"
+            ),
+            "targetSkills/crypto-market-data/scripts/fetch.py": "print('ok')\n",
+            "images/logo.webp": b"\xa6\xff\x00\x01binary",
+        },
+        root_dir=f"project-{commit_sha[:7]}",
+    )
+    session = FakeSession(
+        responses={
+            (
+                f"{api_base}/commits/main",
+                json.dumps({}, sort_keys=True),
+            ): FakeResponse({"sha": commit_sha}),
+            (
+                f"{api_base}/tarball/{commit_sha}",
+                json.dumps({}, sort_keys=True),
+            ): FakeResponse(content=tarball),
+        }
+    )
+    repository = SkillRepository()
+
+    installed = repository.install(
+        Skill.from_github(SkillsMp(session), skill_url),
+        directory=tmp_path,
+    )
+
+    assert installed.directory == (tmp_path / "crypto-market-data").resolve()
+    assert installed.directory.joinpath("scripts/fetch.py").read_text(
+        encoding="utf-8"
+    ) == ("print('ok')\n")
 
 
 def test_discover_github_skills_from_repository_root() -> None:
