@@ -623,18 +623,22 @@ class SkillsMp(_SkillsMpBase):
         self,
         location: GitHubSkillLocation,
     ) -> GitHubRepositorySnapshot:
-        commit_sha = self.resolve_github_commit_sha(location)
+        ref, commit_sha = self.resolve_github_ref_and_commit_sha(location)
         archive_bytes = self._github_binary_request(
             self._build_github_repo_api_url(location, f"tarball/{commit_sha}")
         )
         return GitHubRepositorySnapshot(
+            ref=ref,
             commit_sha=commit_sha,
             files=_extract_github_archive_files(archive_bytes, commit_sha=commit_sha),
         )
 
-    def resolve_github_commit_sha(self, location: GitHubSkillLocation) -> str:
+    def resolve_github_ref_and_commit_sha(
+        self,
+        location: GitHubSkillLocation,
+    ) -> tuple[str, str]:
         if location.ref is not None and _looks_like_commit_sha(location.ref):
-            return location.ref
+            return location.ref, location.ref
 
         ref = location.ref
         if ref is None:
@@ -648,4 +652,4 @@ class SkillsMp(_SkillsMpBase):
             self._build_github_repo_api_url(location, f"commits/{ref}"),
             GitHubCommitInfo,
         ).parsed_data
-        return commit.sha
+        return ref, commit.sha

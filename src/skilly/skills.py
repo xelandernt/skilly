@@ -81,6 +81,7 @@ class GitHubFileBlob:
 class GitHubRepositorySnapshot:
     """A GitHub repository snapshot resolved to a specific commit."""
 
+    ref: str
     commit_sha: str
     files: dict[PurePosixPath, GitHubFileBlob]
 
@@ -880,16 +881,19 @@ def find_github_skill_roots(
 def build_github_skill_url(
     location: GitHubSkillLocation,
     path: PurePosixPath,
+    *,
+    ref: str | None = None,
 ) -> str | None:
     """Build a canonical GitHub web URL for a skill path when the ref is known."""
     base_url = f"https://github.com/{location.owner}/{location.repo}"
+    resolved_ref = location.ref if ref is None else ref
     if str(path) in {"", "."}:
         return (
-            f"{base_url}/tree/{location.ref}" if location.ref is not None else base_url
+            f"{base_url}/tree/{resolved_ref}" if resolved_ref is not None else base_url
         )
-    if location.ref is None:
+    if resolved_ref is None:
         return None
-    return f"{base_url}/tree/{location.ref}/{path.as_posix()}"
+    return f"{base_url}/tree/{resolved_ref}/{path.as_posix()}"
 
 
 def find_github_skill_dirs(
@@ -984,7 +988,7 @@ def discover_github_skills(
                 github_url=(
                     github_url
                     if len(skill_dirs) == 1 and skill_dir == location.path
-                    else build_github_skill_url(location, skill_dir)
+                    else build_github_skill_url(location, skill_dir, ref=snapshot.ref)
                 ),
                 skillsmp_id=skillsmp_id if len(skill_dirs) == 1 else None,
             )

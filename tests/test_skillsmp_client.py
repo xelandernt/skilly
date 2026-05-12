@@ -438,11 +438,18 @@ def test_discover_github_skills_from_repository_root() -> None:
     skills = discover_github_skills(client, "https://github.com/example/project")
 
     assert [skill.name for skill in skills] == ["alpha", "beta"]
-    assert skills[0].github_url is None
+    assert (
+        skills[0].github_url
+        == "https://github.com/example/project/tree/main/skills/alpha"
+    )
+    assert skills[0].can_update() is True
     assert [resource.relative_path.as_posix() for resource in skills[0].resources] == [
         "scripts/extract.py"
     ]
-    assert skills[1].github_url is None
+    assert (
+        skills[1].github_url
+        == "https://github.com/example/project/tree/main/skills/beta"
+    )
     assert [call["url"] for call in session.calls] == [
         api_base,
         f"{api_base}/commits/main",
