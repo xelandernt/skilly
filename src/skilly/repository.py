@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 from packaging.requirements import Requirement
 
@@ -266,9 +266,13 @@ class SkillRepository:
         self,
         installed_skills: Sequence[Skill],
         available_skill: Skill,
+        *,
+        candidate_filter: Callable[[Skill], bool] | None = None,
     ) -> Skill | None:
         """Match an available skill against installed skills."""
         for installed_skill in installed_skills:
+            if candidate_filter is not None and not candidate_filter(installed_skill):
+                continue
             if available_skill.matches(installed_skill):
                 return installed_skill
         return None

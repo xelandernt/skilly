@@ -9,8 +9,12 @@ import pytest
 from skilly.cli import skillsmp as skillsmp_cli
 from skilly.cli.ui import Menu, MenuValue
 from skilly.repository import SkillRepository
-from skilly.skills import Skill
+from skilly.skills import Skill, discover_github_skills
 from skilly.skillsmp.client import SkillsMpSearchApiResponse
+
+
+def test_skillsmp_commands_do_not_include_download() -> None:
+    assert "download" not in skillsmp_cli.skillsmp_cli.resolved_commands()
 
 
 def test_skillsmp_list_only_shows_skillsmp_installed_skills(
@@ -57,7 +61,7 @@ Body
     skillsmp_cli.list(directory=install_directory)
 
     assert [item.label for item in ui.menus[0].items] == [
-        "skillsmp-skill: skillsmp-skill",
+        "skillsmp-skill: skillsmp-skill [skillsmp] (id=skill-1)",
         skillsmp_cli.EXIT_CHOICE,
     ]
     assert "SkillsMP Id: skill-1" in ui.menus[0].items[0].preview_lines
@@ -157,24 +161,81 @@ def test_skillsmp_download_installs_all_skills_from_repository_root(
     assert "Downloaded beta with 1 files to" in output
 
 
-def test_skillsmp_download_requires_explicit_selection_for_repository_root(
+def test_skillsmp_download_interactively_selects_skills_for_repository_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     install_directory = tmp_path / ".agents" / "skills"
+    selected_match = skillsmp_cli.downloadable_skill_matches(
+        discover_github_skills(
+            FakeRepoDownloadClient(),
+            "https://github.com/example/project",
+        ),
+        [],
+    )[1]
     monkeypatch.setattr(
         skillsmp_cli,
         "SkillsMp",
         lambda **kwargs: FakeRepoDownloadClient(),
     )
+    ui = FakeInteractiveUi([selected_match, "install", None])
+    monkeypatch.setattr(skillsmp_cli, "cli_ui", ui)
 
-    with pytest.raises(ValueError, match="use --skill-name to choose one or --all"):
-        skillsmp_cli.download(
+    skillsmp_cli.download(
+        "https://github.com/example/project",
+        directory=install_directory,
+    )
+
+    installed_skills = SkillRepository().list(install_directory)
+    assert [skill.directory_name for skill in installed_skills] == ["beta"]
+    assert "Downloaded beta with 1 files to" in capsys.readouterr().out
+    assert ui.menus[0].items[-1].label == skillsmp_cli.EXIT_CHOICE
+
+
+def test_skillsmp_download_marks_installed_skills_and_hides_install_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_directory = tmp_path / ".agents" / "skills"
+    repository = SkillRepository()
+    repository.install(
+        discover_github_skills(
+            FakeRepoDownloadClient(),
             "https://github.com/example/project",
-            directory=install_directory,
-        )
+        )[1],
+        directory=install_directory,
+    )
+    selected_match = skillsmp_cli.downloadable_skill_matches(
+        discover_github_skills(
+            FakeRepoDownloadClient(),
+            "https://github.com/example/project",
+        ),
+        repository.list(install_directory),
+    )[1]
+    monkeypatch.setattr(
+        skillsmp_cli,
+        "SkillsMp",
+        lambda **kwargs: FakeRepoDownloadClient(),
+    )
+    ui = FakeInteractiveUi([selected_match, None, None])
+    monkeypatch.setattr(skillsmp_cli, "cli_ui", ui)
 
-    assert SkillRepository().list(install_directory) == []
+    skillsmp_cli.download(
+        "https://github.com/example/project",
+        directory=install_directory,
+    )
+
+    assert ui.menus[0].items[1].label == "beta: beta [installed]"
+    assert "Status: installed" in ui.menus[0].items[1].preview_lines
+    assert "Installed Directory: beta" in ui.menus[0].items[1].preview_lines
+    assert [item.label for item in ui.menus[1].items] == [
+        skillsmp_cli.UPDATE_CHOICE,
+        skillsmp_cli.REMOVE_CHOICE,
+        skillsmp_cli.BACK_CHOICE,
+        skillsmp_cli.EXIT_CHOICE,
+    ]
+    assert skillsmp_cli.INSTALL_CHOICE not in [item.label for item in ui.menus[1].items]
 
 
 def test_skillsmp_download_selects_single_skill_from_repository_root(
@@ -402,18 +463,21 @@ class FakeRepoDownloadClient:
                 path=path,
                 content="---\nname: alpha\ndescription: Alpha skill.\n---\nBody\n",
                 size=48,
+                commit_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
         if path_text == "skills/alpha/scripts/extract.py":
             return GitHubFileBlob(
                 path=path,
                 content="print('alpha')\n",
                 size=15,
+                commit_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
         if path_text == "skills/beta/SKILL.md":
             return GitHubFileBlob(
                 path=path,
                 content="---\nname: beta\ndescription: Beta skill.\n---\nBody\n",
                 size=46,
+                commit_sha="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             )
         raise AssertionError(f"Unexpected GitHub file request: {path_text}")
 

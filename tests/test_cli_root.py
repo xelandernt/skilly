@@ -6,6 +6,7 @@ from typing import cast
 
 import pytest
 
+from skilly.cli.shared import installed_skill_label
 from skilly.cli import root
 from skilly.cli.ui import Menu, MenuValue
 from skilly.repository import SkillMatch, SkillRepository
@@ -91,6 +92,53 @@ def test_scan_preview_includes_selected_skill_files(
     assert "Files:" in preview_lines
     assert "  SKILL.md" in preview_lines
     assert "  scripts/extract.py" in preview_lines
+
+
+def test_download_delegates_to_skillsmp_download(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_download(
+        github_url: str,
+        *,
+        directory: Path,
+        skill_name: str | None,
+        all: bool,
+        overwrite: bool,
+        github_token: str | None,
+    ) -> None:
+        captured.update(
+            {
+                "github_url": github_url,
+                "directory": directory,
+                "skill_name": skill_name,
+                "all": all,
+                "overwrite": overwrite,
+                "github_token": github_token,
+            }
+        )
+
+    monkeypatch.setattr(root, "skillsmp_download", fake_download)
+
+    root.download(
+        "https://github.com/example/project",
+        directory=tmp_path / ".agents" / "skills",
+        skill_name="demo-skill",
+        all=True,
+        overwrite=True,
+        github_token="ghp_test_token",
+    )
+
+    assert captured == {
+        "github_url": "https://github.com/example/project",
+        "directory": tmp_path / ".agents" / "skills",
+        "skill_name": "demo-skill",
+        "all": True,
+        "overwrite": True,
+        "github_token": "ghp_test_token",
+    }
 
 
 def test_list_removes_selected_skill(
@@ -248,7 +296,7 @@ def test_list_preview_includes_installed_skill_files(
 
     root.list(directory=install_directory)
 
-    assert ui.menus[0].items[0].label == root.installed_skill_label(installed)
+    assert ui.menus[0].items[0].label == installed_skill_label(installed)
     assert "  scripts/extract.py" in ui.menus[0].items[0].preview_lines
     assert ui.menus[0].items[-1].label == root.EXIT_CHOICE
 

@@ -39,7 +39,7 @@ export GITHUB_TOKEN=ghp_your_token
 export GH_TOKEN=ghp_your_token
 ```
 
-You can also pass `--github-token` to GitHub-fetching commands such as `skilly skillsmp download`, `skilly skillsmp search`, `skilly skillsmp list`, and `skilly list`.
+You can also pass `--github-token` to GitHub-fetching commands such as `skilly download`, `skilly skillsmp search`, `skilly skillsmp list`, and `skilly list`.
 
 When downloading from a repository URL that contains multiple skills, use `--skill-name <name>` to select one skill or `--all` to install every skill in that repository.
 
