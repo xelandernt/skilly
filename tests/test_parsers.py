@@ -75,6 +75,43 @@ Block instructions.
     assert skill.metadata == {"owner": "docs"}
 
 
+def test_skill_from_text_supports_nested_yaml_metadata() -> None:
+    skill = Skill.from_text(
+        """---
+name: binance-agentic-wallet
+description: |
+  Use when the user mentions connect/disconnect wallet, sign in, sign out, web3 wallet.
+metadata:
+  author: binance-web3-team
+  version: "1.0.1"
+  requiredCliVersion: "1.0.9"
+  openclaw:
+    requires:
+      bins:
+        - baw
+    install:
+      - kind: node
+        package: '@binance/agentic-wallet'
+        bins: [baw]
+---
+Use this skill carefully.
+""",
+        path=Path("/workspace/binance-agentic-wallet/SKILL.md"),
+    )
+
+    assert skill.name == "binance-agentic-wallet"
+    assert skill.description == (
+        "Use when the user mentions connect/disconnect wallet, sign in, sign out, "
+        "web3 wallet."
+    )
+    assert skill.metadata == {
+        "author": "binance-web3-team",
+        "version": "1.0.1",
+        "requiredCliVersion": "1.0.9",
+    }
+    assert skill.content == "Use this skill carefully."
+
+
 def test_skill_from_dir_reads_skill_md(tmp_path: Path) -> None:
     skill_dir = tmp_path / "folder-skill"
     write_skill(

@@ -39,9 +39,10 @@ async def search(
     query: str,
     directory: Path = DEFAULT_SKILLS_PATH,
     overwrite: bool = False,
+    github_token: str | None = None,
 ) -> None:
     """Search the skillsmp database for skills."""
-    skillsmp_client = SkillsMp()
+    skillsmp_client = SkillsMp(github_token=github_token)
     repository = SkillRepository()
     response = skillsmp_client.search(query)
     data = response.parsed_data
@@ -115,13 +116,27 @@ def download(
     github_url: str,
     directory: Path = DEFAULT_SKILLS_PATH,
     skill_name: str | None = None,
+    all: bool = False,
     overwrite: bool = False,
+    github_token: str | None = None,
 ) -> None:
     """Download a skill using its github url."""
-    client = SkillsMp()
+    client = SkillsMp(github_token=github_token)
     repository = SkillRepository()
     skills = discover_github_skills(client, github_url)
-    if skill_name is not None and len(skills) != 1:
+    if all and skill_name is not None and len(skills) != 1:
+        raise ValueError(
+            "Use either --skill-name or --all when downloading multiple skills"
+        )
+    if len(skills) > 1 and not all and skill_name is None:
+        available = ", ".join(sorted(skill.directory_name for skill in skills))
+        raise ValueError(
+            "GitHub URL resolves to multiple skills; "
+            f"use --skill-name to choose one or --all to install all. Available: {available}"
+        )
+    if skill_name is not None and len(skills) != 1 and not all:
+        skills = [select_download_skill(skills, skill_name)]
+    elif skill_name is not None and len(skills) != 1:
         raise ValueError(
             "Custom skill names can only be used when downloading a single skill"
         )
@@ -148,10 +163,30 @@ def download(
         )
 
 
+def select_download_skill(skills: list[Skill], skill_name: str) -> Skill:
+    """Select a single downloadable skill by directory name or unique skill name."""
+    for skill in skills:
+        if skill.directory_name == skill_name:
+            return skill
+
+    matches = [skill for skill in skills if skill.name == skill_name]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError(f"Multiple downloadable skills match name: {skill_name}")
+
+    available = ", ".join(sorted(skill.directory_name for skill in skills))
+    raise FileNotFoundError(
+        f"Downloadable skill not found: {skill_name}. Available: {available}"
+    )
+
+
 @skillsmp_cli.command()
-def list(directory: Path = DEFAULT_SKILLS_PATH) -> None:
+def list(
+    directory: Path = DEFAULT_SKILLS_PATH, github_token: str | None = None
+) -> None:
     """List installed skills with skillsmp."""
-    client = SkillsMp()
+    client = SkillsMp(github_token=github_token)
     repository = SkillRepository()
     messages: list[str] = []
     status_message: str | None = None

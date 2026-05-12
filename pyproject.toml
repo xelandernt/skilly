@@ -16,6 +16,7 @@ dependencies = [
     "niquests>=3",
     "pydantic>=2",
     "packaging>=20",
+    "pyyaml>=6.0.3",
 ]
 dynamic = ["version"]
 

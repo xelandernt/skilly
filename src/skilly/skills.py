@@ -6,6 +6,8 @@ from pathlib import Path, PurePosixPath
 from typing import Protocol
 from urllib.parse import unquote, urlparse
 
+from yaml import BaseLoader, YAMLError, load
+
 from .constants import (
     DEFAULT_SKILLS_PATH,
     RESOURCE_KIND_ASSET,
@@ -73,6 +75,14 @@ class GitHubFileBlob:
     content: str
     size: int
     commit_sha: str | None = None
+
+
+@dataclass(frozen=True)
+class GitHubRepositorySnapshot:
+    """A GitHub repository snapshot resolved to a specific commit."""
+
+    commit_sha: str
+    files: dict[PurePosixPath, GitHubFileBlob]
 
 
 class GitHubSkillFetcher(Protocol):
@@ -352,7 +362,11 @@ class Skill:
         parsed = parse_frontmatter(frontmatter)
         metadata_value = parsed.get("metadata")
         metadata = (
-            {str(key): value for key, value in metadata_value.items()}
+            {
+                str(key): normalized
+                for key, value in metadata_value.items()
+                if (normalized := normalize_string_field(value)) is not None
+            }
             if isinstance(metadata_value, dict)
             else {}
         )
@@ -496,8 +510,7 @@ class DistributionInfo:
 
 def optional_string_field(data: dict[str, object], key: str) -> str | None:
     """Return an optional string field from parsed frontmatter."""
-    value = data.get(key)
-    return value if isinstance(value, str) else None
+    return normalize_string_field(data.get(key))
 
 
 def required_string_field(data: dict[str, object], key: str) -> str:
@@ -513,8 +526,8 @@ def required_string_field(data: dict[str, object], key: str) -> str:
     Raises:
         ValueError: If the field is missing or not a string.
     """
-    value = data.get(key)
-    if isinstance(value, str):
+    value = normalize_string_field(data.get(key))
+    if value is not None:
         return value
     raise ValueError(f"{key} must be a string")
 
@@ -710,157 +723,23 @@ def split_frontmatter(text: str) -> tuple[list[str], str]:
 
 def parse_frontmatter(lines: list[str]) -> dict[str, object]:
     """Parse the top-level YAML frontmatter used by SKILL.md."""
-    metadata: dict[str, object] = {}
-    line_index = 0
-    while line_index < len(lines):
-        line = lines[line_index]
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            line_index += 1
-            continue
-        if line[:1].isspace():
-            raise ValueError("top-level frontmatter fields must not be indented")
+    try:
+        parsed = load("\n".join(lines), Loader=BaseLoader)
+    except YAMLError as exc:
+        raise ValueError(f"invalid YAML frontmatter: {exc}") from exc
 
-        key, separator, raw_value = line.partition(":")
-        if not separator:
-            raise ValueError(f"invalid frontmatter line: {line}")
-
-        key = key.strip()
-        value = raw_value.lstrip()
-        if key == "metadata" and not value:
-            block, line_index = parse_metadata_block(lines, start_index=line_index + 1)
-            metadata[key] = block
-            continue
-        if value in {"|", ">"}:
-            block, line_index = parse_block_scalar(
-                lines,
-                start_index=line_index + 1,
-                folded=value == ">",
-            )
-            metadata[key] = block
-            continue
-
-        parsed_value = parse_scalar(value)
-        if parsed_value is None:
-            raise ValueError(f"{key} must be a string")
-        metadata[key] = parsed_value
-        line_index += 1
-    return metadata
+    if parsed is None:
+        return {}
+    if not isinstance(parsed, dict):
+        raise ValueError("frontmatter must be a mapping")
+    return parsed
 
 
-def parse_block_scalar(
-    lines: list[str],
-    *,
-    start_index: int,
-    folded: bool = False,
-) -> tuple[str, int]:
-    """Parse a YAML-style literal or folded block scalar."""
-    block_lines: list[str] = []
-    indentation: int | None = None
-    line_index = start_index
-    while line_index < len(lines):
-        line = lines[line_index]
-        stripped = line.strip()
-        if not stripped:
-            block_lines.append("")
-            line_index += 1
-            continue
-        if line.startswith("\t"):
-            raise ValueError("block scalar lines must be indented with spaces")
-        if not line.startswith(" "):
-            break
-
-        leading_spaces = len(line) - len(line.lstrip(" "))
-        if indentation is None:
-            indentation = leading_spaces
-        if indentation == 0:
-            raise ValueError("block scalar lines must be indented")
-        if leading_spaces < indentation:
-            break
-
-        block_lines.append(line[indentation:])
-        line_index += 1
-
-    if indentation is None:
-        return "", line_index
-    if not folded:
-        return "\n".join(block_lines), line_index
-    return fold_block_scalar_lines(block_lines), line_index
-
-
-def fold_block_scalar_lines(lines: list[str]) -> str:
-    """Fold YAML-style block scalar lines using spaces between non-blank lines."""
-    paragraphs: list[str] = []
-    current: list[str] = []
-    for line in lines:
-        if line == "":
-            if current:
-                paragraphs.append(" ".join(current))
-                current = []
-            paragraphs.append("")
-            continue
-        current.append(line)
-    if current:
-        paragraphs.append(" ".join(current))
-
-    folded_lines: list[str] = []
-    blank_run = False
-    for paragraph in paragraphs:
-        if paragraph == "":
-            if folded_lines and not blank_run:
-                folded_lines.append("")
-            blank_run = True
-            continue
-        folded_lines.append(paragraph)
-        blank_run = False
-    return "\n".join(folded_lines)
-
-
-def parse_metadata_block(
-    lines: list[str],
-    *,
-    start_index: int,
-) -> tuple[dict[str, str], int]:
-    """Parse the nested metadata block inside the frontmatter."""
-    metadata: dict[str, str] = {}
-    line_index = start_index
-    while line_index < len(lines):
-        line = lines[line_index]
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            line_index += 1
-            continue
-        if not line.startswith((" ", "\t")):
-            break
-        if line.startswith("\t"):
-            raise ValueError("metadata entries must be indented with spaces")
-
-        indentation = len(line) - len(line.lstrip(" "))
-        if indentation < 2:
-            raise ValueError("metadata entries must be indented by at least two spaces")
-
-        key, separator, raw_value = line[indentation:].partition(":")
-        if not separator:
-            raise ValueError(f"invalid metadata line: {line.strip()}")
-
-        parsed_value = parse_scalar(raw_value.lstrip())
-        if parsed_value is None:
-            raise ValueError("metadata values must be strings")
-        metadata[key.strip()] = parsed_value
-        line_index += 1
-    return metadata, line_index
-
-
-def parse_scalar(value: str) -> str | None:
-    """Parse a scalar frontmatter value."""
-    value = value.strip()
-    if value == "null":
+def normalize_string_field(value: object) -> str | None:
+    """Normalize YAML string fields while trimming block-scalar trailing newlines."""
+    if not isinstance(value, str):
         return None
-    if value.startswith("'") and value.endswith("'") and len(value) >= 2:
-        return value[1:-1].replace("''", "'")
-    if value.startswith('"') and value.endswith('"') and len(value) >= 2:
-        return json.loads(value)
-    return value
+    return value.rstrip("\n")
 
 
 def format_scalar(value: str) -> str:
@@ -1089,6 +968,29 @@ def discover_github_skills(
 ) -> list[Skill]:
     """Discover one or more skills from a GitHub repo, directory, or skill URL."""
     location = parse_github_skill_url(github_url)
+    snapshot_fetcher = getattr(fetcher, "fetch_github_snapshot", None)
+    if callable(snapshot_fetcher):
+        snapshot = snapshot_fetcher(location)
+        skill_dirs = find_github_skill_dirs(snapshot.files, root=location.path)
+        if not skill_dirs:
+            raise FileNotFoundError(f"No SKILL.md found at {github_url}")
+        if skillsmp_id is not None and len(skill_dirs) != 1:
+            raise ValueError("SkillsMP metadata can only be attached to a single skill")
+        return [
+            build_skill_from_github_files(
+                snapshot.files,
+                skill_dir,
+                source=source,
+                github_url=(
+                    github_url
+                    if len(skill_dirs) == 1 and skill_dir == location.path
+                    else build_github_skill_url(location, skill_dir)
+                ),
+                skillsmp_id=skillsmp_id if len(skill_dirs) == 1 else None,
+            )
+            for skill_dir in skill_dirs
+        ]
+
     skill_dirs = find_github_skill_roots(fetcher, location, location.path)
     if not skill_dirs:
         raise FileNotFoundError(f"No SKILL.md found at {github_url}")

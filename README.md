@@ -20,6 +20,29 @@ pip install skilly
 uvx skilly --help
 ```
 
+### GitHub-backed downloads
+
+GitHub installs now use repository tarballs instead of recursively walking the contents API, which keeps GitHub API request counts low.
+
+For higher GitHub rate limits, authenticate requests with either:
+
+```shell
+export SKILLY_GITHUB_TOKEN=ghp_your_token
+```
+
+
+or the standard GitHub environment variables:
+
+```shell
+export GITHUB_TOKEN=ghp_your_token
+# or
+export GH_TOKEN=ghp_your_token
+```
+
+You can also pass `--github-token` to GitHub-fetching commands such as `skilly skillsmp download`, `skilly skillsmp search`, `skilly skillsmp list`, and `skilly list`.
+
+When downloading from a repository URL that contains multiple skills, use `--skill-name <name>` to select one skill or `--all` to install every skill in that repository.
+
 
 ### python
 

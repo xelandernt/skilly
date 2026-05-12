@@ -178,7 +178,7 @@ Body
     monkeypatch.setattr(root, "SkillRepository", lambda: repository)
     ui = FakeInteractiveUi([installed, "update", None])
     monkeypatch.setattr(root, "cli_ui", ui)
-    monkeypatch.setattr(root, "SkillsMp", lambda: FakeGitHubFetcher())
+    monkeypatch.setattr(root, "SkillsMp", lambda **kwargs: FakeGitHubFetcher())
 
     root.list(directory=install_directory)
 
@@ -214,7 +214,7 @@ Body
     monkeypatch.setattr(root, "SkillRepository", lambda: repository)
     ui = FakeInteractiveUi([installed, "update", None])
     monkeypatch.setattr(root, "cli_ui", ui)
-    monkeypatch.setattr(root, "SkillsMp", lambda: FakePinnedGitHubFetcher())
+    monkeypatch.setattr(root, "SkillsMp", lambda **kwargs: FakePinnedGitHubFetcher())
 
     root.list(directory=install_directory)
 

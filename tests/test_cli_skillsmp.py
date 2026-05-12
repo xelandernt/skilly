@@ -117,7 +117,11 @@ Body
         skill_name="skillsmp-skill",
     )
     ui = FakeInteractiveUi([installed, "update", None])
-    monkeypatch.setattr(skillsmp_cli, "SkillsMp", lambda: FakePinnedSkillsMpClient())
+    monkeypatch.setattr(
+        skillsmp_cli,
+        "SkillsMp",
+        lambda **kwargs: FakePinnedSkillsMpClient(),
+    )
     monkeypatch.setattr(skillsmp_cli, "cli_ui", ui)
 
     skillsmp_cli.list(directory=install_directory)
@@ -134,11 +138,16 @@ def test_skillsmp_download_installs_all_skills_from_repository_root(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     install_directory = tmp_path / ".agents" / "skills"
-    monkeypatch.setattr(skillsmp_cli, "SkillsMp", lambda: FakeRepoDownloadClient())
+    monkeypatch.setattr(
+        skillsmp_cli,
+        "SkillsMp",
+        lambda **kwargs: FakeRepoDownloadClient(),
+    )
 
     skillsmp_cli.download(
         "https://github.com/example/project",
         directory=install_directory,
+        all=True,
     )
 
     installed_skills = SkillRepository().list(install_directory)
@@ -146,6 +155,72 @@ def test_skillsmp_download_installs_all_skills_from_repository_root(
     output = capsys.readouterr().out
     assert "Downloaded alpha with 2 files to" in output
     assert "Downloaded beta with 1 files to" in output
+
+
+def test_skillsmp_download_requires_explicit_selection_for_repository_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_directory = tmp_path / ".agents" / "skills"
+    monkeypatch.setattr(
+        skillsmp_cli,
+        "SkillsMp",
+        lambda **kwargs: FakeRepoDownloadClient(),
+    )
+
+    with pytest.raises(ValueError, match="use --skill-name to choose one or --all"):
+        skillsmp_cli.download(
+            "https://github.com/example/project",
+            directory=install_directory,
+        )
+
+    assert SkillRepository().list(install_directory) == []
+
+
+def test_skillsmp_download_selects_single_skill_from_repository_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    install_directory = tmp_path / ".agents" / "skills"
+    monkeypatch.setattr(
+        skillsmp_cli,
+        "SkillsMp",
+        lambda **kwargs: FakeRepoDownloadClient(),
+    )
+
+    skillsmp_cli.download(
+        "https://github.com/example/project",
+        directory=install_directory,
+        skill_name="beta",
+    )
+
+    installed_skills = SkillRepository().list(install_directory)
+    assert [skill.directory_name for skill in installed_skills] == ["beta"]
+    assert "Downloaded 1 files to" in capsys.readouterr().out
+
+
+def test_skillsmp_download_passes_github_token_to_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_directory = tmp_path / ".agents" / "skills"
+    captured: dict[str, str | None] = {}
+
+    def make_client(*, github_token: str | None = None) -> FakeRepoDownloadClient:
+        captured["github_token"] = github_token
+        return FakeRepoDownloadClient()
+
+    monkeypatch.setattr(skillsmp_cli, "SkillsMp", make_client)
+
+    skillsmp_cli.download(
+        "https://github.com/example/project",
+        directory=install_directory,
+        all=True,
+        github_token="ghp_test_token",
+    )
+
+    assert captured == {"github_token": "ghp_test_token"}
 
 
 @pytest.mark.asyncio
@@ -183,7 +258,7 @@ async def test_skillsmp_search_installs_selected_skill_with_live_preview(
     )
     search_client = FakeSkillsMpClient(search_result)
     ui = FakeInteractiveUi([search_result.data.skills[0], "install", None])
-    monkeypatch.setattr(skillsmp_cli, "SkillsMp", lambda: search_client)
+    monkeypatch.setattr(skillsmp_cli, "SkillsMp", lambda **kwargs: search_client)
     monkeypatch.setattr(skillsmp_cli, "cli_ui", ui)
 
     await skillsmp_cli.search("demo", directory=install_directory)

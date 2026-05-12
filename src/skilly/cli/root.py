@@ -104,10 +104,12 @@ def scan(directory: Path = DEFAULT_SKILLS_PATH, dev: bool = False) -> None:
 
 
 @cli.command()
-def list(directory: Path = DEFAULT_SKILLS_PATH) -> None:
+def list(
+    directory: Path = DEFAULT_SKILLS_PATH, github_token: str | None = None
+) -> None:
     """List installed skills."""
     repository = SkillRepository()
-    github_client = SkillsMp()
+    github_client = SkillsMp(github_token=github_token)
     messages: list[str] = []
     status_message: str | None = None
 

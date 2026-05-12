@@ -2,18 +2,31 @@ from __future__ import annotations
 
 import abc
 import base64
+import io
 import os
+import tarfile
 from pathlib import PurePosixPath
 from typing import TypeVar
 
 import niquests
 from pydantic import BaseModel, ConfigDict, RootModel
 
-from ..skills import GitHubContentItem, GitHubFileBlob, GitHubSkillLocation
+from ..skills import (
+    GitHubContentItem,
+    GitHubFileBlob,
+    GitHubRepositorySnapshot,
+    GitHubSkillLocation,
+)
 from .response import AsyncResponse, Response
 
 SKILLSMP_API_KEY_ENV_VAR = "SKILLSMP_API_KEY"
+SKILLY_GITHUB_TOKEN_ENV_VAR = "SKILLY_GITHUB_TOKEN"
 GITHUB_API_BASE_URL = "https://api.github.com"
+GITHUB_TOKEN_ENV_VARS = (
+    SKILLY_GITHUB_TOKEN_ENV_VAR,
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+)
 
 ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
 HeadersMap = dict[str, str]
@@ -137,8 +150,28 @@ class GitHubFileContent(BaseModel):
     content: str | None = None
 
 
+class GitHubRepositoryInfo(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    default_branch: str
+
+
+class GitHubCommitInfo(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    sha: str
+
+
 def _get_api_key_from_env() -> str | None:
     return os.getenv(SKILLSMP_API_KEY_ENV_VAR)
+
+
+def _get_github_token_from_env() -> str | None:
+    for env_var in GITHUB_TOKEN_ENV_VARS:
+        token = os.getenv(env_var)
+        if token:
+            return token
+    return None
 
 
 def _normalize_query_item(value: object) -> str:
@@ -185,16 +218,54 @@ def _extract_commit_sha_from_html_url(html_url: str | None) -> str | None:
     return parts[5]
 
 
+def _looks_like_commit_sha(value: str) -> bool:
+    return len(value) == 40 and all(
+        character in "0123456789abcdefABCDEF" for character in value
+    )
+
+
+def _extract_github_archive_files(
+    archive_bytes: bytes,
+    *,
+    commit_sha: str,
+) -> dict[PurePosixPath, GitHubFileBlob]:
+    files: dict[PurePosixPath, GitHubFileBlob] = {}
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as archive:
+            for member in archive.getmembers():
+                if not member.isfile():
+                    continue
+                member_path = PurePosixPath(member.name)
+                if len(member_path.parts) < 2:
+                    continue
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    continue
+                content_bytes = extracted.read()
+                relative_path = PurePosixPath(*member_path.parts[1:])
+                files[relative_path] = GitHubFileBlob(
+                    path=relative_path,
+                    content=content_bytes.decode("utf-8"),
+                    size=len(content_bytes),
+                    commit_sha=commit_sha,
+                )
+    except tarfile.TarError as exc:
+        raise ValueError("Invalid GitHub archive response") from exc
+    return files
+
+
 class _SkillsMpBase(abc.ABC):
     def __init__(
         self,
         *,
         base_url: str | None = None,
         api_key: str | None = None,
+        github_token: str | None = None,
         proxy: str | None = None,
     ) -> None:
         self.base_url = base_url or "https://skillsmp.com/api/v1"
         self._provided_api_key = api_key
+        self._provided_github_token = github_token
         self._proxy = proxy
 
     def _build_url(self, path: str) -> str:
@@ -218,6 +289,18 @@ class _SkillsMpBase(abc.ABC):
             headers["Authorization"] = f"Bearer {api_key}"
         elif require_api_key:
             self._get_api_key()
+        return headers
+
+    def _get_github_token(self) -> str | None:
+        return self._provided_github_token or _get_github_token_from_env()
+
+    def _build_github_headers(self) -> HeadersMap:
+        headers: HeadersMap = {
+            "Accept": "application/vnd.github+json",
+        }
+        github_token = self._get_github_token()
+        if github_token is not None:
+            headers["Authorization"] = f"Bearer {github_token}"
         return headers
 
     def _build_request(
@@ -255,6 +338,14 @@ class _SkillsMpBase(abc.ABC):
             return base_url
         return f"{base_url}/{path.as_posix()}"
 
+    def _build_github_repo_api_url(
+        self, location: GitHubSkillLocation, suffix: str = ""
+    ) -> str:
+        base_url = f"{GITHUB_API_BASE_URL}/repos/{location.owner}/{location.repo}"
+        if not suffix:
+            return base_url
+        return f"{base_url}/{suffix.lstrip('/')}"
+
 
 class AsyncSkillsMp(_SkillsMpBase):
     def __init__(
@@ -263,9 +354,15 @@ class AsyncSkillsMp(_SkillsMpBase):
         *,
         base_url: str | None = None,
         api_key: str | None = None,
+        github_token: str | None = None,
         proxy: str | None = None,
     ) -> None:
-        super().__init__(base_url=base_url, api_key=api_key, proxy=proxy)
+        super().__init__(
+            base_url=base_url,
+            api_key=api_key,
+            github_token=github_token,
+            proxy=proxy,
+        )
         self._client = client if client is not None else niquests.AsyncSession()
 
     async def _request(
@@ -300,7 +397,7 @@ class AsyncSkillsMp(_SkillsMpBase):
     ) -> AsyncResponse[ResponseModelT]:
         response = await self._client.get(
             url,
-            headers={"Accept": "application/json"},
+            headers=self._build_github_headers(),
             params=params,
             proxies=self._build_proxies(),
             stream=False,
@@ -386,9 +483,15 @@ class SkillsMp(_SkillsMpBase):
         *,
         base_url: str | None = None,
         api_key: str | None = None,
+        github_token: str | None = None,
         proxy: str | None = None,
     ) -> None:
-        super().__init__(base_url=base_url, api_key=api_key, proxy=proxy)
+        super().__init__(
+            base_url=base_url,
+            api_key=api_key,
+            github_token=github_token,
+            proxy=proxy,
+        )
         self._client = client if client is not None else niquests.Session()
 
     def _request(
@@ -423,13 +526,29 @@ class SkillsMp(_SkillsMpBase):
     ) -> Response[ResponseModelT]:
         response = self._client.get(
             url,
-            headers={"Accept": "application/json"},
+            headers=self._build_github_headers(),
             params=params,
             proxies=self._build_proxies(),
             stream=False,
         )
         response.raise_for_status()
         return Response(response, response_model)
+
+    def _github_binary_request(
+        self,
+        url: str,
+        *,
+        params: dict[str, object] | None = None,
+    ) -> bytes:
+        response = self._client.get(
+            url,
+            headers=self._build_github_headers(),
+            params=params,
+            proxies=self._build_proxies(),
+            stream=False,
+        )
+        response.raise_for_status()
+        return bytes(response.content)
 
     def search(
         self,
@@ -499,3 +618,34 @@ class SkillsMp(_SkillsMpBase):
             size=file_content.size or 0,
             commit_sha=_extract_commit_sha_from_html_url(file_content.html_url),
         )
+
+    def fetch_github_snapshot(
+        self,
+        location: GitHubSkillLocation,
+    ) -> GitHubRepositorySnapshot:
+        commit_sha = self.resolve_github_commit_sha(location)
+        archive_bytes = self._github_binary_request(
+            self._build_github_repo_api_url(location, f"tarball/{commit_sha}")
+        )
+        return GitHubRepositorySnapshot(
+            commit_sha=commit_sha,
+            files=_extract_github_archive_files(archive_bytes, commit_sha=commit_sha),
+        )
+
+    def resolve_github_commit_sha(self, location: GitHubSkillLocation) -> str:
+        if location.ref is not None and _looks_like_commit_sha(location.ref):
+            return location.ref
+
+        ref = location.ref
+        if ref is None:
+            repository = self._github_request(
+                self._build_github_repo_api_url(location),
+                GitHubRepositoryInfo,
+            ).parsed_data
+            ref = repository.default_branch
+
+        commit = self._github_request(
+            self._build_github_repo_api_url(location, f"commits/{ref}"),
+            GitHubCommitInfo,
+        ).parsed_data
+        return commit.sha

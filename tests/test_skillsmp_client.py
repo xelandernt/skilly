@@ -1,4 +1,6 @@
+import io
 import json
+import tarfile
 from pathlib import Path
 
 import niquests
@@ -84,16 +86,29 @@ AI_SEARCH_RESPONSE = {
 
 
 class FakeResponse:
-    def __init__(self, payload: object, *, status_code: int = 200) -> None:
+    def __init__(
+        self,
+        payload: object | None = None,
+        *,
+        status_code: int = 200,
+        content: bytes | None = None,
+        text: str | None = None,
+    ) -> None:
         self._payload = payload
         self.status_code = status_code
         self.ok = status_code < 400
         self.is_redirect = False
         self.request = None
-        self.content = json.dumps(payload).encode()
-        self.text = json.dumps(payload)
+        if payload is not None:
+            self.content = json.dumps(payload).encode()
+            self.text = json.dumps(payload)
+        else:
+            self.content = content or b""
+            self.text = text or ""
 
     def json(self, **kwargs: object) -> object:
+        if self._payload is None:
+            raise AssertionError("No JSON payload configured")
         return self._payload
 
     def raise_for_status(self) -> None:
@@ -131,7 +146,7 @@ class FakeSession:
 
     def get(self, url: str, **kwargs: object) -> FakeResponse:
         self.calls.append({"url": url, **kwargs})
-        key = (url, json.dumps(kwargs.get("params", {}), sort_keys=True))
+        key = (url, json.dumps(kwargs.get("params") or {}, sort_keys=True))
         if key in self.responses:
             return self.responses[key]
         if self.response is None:
@@ -152,7 +167,7 @@ class FakeAsyncSession:
 
     async def get(self, url: str, **kwargs: object) -> FakeResponse:
         self.calls.append({"url": url, **kwargs})
-        key = (url, json.dumps(kwargs.get("params", {}), sort_keys=True))
+        key = (url, json.dumps(kwargs.get("params") or {}, sort_keys=True))
         if key in self.responses:
             return self.responses[key]
         if self.response is None:
@@ -242,217 +257,73 @@ def _download_responses(
     skill_dir: str = ".agents/skills/python",
 ) -> dict[tuple[str, str], FakeResponse]:
     commit_sha = "0123456789abcdef0123456789abcdef01234567"
+    tarball = _build_tarball_bytes(
+        {
+            f"{skill_dir}/SKILL.md": "---\nname: python\ndescription: Use python.\n---\nBody\n",
+            f"{skill_dir}/scripts/extract.py": "print('hi')\n",
+        },
+        root_dir=f"example-project-{commit_sha[:7]}",
+    )
     return {
         (
-            f"{api_base}/{skill_dir}",
-            json.dumps({"ref": ref}, sort_keys=True),
-        ): FakeResponse(
-            [
-                {
-                    "type": "file",
-                    "name": "SKILL.md",
-                    "path": f"{skill_dir}/SKILL.md",
-                    "url": f"{api_base}/{skill_dir}/SKILL.md",
-                    "html_url": (
-                        f"https://github.com/example/project/blob/{commit_sha}/{skill_dir}/SKILL.md"
-                    ),
-                },
-                {
-                    "type": "dir",
-                    "name": "scripts",
-                    "path": f"{skill_dir}/scripts",
-                    "url": f"{api_base}/{skill_dir}/scripts",
-                    "html_url": (
-                        f"https://github.com/example/project/tree/{commit_sha}/{skill_dir}/scripts"
-                    ),
-                },
-            ]
-        ),
-        (
-            f"{api_base}/{skill_dir}/scripts",
-            json.dumps({"ref": ref}, sort_keys=True),
-        ): FakeResponse(
-            [
-                {
-                    "type": "file",
-                    "name": "extract.py",
-                    "path": f"{skill_dir}/scripts/extract.py",
-                    "url": f"{api_base}/{skill_dir}/scripts/extract.py",
-                    "html_url": (
-                        f"https://github.com/example/project/blob/{commit_sha}/{skill_dir}/scripts/extract.py"
-                    ),
-                }
-            ]
-        ),
-        (
-            f"{api_base}/{skill_dir}/SKILL.md",
-            json.dumps({"ref": ref}, sort_keys=True),
+            f"{api_base}/commits/{ref}",
+            json.dumps({}, sort_keys=True),
         ): FakeResponse(
             {
-                "type": "file",
-                "name": "SKILL.md",
-                "path": f"{skill_dir}/SKILL.md",
-                "html_url": (
-                    f"https://github.com/example/project/blob/{commit_sha}/{skill_dir}/SKILL.md"
-                ),
-                "encoding": "base64",
-                "content": "LS0tCm5hbWU6IHB5dGhvbgpkZXNjcmlwdGlvbjogVXNlIHB5dGhvbi4KLS0tCkJvZHkK",
+                "sha": commit_sha,
             }
         ),
         (
-            f"{api_base}/{skill_dir}/scripts/extract.py",
-            json.dumps({"ref": ref}, sort_keys=True),
-        ): FakeResponse(
-            {
-                "type": "file",
-                "name": "extract.py",
-                "path": f"{skill_dir}/scripts/extract.py",
-                "html_url": (
-                    f"https://github.com/example/project/blob/{commit_sha}/{skill_dir}/scripts/extract.py"
-                ),
-                "encoding": "base64",
-                "content": "cHJpbnQoJ2hpJykK",
-            }
-        ),
+            f"{api_base}/tarball/{commit_sha}",
+            json.dumps({}, sort_keys=True),
+        ): FakeResponse(content=tarball),
     }
 
 
 def _download_repo_responses(api_base: str) -> dict[tuple[str, str], FakeResponse]:
+    commit_sha = "0123456789abcdef0123456789abcdef01234567"
+    tarball = _build_tarball_bytes(
+        {
+            "README.md": "# README\n",
+            "skills/alpha/SKILL.md": "---\nname: alpha\ndescription: Use alpha.\n---\nBody\n",
+            "skills/alpha/scripts/extract.py": "print('alpha')\n",
+            "skills/beta/SKILL.md": "---\nname: beta\ndescription: Use beta.\n---\nBody\n",
+        },
+        root_dir=f"example-project-{commit_sha[:7]}",
+    )
     return {
         (
             api_base,
             json.dumps({}, sort_keys=True),
         ): FakeResponse(
-            [
-                {
-                    "type": "file",
-                    "name": "README.md",
-                    "path": "README.md",
-                    "url": f"{api_base}/README.md",
-                },
-                {
-                    "type": "dir",
-                    "name": "skills",
-                    "path": "skills",
-                    "url": f"{api_base}/skills",
-                },
-            ]
-        ),
-        (
-            f"{api_base}/skills",
-            json.dumps({}, sort_keys=True),
-        ): FakeResponse(
-            [
-                {
-                    "type": "dir",
-                    "name": "alpha",
-                    "path": "skills/alpha",
-                    "url": f"{api_base}/skills/alpha",
-                },
-                {
-                    "type": "dir",
-                    "name": "beta",
-                    "path": "skills/beta",
-                    "url": f"{api_base}/skills/beta",
-                },
-            ]
-        ),
-        (
-            f"{api_base}/skills/alpha",
-            json.dumps({}, sort_keys=True),
-        ): FakeResponse(
-            [
-                {
-                    "type": "file",
-                    "name": "SKILL.md",
-                    "path": "skills/alpha/SKILL.md",
-                    "url": f"{api_base}/skills/alpha/SKILL.md",
-                },
-                {
-                    "type": "dir",
-                    "name": "scripts",
-                    "path": "skills/alpha/scripts",
-                    "url": f"{api_base}/skills/alpha/scripts",
-                },
-            ]
-        ),
-        (
-            f"{api_base}/skills/alpha/scripts",
-            json.dumps({}, sort_keys=True),
-        ): FakeResponse(
-            [
-                {
-                    "type": "file",
-                    "name": "extract.py",
-                    "path": "skills/alpha/scripts/extract.py",
-                    "url": f"{api_base}/skills/alpha/scripts/extract.py",
-                }
-            ]
-        ),
-        (
-            f"{api_base}/skills/beta",
-            json.dumps({}, sort_keys=True),
-        ): FakeResponse(
-            [
-                {
-                    "type": "file",
-                    "name": "SKILL.md",
-                    "path": "skills/beta/SKILL.md",
-                    "url": f"{api_base}/skills/beta/SKILL.md",
-                }
-            ]
-        ),
-        (
-            f"{api_base}/skills/alpha/SKILL.md",
-            json.dumps({}, sort_keys=True),
-        ): FakeResponse(
             {
-                "type": "file",
-                "name": "SKILL.md",
-                "path": "skills/alpha/SKILL.md",
-                "encoding": "base64",
-                "content": (
-                    "LS0tCm5hbWU6IGFscGhhCmRlc2NyaXB0aW9uOiBVc2UgYWxwaGEuCi0tLQpCb2R5Cg=="
-                ),
+                "default_branch": "main",
             }
         ),
         (
-            f"{api_base}/skills/alpha/scripts/extract.py",
+            f"{api_base}/commits/main",
             json.dumps({}, sort_keys=True),
         ): FakeResponse(
             {
-                "type": "file",
-                "name": "extract.py",
-                "path": "skills/alpha/scripts/extract.py",
-                "encoding": "base64",
-                "content": "cHJpbnQoJ2FscGhhJykK",
+                "sha": commit_sha,
             }
         ),
         (
-            f"{api_base}/skills/beta/SKILL.md",
+            f"{api_base}/tarball/{commit_sha}",
             json.dumps({}, sort_keys=True),
-        ): FakeResponse(
-            {
-                "type": "file",
-                "name": "SKILL.md",
-                "path": "skills/beta/SKILL.md",
-                "encoding": "base64",
-                "content": "LS0tCm5hbWU6IGJldGEKZGVzY3JpcHRpb246IFVzZSBiZXRhLgotLS0KQm9keQo=",
-            }
-        ),
-        (
-            f"{api_base}/README.md",
-            json.dumps({}, sort_keys=True),
-        ): FakeResponse(
-            {
-                "type": "file",
-                "name": "README.md",
-                "path": "README.md",
-                "encoding": "base64",
-                "content": "IyBSRUFETUUK",
-            }
-        ),
+        ): FakeResponse(content=tarball),
     }
+
+
+def _build_tarball_bytes(files: dict[str, str], *, root_dir: str) -> bytes:
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w:gz") as tar:
+        for path, content in sorted(files.items()):
+            data = content.encode("utf-8")
+            info = tarfile.TarInfo(name=f"{root_dir}/{path}")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return archive.getvalue()
 
 
 def test_skillsmp_search_builds_request_and_parses_response() -> None:
@@ -510,7 +381,7 @@ def test_parse_github_url_accepts_repository_root() -> None:
 
 def test_download_skill_downloads_all_files(tmp_path: Path) -> None:
     skill_url = "https://github.com/example/project/tree/main/.agents/skills/python"
-    api_base = "https://api.github.com/repos/example/project/contents"
+    api_base = "https://api.github.com/repos/example/project"
     session = FakeSession(responses=_download_responses(api_base))
     client = SkillsMp(session)
     repository = SkillRepository()
@@ -536,11 +407,15 @@ def test_download_skill_downloads_all_files(tmp_path: Path) -> None:
         installed.directory.joinpath("scripts/extract.py").read_text(encoding="utf-8")
         == "print('hi')\n"
     )
+    assert [call["url"] for call in session.calls] == [
+        f"{api_base}/commits/main",
+        f"{api_base}/tarball/0123456789abcdef0123456789abcdef01234567",
+    ]
 
 
 def test_download_skill_uses_custom_skill_name(tmp_path: Path) -> None:
     skill_url = "https://github.com/example/project/tree/main/.agents/skills/python"
-    api_base = "https://api.github.com/repos/example/project/contents"
+    api_base = "https://api.github.com/repos/example/project"
     session = FakeSession(responses=_download_responses(api_base))
     client = SkillsMp(session)
     repository = SkillRepository()
@@ -556,7 +431,7 @@ def test_download_skill_uses_custom_skill_name(tmp_path: Path) -> None:
 
 
 def test_discover_github_skills_from_repository_root() -> None:
-    api_base = "https://api.github.com/repos/example/project/contents"
+    api_base = "https://api.github.com/repos/example/project"
     session = FakeSession(responses=_download_repo_responses(api_base))
     client = SkillsMp(session)
 
@@ -568,10 +443,54 @@ def test_discover_github_skills_from_repository_root() -> None:
         "scripts/extract.py"
     ]
     assert skills[1].github_url is None
+    assert [call["url"] for call in session.calls] == [
+        api_base,
+        f"{api_base}/commits/main",
+        f"{api_base}/tarball/0123456789abcdef0123456789abcdef01234567",
+    ]
+
+
+def test_download_skill_uses_github_authentication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill_url = "https://github.com/example/project/tree/main/.agents/skills/python"
+    api_base = "https://api.github.com/repos/example/project"
+    session = FakeSession(responses=_download_responses(api_base))
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+
+    installed = SkillRepository().install(
+        Skill.from_github(SkillsMp(session), skill_url),
+        directory=tmp_path,
+    )
+
+    assert installed.name == "python"
+    assert session.calls == [
+        {
+            "url": f"{api_base}/commits/main",
+            "headers": {
+                "Accept": "application/vnd.github+json",
+                "Authorization": "Bearer ghp_test_token",
+            },
+            "params": None,
+            "proxies": None,
+            "stream": False,
+        },
+        {
+            "url": f"{api_base}/tarball/0123456789abcdef0123456789abcdef01234567",
+            "headers": {
+                "Accept": "application/vnd.github+json",
+                "Authorization": "Bearer ghp_test_token",
+            },
+            "params": None,
+            "proxies": None,
+            "stream": False,
+        },
+    ]
 
 
 def test_install_skill_stores_skillsmp_metadata(tmp_path: Path) -> None:
-    api_base = "https://api.github.com/repos/example/project/contents"
+    api_base = "https://api.github.com/repos/example/project"
     session = FakeSession(
         response=FakeResponse(SEARCH_RESPONSE),
         responses=_download_responses(api_base, skill_dir="skills/python"),
@@ -595,7 +514,7 @@ def test_install_skill_stores_skillsmp_metadata(tmp_path: Path) -> None:
 
 def test_list_update_and_remove_installed_skill(tmp_path: Path) -> None:
     install_directory = tmp_path / ".agents" / "skills"
-    api_base = "https://api.github.com/repos/example/project/contents"
+    api_base = "https://api.github.com/repos/example/project"
     session = FakeSession(
         response=FakeResponse(SEARCH_RESPONSE),
         responses=_download_responses(api_base, skill_dir="skills/python"),
@@ -633,7 +552,7 @@ def test_list_update_and_remove_installed_skill(tmp_path: Path) -> None:
 
 def test_skillsmp_client_uses_injected_file_system() -> None:
     install_directory = Path("/workspace/.agents/skills")
-    api_base = "https://api.github.com/repos/example/project/contents"
+    api_base = "https://api.github.com/repos/example/project"
     file_system = FakeFileSystem()
     session = FakeSession(
         response=FakeResponse(SEARCH_RESPONSE),
