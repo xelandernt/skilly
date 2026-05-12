@@ -25,6 +25,7 @@ PROMPT_STYLE = Style.from_dict(
         "menu-help": "fg:#888888",
         "menu-status": "fg:ansigreen",
         "menu-preview": "",
+        "menu-item-installed": "fg:ansigreen",
     }
 )
 
@@ -34,6 +35,7 @@ class MenuItem(Generic[MenuValue]):
     value: MenuValue
     label: str
     preview_lines: tuple[str, ...] = ()
+    style: str = ""
 
 
 @dataclass(frozen=True)
@@ -60,8 +62,13 @@ class PromptToolkitUi(InteractiveUi):
         if not menu.items:
             return None
 
+        def formatted_label(item: MenuItem[MenuValue]) -> str | list[tuple[str, str]]:
+            if not item.style:
+                return item.label
+            return [(item.style, item.label)]
+
         radio_list = RadioList(
-            [(item.value, item.label) for item in menu.items],
+            [(item.value, formatted_label(item)) for item in menu.items],
             default=menu.default,
             select_on_focus=True,
             show_scrollbar=True,

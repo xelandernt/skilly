@@ -391,9 +391,16 @@ def downloadable_skill_menu_items(
             value=match,
             label=downloadable_skill_label(match),
             preview_lines=downloadable_skill_preview_lines(match),
+            style=downloadable_skill_style(match),
         )
         for match in matches
     ]
+
+
+def downloadable_skill_style(match: DownloadableSkillMatch) -> str:
+    if match.status is SkillInstallStatus.INSTALLED:
+        return "class:menu-item-installed"
+    return ""
 
 
 def downloadable_skill_actions(match: DownloadableSkillMatch) -> list[str]:

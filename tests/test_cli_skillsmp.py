@@ -227,6 +227,7 @@ def test_skillsmp_download_marks_installed_skills_and_hides_install_action(
     )
 
     assert ui.menus[0].items[1].label == "beta: beta [installed]"
+    assert ui.menus[0].items[1].style == "class:menu-item-installed"
     assert "Status: installed" in ui.menus[0].items[1].preview_lines
     assert "Installed Directory: beta" in ui.menus[0].items[1].preview_lines
     assert [item.label for item in ui.menus[1].items] == [
