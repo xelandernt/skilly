@@ -35,7 +35,6 @@ from .filesystem import DEFAULT_FILE_SYSTEM, FileSystem
 class SkillResource:
     """A file bundled with a skill."""
 
-    path: Path
     relative_path: PurePosixPath
     kind: ResourceKind
     content: str = ""
@@ -642,7 +641,6 @@ def load_resource_files(
         try:
             resources.append(
                 SkillResource(
-                    path=file_system.resolve(resource_path),
                     relative_path=PurePosixPath(child_name),
                     kind=classify_resource_kind(PurePosixPath(child_name)),
                     content=file_system.read_file(resource_path),
@@ -687,7 +685,6 @@ def collect_directory_resource_files(
         try:
             collected.append(
                 SkillResource(
-                    path=file_system.resolve(child),
                     relative_path=relative_path,
                     kind=classify_resource_kind(relative_path),
                     content=file_system.read_file(child),
@@ -962,7 +959,6 @@ def build_skill_from_github_files(
     )
     resources = [
         SkillResource(
-            path=Path(blob.path.as_posix()),
             relative_path=blob.path.relative_to(skill_dir),
             kind=classify_resource_kind(blob.path.relative_to(skill_dir)),
             content=blob.content,
