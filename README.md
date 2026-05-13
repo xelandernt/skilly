@@ -22,14 +22,11 @@ uvx skilly --help
 
 ### GitHub-backed downloads
 
-GitHub installs now use repository tarballs instead of recursively walking the contents API, which keeps GitHub API request counts low.
-
 For higher GitHub rate limits, authenticate requests with either:
 
 ```shell
 export SKILLY_GITHUB_TOKEN=ghp_your_token
 ```
-
 
 or the standard GitHub environment variables:
 
@@ -57,7 +54,6 @@ generated = Skill(
     content="## Instructions\nDo the thing.\n",
 )
 saved = generated.install_to(Path("/tmp/skills"), skill_name="custom-folder-name")
-# saved.path -> /tmp/skills/custom-folder-name
 
 installed = Skill.from_dir(Path(".agents/skills/my-skill"))
 github_skill = Skill.from_github(
