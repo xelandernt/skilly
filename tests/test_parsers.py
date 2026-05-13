@@ -21,7 +21,8 @@ Use the parser.
     assert skill.description.startswith("Parse structured input.")
     assert skill.metadata == {"owner": "docs"}
     assert skill.content == "Use the parser."
-    assert skill.path == Path("/workspace/parser-skill/SKILL.md")
+    assert skill.path == Path("/workspace/parser-skill")
+    assert skill.skill_markdown_path == Path("/workspace/parser-skill/SKILL.md")
 
 
 def test_skill_from_text_allows_in_memory_parsing_without_path() -> None:
@@ -35,8 +36,32 @@ In-memory instructions.
     )
 
     assert skill.name == "in-memory-skill"
-    assert skill.path == Path("SKILL.md")
+    assert skill.path is None
+    assert skill.skill_markdown_path is None
+    assert skill.directory is None
+    assert skill.directory_name == "in-memory-skill"
     assert skill.package_reference() is None
+
+
+def test_skill_constructor_accepts_optional_path_and_installs(tmp_path: Path) -> None:
+    skill = Skill(
+        name="generated-skill",
+        description="Use when creating a skill in memory.",
+        path=None,
+        content="Generated instructions.\n",
+    )
+
+    installed = skill.install_to(tmp_path, skill_name="saved-skill")
+
+    assert skill.path is None
+    assert skill.directory is None
+    assert skill.directory_name == "generated-skill"
+    assert installed.path == (tmp_path / "saved-skill").resolve()
+    assert (
+        installed.skill_markdown_path
+        == (tmp_path / "saved-skill" / "SKILL.md").resolve()
+    )
+    assert installed.content == "Generated instructions."
 
 
 def test_skill_from_text_ignores_unknown_fields() -> None:
@@ -48,7 +73,7 @@ trigger: pdf
 ---
 Relaxed instructions.
 """,
-        path=Path("/workspace/relaxed-skill/SKILL.md"),
+        path=Path("/workspace/relaxed-skill"),
     )
 
     assert skill.name == "relaxed-skill"
@@ -68,7 +93,7 @@ metadata:
 ---
 Block instructions.
 """,
-        path=Path("/workspace/block-skill/SKILL.md"),
+        path=Path("/workspace/block-skill"),
     )
 
     assert skill.description == "First line.\nSecond line."
@@ -96,7 +121,7 @@ metadata:
 ---
 Use this skill carefully.
 """,
-        path=Path("/workspace/binance-agentic-wallet/SKILL.md"),
+        path=Path("/workspace/binance-agentic-wallet"),
     )
 
     assert skill.name == "binance-agentic-wallet"
@@ -127,7 +152,8 @@ Directory based instructions.
     skill = Skill.from_dir(skill_dir)
 
     assert skill.name == "folder-skill"
-    assert skill.path == (skill_dir / "SKILL.md").resolve()
+    assert skill.path == skill_dir.resolve()
+    assert skill.skill_markdown_path == (skill_dir / "SKILL.md").resolve()
     assert skill.content == "Directory based instructions."
 
 
@@ -222,7 +248,8 @@ Use this skill carefully.
     assert skill.compatibility == "Requires Python 3.13+ and uv"
     assert skill.metadata == {"author": "example-org", "version": "1.0"}
     assert skill.allowed_tools == "Bash(git:*) Read"
-    assert skill.path == skill_path.resolve()
+    assert skill.path == skill_path.parent.resolve()
+    assert skill.skill_markdown_path == skill_path.resolve()
     assert "Use this skill carefully." in skill.content
     assert [resource.relative_path.as_posix() for resource in skill.resources] == [
         "assets/form.json",
@@ -331,7 +358,8 @@ Use this skill carefully.
     skills = discover_venv_skills(venv_path)
 
     assert [skill.name for skill in skills] == ["sample-skill"]
-    assert skills[0].path == skill_path.resolve()
+    assert skills[0].path == skill_path.parent.resolve()
+    assert skills[0].skill_markdown_path == skill_path.resolve()
 
 
 def test_installed_skill_state_comes_from_metadata(tmp_path: Path) -> None:

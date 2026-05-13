@@ -129,6 +129,8 @@ class SkillRepository:
             The removed skill.
         """
         skill = self.require(name, directory=directory)
+        if skill.directory is None:
+            raise ValueError(f"Installed skill has no directory: {name}")
         self.file_system.remove_tree(skill.directory)
         return skill
 

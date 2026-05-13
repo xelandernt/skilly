@@ -31,7 +31,7 @@ description: From a dependency.
 ---
 Body
 """,
-            path=tmp_path / "dep" / "SKILL.md",
+            path=tmp_path / "dep",
             source="dependency",
             package_name="dep-pkg",
             package_version="1.2.3",
@@ -47,7 +47,7 @@ description: From SkillsMP.
 ---
 Body
 """,
-            path=tmp_path / "skillsmp" / "SKILL.md",
+            path=tmp_path / "skillsmp",
             source="skillsmp",
             github_url="https://github.com/example/project/tree/main/.agents/skills/skillsmp-skill",
             skillsmp_id="skill-1",
@@ -80,7 +80,7 @@ description: From a dependency.
 ---
 Body
 """,
-            path=tmp_path / "dep" / "SKILL.md",
+            path=tmp_path / "dep",
             source="dependency",
             package_name="dep-pkg",
             package_version="1.2.3",
@@ -111,7 +111,7 @@ description: From SkillsMP.
 ---
 Body
 """,
-            path=tmp_path / "skillsmp" / "SKILL.md",
+            path=tmp_path / "skillsmp",
             source="skillsmp",
             github_url="https://github.com/example/project/tree/main/.agents/skills/skillsmp-skill",
             github_commit_sha="0123456789abcdef0123456789abcdef01234567",

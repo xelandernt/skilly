@@ -16,7 +16,7 @@ description: Installed skill.
 ---
 Body
 """,
-            path=tmp_path / "source" / "SKILL.md",
+            path=tmp_path / "source",
             source="github",
             github_url="https://github.com/example/project/tree/main/skills/sample-skill",
         ),

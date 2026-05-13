@@ -51,7 +51,15 @@ from pathlib import Path
 
 from skilly import Skill, SkillRepository
 
-skill = Skill.from_dir(Path(".agents/skills/my-skill"))
+generated = Skill(
+    name="my-skill",
+    description="Use when generating a skill in memory.",
+    content="## Instructions\nDo the thing.\n",
+)
+saved = generated.install_to(Path("/tmp/skills"), skill_name="custom-folder-name")
+# saved.path -> /tmp/skills/custom-folder-name
+
+installed = Skill.from_dir(Path(".agents/skills/my-skill"))
 github_skill = Skill.from_github(
     fetcher,
     "https://github.com/example/project/tree/main/.agents/skills/my-skill",

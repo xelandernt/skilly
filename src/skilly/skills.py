@@ -113,7 +113,7 @@ class Skill:
 
     name: str
     description: str
-    path: Path
+    path: Path | None = None
     content: str = ""
     license: str | None = None
     compatibility: str | None = None
@@ -129,14 +129,21 @@ class Skill:
     skillsmp_id: str | None = None
 
     @property
-    def directory(self) -> Path:
-        """Return the directory containing the skill file."""
-        return self.path.parent
+    def skill_markdown_path(self) -> Path | None:
+        """Return the SKILL.md file path, if this skill has a directory."""
+        if self.path is None:
+            return None
+        return self.path / "SKILL.md"
+
+    @property
+    def directory(self) -> Path | None:
+        """Return the skill directory, if it has one."""
+        return self.path
 
     @property
     def directory_name(self) -> str:
-        """Return the installed directory name for the skill."""
-        return self.directory.name
+        """Return the installed directory name, or the skill name for in-memory skills."""
+        return self.path.name if self.path is not None else self.name
 
     @property
     def scripts(self) -> list[SkillResource]:
@@ -346,7 +353,8 @@ class Skill:
 
         Args:
             text: Full SKILL.md content.
-            path: Optional path used to resolve bundled resources.
+            path: Optional skill directory or SKILL.md path used to resolve bundled
+                resources. Stored on the Skill as the skill directory.
             file_system: File system abstraction used for file access.
             source: Explicit source override.
             package_name: Explicit dependency package name.
@@ -358,7 +366,7 @@ class Skill:
         Returns:
             The parsed skill.
         """
-        skill_path = Path("SKILL.md") if path is None else file_system.resolve(path)
+        skill_directory = normalize_skill_directory(path, file_system=file_system)
         frontmatter, body = split_frontmatter(text)
         parsed = parse_frontmatter(frontmatter)
         metadata_value = parsed.get("metadata")
@@ -387,15 +395,15 @@ class Skill:
 
         resources: list[SkillResource] = []
         warnings: list[str] = []
-        if path is not None:
+        if skill_directory is not None:
             resources, warnings = load_resource_files(
-                skill_path, file_system=file_system
+                skill_directory, file_system=file_system
             )
 
         return cls(
             name=required_string_field(parsed, "name"),
             description=required_string_field(parsed, "description"),
-            path=skill_path,
+            path=skill_directory,
             content=body,
             license=optional_string_field(parsed, "license"),
             compatibility=optional_string_field(parsed, "compatibility"),
@@ -598,20 +606,20 @@ def write_text_file(
 
 
 def load_resource_files(
-    skill_path: Path,
+    skill_directory: Path,
     *,
     file_system: FileSystem,
 ) -> tuple[list[SkillResource], list[str]]:
     """Load text resources from a skill directory.
 
     Args:
-        skill_path: Path to the skill's SKILL.md file.
+        skill_directory: Path to the skill directory.
         file_system: File system abstraction used for file access.
 
     Returns:
         A tuple of loaded resources and non-fatal warnings.
     """
-    root = skill_path.parent
+    root = skill_directory
     if not file_system.is_dir(root):
         return [], []
 
@@ -708,6 +716,16 @@ def to_relative_path(path: str | Path | PurePosixPath) -> PurePosixPath:
     if isinstance(path, Path):
         return PurePosixPath(*path.parts)
     return PurePosixPath(path.replace("\\", "/"))
+
+
+def normalize_skill_directory(
+    path: Path | None, *, file_system: FileSystem
+) -> Path | None:
+    """Normalize a skill location to its directory."""
+    if path is None:
+        return None
+    resolved = file_system.resolve(path)
+    return resolved.parent if resolved.name.lower() == "skill.md" else resolved
 
 
 def split_frontmatter(text: str) -> tuple[list[str], str]:
@@ -936,7 +954,7 @@ def build_skill_from_github_files(
 
     skill = Skill.from_text(
         skill_blob.content,
-        path=Path(skill_dir.as_posix()) / "SKILL.md",
+        path=Path(skill_dir.as_posix()),
         source=source,
         github_url=github_url,
         github_commit_sha=github_commit_sha,
