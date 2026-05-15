@@ -1,10 +1,10 @@
-name: Build and test python application
+name: main
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
+  pull_request: {}
 
 concurrency:
   group: ${{ github.head_ref || github.run_id }}
@@ -14,22 +14,33 @@ permissions:
   contents: read
 
 jobs:
+  test-rust:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        build-target: ["release"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - name: Build
+        run: cargo build --profile ${{ matrix.build-target }}
+      - name: Test
+        run: cargo test --profile ${{ matrix.build-target }}
 
   lint:
-    name: Lint
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: extractions/setup-just@v3
-    - uses: astral-sh/setup-uv@v7
-      with:
-        cache-dependency-glob: "**/pyproject.toml"
-    - run: uv python install 3.10
-    - run: just install
-    - run: just lint
+      - uses: actions/checkout@v6
+      - uses: extractions/setup-just@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          cache-dependency-glob: "**/pyproject.toml"
+      - run: uv python install 3.10
+      - run: just install lint
 
-  test:
-    name: Test
+  test-python:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -42,10 +53,10 @@ jobs:
           - "3.14"
     steps:
       - uses: actions/checkout@v6
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v7
         with:
           cache-dependency-glob: "**/pyproject.toml"
       - run: uv python install ${{ matrix.python-version }}
       - run: just install
-      - run: just test . --cov=. --cov-report xml -rs
+      - run: uv run pytest . --cov=.

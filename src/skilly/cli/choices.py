@@ -1,6 +1,0 @@
-BACK_CHOICE = "back"
-DELETE_CHOICE = "delete"
-EXIT_CHOICE = "exit"
-INSTALL_CHOICE = "install"
-UPDATE_CHOICE = "update"
-REMOVE_CHOICE = "remove"

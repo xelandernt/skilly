@@ -27,3 +27,6 @@ target
 .venv
 .agents
 .env
+**/**.so
+**/**.pyd
+**/**.dylib

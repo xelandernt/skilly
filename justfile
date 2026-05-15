@@ -2,18 +2,11 @@
 default:
     @just --list
 
-# update dependencies
-update:
-    uv lock --upgrade
-    @just install
-
-# upgrade dependencies
-upgrade:
-    @just update
-
 # install dependencies
 install:
+    uv lock --upgrade
     uv sync --all-extras --frozen
+    uv run --no-sync maturin develop
     @just hook
 
 # lint project
@@ -22,6 +15,8 @@ lint:
 
 # test project
 test *args:
+    uv run --no-sync cargo test --profile release
+    uv run --no-sync maturin develop
     uv run --no-sync pytest {{ args }}
 
 # type check project

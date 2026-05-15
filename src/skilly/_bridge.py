@@ -1,0 +1,318 @@
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from os import PathLike
+from typing import TYPE_CHECKING, Protocol, TypeAlias, TypedDict
+
+from . import _rust
+
+if TYPE_CHECKING:
+    from ._rust import (
+        GitHubContentItemData,
+        GitHubFileBlobData,
+        GitHubRepositorySnapshotData,
+        GitHubSkillLocationData,
+        Skill,
+        SkillsMpAiSearchApiResponseData,
+        SkillsMpSearchApiResponseData,
+    )
+
+BridgeScalar: TypeAlias = str | int | float | bool | None
+BridgeObject: TypeAlias = Mapping[str, "BridgeValue"]
+BridgeArray: TypeAlias = Sequence["BridgeValue"]
+BridgeValue: TypeAlias = BridgeScalar | BridgeObject | BridgeArray
+StrPath: TypeAlias = str | PathLike[str]
+
+
+class ClientConfigSource(Protocol):
+    base_url: str | None
+    api_key: str | None
+    github_token: str | None
+    proxy: str | None
+
+
+class ClientConfigKwargs(TypedDict):
+    base_url: str | None
+    api_key: str | None
+    github_token: str | None
+    proxy: str | None
+
+
+def client_config_kwargs(fetcher: ClientConfigSource | None) -> ClientConfigKwargs:
+    if fetcher is None:
+        return {
+            "base_url": None,
+            "api_key": None,
+            "github_token": None,
+            "proxy": None,
+        }
+    return {
+        "base_url": fetcher.base_url,
+        "api_key": fetcher.api_key,
+        "github_token": fetcher.github_token,
+        "proxy": fetcher.proxy,
+    }
+
+
+def skill_from_text(
+    text: str,
+    path: StrPath | None = None,
+    source: str | None = None,
+    package_name: str | None = None,
+    package_version: str | None = None,
+    github_url: str | None = None,
+    github_commit_sha: str | None = None,
+    skillsmp_id: str | None = None,
+) -> Skill:
+    return _rust.skill_from_text(
+        text,
+        path=path,
+        source=source,
+        package_name=package_name,
+        package_version=package_version,
+        github_url=github_url,
+        github_commit_sha=github_commit_sha,
+        skillsmp_id=skillsmp_id,
+    )
+
+
+def skill_from_file(
+    path: StrPath,
+    source: str | None = None,
+    package_name: str | None = None,
+    package_version: str | None = None,
+    github_url: str | None = None,
+    github_commit_sha: str | None = None,
+    skillsmp_id: str | None = None,
+) -> Skill:
+    return _rust.skill_from_file(
+        path,
+        source=source,
+        package_name=package_name,
+        package_version=package_version,
+        github_url=github_url,
+        github_commit_sha=github_commit_sha,
+        skillsmp_id=skillsmp_id,
+    )
+
+
+def skill_from_dir(
+    path: StrPath,
+    source: str | None = None,
+    package_name: str | None = None,
+    package_version: str | None = None,
+    github_url: str | None = None,
+    github_commit_sha: str | None = None,
+    skillsmp_id: str | None = None,
+) -> Skill:
+    return _rust.skill_from_dir(
+        path,
+        source=source,
+        package_name=package_name,
+        package_version=package_version,
+        github_url=github_url,
+        github_commit_sha=github_commit_sha,
+        skillsmp_id=skillsmp_id,
+    )
+
+
+def skill_render(skill: Skill, metadata: dict[str, str] | None = None) -> str:
+    return _rust.skill_render(skill, metadata)
+
+
+def skill_install_to(
+    skill: Skill,
+    directory: StrPath | None = None,
+    skill_name: str | None = None,
+    overwrite: bool = False,
+) -> Skill:
+    return _rust.skill_install_to(
+        skill,
+        directory=directory,
+        skill_name=skill_name,
+        overwrite=overwrite,
+    )
+
+
+def discover_installed_skills(directory: StrPath | None = None) -> list[Skill]:
+    return _rust.discover_installed_skills(directory)
+
+
+def discover_venv_skills(path: StrPath | None = None) -> list[Skill]:
+    return _rust.discover_venv_skills(path)
+
+
+def parse_github_skill_url(github_url: str) -> GitHubSkillLocationData:
+    return _rust.parse_github_skill_url(github_url)
+
+
+def discover_github_skills(
+    github_url: str,
+    source: str | None = None,
+    skillsmp_id: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    github_token: str | None = None,
+    proxy: str | None = None,
+) -> list[Skill]:
+    return _rust.discover_github_skills(
+        github_url,
+        source=source,
+        skillsmp_id=skillsmp_id,
+        base_url=base_url,
+        api_key=api_key,
+        github_token=github_token,
+        proxy=proxy,
+    )
+
+
+def github_versions_match(installed: Skill, available: Skill) -> bool:
+    return _rust.github_versions_match(installed, available)
+
+
+def remove_skill(name: str, directory: StrPath | None = None) -> Skill:
+    return _rust.remove_skill(name, directory)
+
+
+def project_requirements(
+    pyproject_toml_path: StrPath | None = None,
+    include_dev: bool = False,
+    include_extras: list[str] | None = None,
+) -> list[str]:
+    return _rust.project_requirements(
+        pyproject_toml_path=pyproject_toml_path,
+        include_dev=include_dev,
+        include_extras=include_extras,
+    )
+
+
+def skillsmp_search(
+    q: str,
+    page: int | None = None,
+    limit: int | None = None,
+    sort_by: str | None = None,
+    category: str | None = None,
+    occupation: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    github_token: str | None = None,
+    proxy: str | None = None,
+) -> SkillsMpSearchApiResponseData:
+    return _rust.skillsmp_search(
+        q,
+        page=page,
+        limit=limit,
+        sort_by=sort_by,
+        category=category,
+        occupation=occupation,
+        base_url=base_url,
+        api_key=api_key,
+        github_token=github_token,
+        proxy=proxy,
+    )
+
+
+def skillsmp_ai_search(
+    q: str,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    github_token: str | None = None,
+    proxy: str | None = None,
+) -> SkillsMpAiSearchApiResponseData:
+    return _rust.skillsmp_ai_search(
+        q,
+        base_url=base_url,
+        api_key=api_key,
+        github_token=github_token,
+        proxy=proxy,
+    )
+
+
+def skillsmp_fetch_github_directory(
+    github_url: str,
+    current_path: str,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    github_token: str | None = None,
+    proxy: str | None = None,
+) -> list[GitHubContentItemData]:
+    return _rust.skillsmp_fetch_github_directory(
+        github_url,
+        current_path,
+        base_url=base_url,
+        api_key=api_key,
+        github_token=github_token,
+        proxy=proxy,
+    )
+
+
+def skillsmp_fetch_github_file(
+    github_url: str,
+    path: str,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    github_token: str | None = None,
+    proxy: str | None = None,
+) -> GitHubFileBlobData:
+    return _rust.skillsmp_fetch_github_file(
+        github_url,
+        path,
+        base_url=base_url,
+        api_key=api_key,
+        github_token=github_token,
+        proxy=proxy,
+    )
+
+
+def skillsmp_fetch_github_snapshot(
+    github_url: str,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    github_token: str | None = None,
+    proxy: str | None = None,
+) -> GitHubRepositorySnapshotData:
+    return _rust.skillsmp_fetch_github_snapshot(
+        github_url,
+        base_url=base_url,
+        api_key=api_key,
+        github_token=github_token,
+        proxy=proxy,
+    )
+
+
+def skillsmp_resolve_github_ref_and_commit_sha(
+    github_url: str,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    github_token: str | None = None,
+    proxy: str | None = None,
+) -> tuple[str, str]:
+    return _rust.skillsmp_resolve_github_ref_and_commit_sha(
+        github_url,
+        base_url=base_url,
+        api_key=api_key,
+        github_token=github_token,
+        proxy=proxy,
+    )
+
+
+def run_cli(args: list[str]) -> int:
+    return _rust.run_cli(args)
+
+
+def ensure_object(value: BridgeValue) -> BridgeObject:
+    if not isinstance(value, dict):
+        raise TypeError(f"Expected object, got {type(value)!r}")
+    return value
+
+
+def ensure_array(value: BridgeValue) -> BridgeArray:
+    if not isinstance(value, list):
+        raise TypeError(f"Expected array, got {type(value)!r}")
+    return value
+
+
+def ensure_string(value: BridgeValue) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"Expected string, got {type(value)!r}")
+    return value

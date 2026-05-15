@@ -1,11 +1,9 @@
 import tomllib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
 
 from packaging.requirements import Requirement
-
-from skilly.filesystem import FileSystem, DEFAULT_FILE_SYSTEM
 
 
 @dataclass(frozen=True)
@@ -17,22 +15,21 @@ class PyProjectInfo:
     @classmethod
     def _get_extra_requirements(
         cls,
-        toml: dict[str, Any],
+        toml: Mapping[str, object],
         extras: Sequence[str],
     ) -> list[Requirement]:
-        dependency_groups = toml.get("dependency-groups", {})
+        dependency_groups = _mapping_value(toml.get("dependency-groups"))
         extra_requirements = []
-        for extra in dependency_groups.keys():
-            if extra in extras:
-                for dep in dependency_groups[extra]:
-                    extra_requirements.append(Requirement(dep))
+        for extra in extras:
+            for dep in _string_list_value(dependency_groups.get(extra)):
+                extra_requirements.append(Requirement(dep))
 
         return extra_requirements
 
     @classmethod
     def from_pyproject_toml(
         cls,
-        toml: dict[str, Any],
+        toml: Mapping[str, object],
         include_dev: bool = False,
         include_extras: Sequence[str] = (),
     ) -> "PyProjectInfo":
@@ -47,12 +44,13 @@ class PyProjectInfo:
             Parsed project dependency information.
         """
         dependencies = []
-        for dep in toml.get("project", {}).get("dependencies", []):
+        project = _mapping_value(toml.get("project"))
+        for dep in _string_list_value(project.get("dependencies")):
             dependencies.append(Requirement(dep))
 
-        extras = set(include_extras)
+        extras = tuple(include_extras)
         if include_dev:
-            extras.add("dev")
+            extras = (*extras, "dev")
 
         dependencies.extend(cls._get_extra_requirements(toml, extras))
         return cls(dependencies=dependencies)
@@ -60,16 +58,39 @@ class PyProjectInfo:
 
 def parse_toml(
     path: Path,
-    file_system: FileSystem = DEFAULT_FILE_SYSTEM,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Read and parse a TOML file.
 
     Args:
         path: Path to the TOML file.
-        file_system: File system abstraction used for file access.
-
     Returns:
         Parsed TOML content.
     """
-    data = file_system.read_file(path)
-    return tomllib.loads(data)
+    loaded: object = tomllib.loads(path.read_text(encoding="utf-8"))
+    return dict(_mapping_value(loaded))
+
+
+def _mapping_value(value: object | None) -> Mapping[str, object]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError(f"Expected mapping, got {type(value)!r}")
+    normalized: dict[str, object] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise TypeError(f"Expected string key, got {type(key)!r}")
+        normalized[key] = item
+    return normalized
+
+
+def _string_list_value(value: object | None) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise TypeError(f"Expected list, got {type(value)!r}")
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise TypeError(f"Expected string, got {type(item)!r}")
+        normalized.append(item)
+    return normalized

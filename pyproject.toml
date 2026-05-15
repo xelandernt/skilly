@@ -1,8 +1,8 @@
 [build-system]
 requires = [
-    "hatchling", "hatch-vcs"
+    "maturin>=1.7,<2"
 ]
-build-backend = "hatchling.build"
+build-backend = "maturin"
 
 
 [project]
@@ -11,20 +11,16 @@ description = "Load skills from dependencies."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "cyclopts>=4",
-    "prompt-toolkit>=3",
-    "niquests>=3",
-    "pydantic>=2",
     "packaging>=20",
-    "pyyaml>=6.0.3",
 ]
 dynamic = ["version"]
 
 [project.scripts]
-skilly = "skilly.cli.root:cli"
+skilly = "skilly._cli:main"
 
 [dependency-groups]
 dev = [
+    "maturin>=1.7,<2",
     "prek>=0.3.13",
     "pyrefly>=0.64.0",
     "pytest>=9.0.3",
@@ -42,10 +38,74 @@ addopts = [
 ]
 pythonpath=["src", "tests"]
 
+[tool.maturin]
+bindings = "pyo3"
+python-source = "src"
+module-name = "skilly._rust"
+features = ["extension-module"]
 
-[tool.hatch.version]
-source = "vcs"
-fallback-version = "0.0.1"
+[tool.ruff]
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+]
+line-length = 88
+indent-width = 4
+extend-include = ["*.pyi"]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "PYI"]
+ignore = []
+fixable = ["ALL"]
+unfixable = []
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = false
+docstring-code-line-length = "dynamic"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/skilly"]
+
+[tool.pyrefly]
+project-includes = [
+    "src",
+    "tests",
+]
+search-path = [
+    "src",
+    "tests",
+]
+python-version = "3.10"

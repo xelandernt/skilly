@@ -1,16 +1,10 @@
 from __future__ import annotations
 
-import abc
-import base64
-import io
-import os
-import tarfile
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
-from typing import TypeVar
+from typing import TYPE_CHECKING
 
-import niquests
-from pydantic import BaseModel, ConfigDict, RootModel
-
+from .. import _bridge as bridge
 from ..skills import (
     GitHubContentItem,
     GitHubFileBlob,
@@ -19,25 +13,23 @@ from ..skills import (
 )
 from .response import AsyncResponse, Response
 
-SKILLSMP_API_KEY_ENV_VAR = "SKILLSMP_API_KEY"
-SKILLY_GITHUB_TOKEN_ENV_VAR = "SKILLY_GITHUB_TOKEN"
-GITHUB_API_BASE_URL = "https://api.github.com"
-GITHUB_TOKEN_ENV_VARS = (
-    SKILLY_GITHUB_TOKEN_ENV_VAR,
-    "GITHUB_TOKEN",
-    "GH_TOKEN",
-)
+if TYPE_CHECKING:
+    from .._rust import (
+        SkillsMpAiSearchApiResponseData,
+        SkillsMpAiSearchData as SkillsMpAiSearchPayload,
+        SkillsMpErrorApiResponseData,
+        SkillsMpErrorData,
+        SkillsMpFiltersData,
+        SkillsMpMetaData,
+        SkillsMpPaginationData,
+        SkillsMpSearchApiResponseData,
+        SkillsMpSearchData as SkillsMpSearchPayload,
+        SkillsMpSkillData,
+    )
 
-ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
-HeadersMap = dict[str, str]
-ProxyConfig = dict[str, str]
-QueryParamValue = str | list[str] | None
-QueryParams = dict[str, QueryParamValue]
 
-
-class SkillsMpSkill(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
+@dataclass(frozen=True)
+class SkillsMpSkill:
     id: str
     name: str
     author: str
@@ -47,10 +39,28 @@ class SkillsMpSkill(BaseModel):
     stars: int | None = None
     updatedAt: str | int | None = None
 
+    @classmethod
+    def from_data(cls, data: SkillsMpSkillData) -> "SkillsMpSkill":
+        updated_at = data.get("updatedAt")
+        if updated_at is not None and not isinstance(updated_at, str | int):
+            raise TypeError(f"Expected string or int, got {type(updated_at)!r}")
+        stars = data.get("stars")
+        if stars is not None and not isinstance(stars, int):
+            raise TypeError(f"Expected int, got {type(stars)!r}")
+        return cls(
+            id=bridge.ensure_string(data["id"]),
+            name=bridge.ensure_string(data["name"]),
+            author=bridge.ensure_string(data["author"]),
+            description=bridge.ensure_string(data["description"]),
+            githubUrl=bridge.ensure_string(data["githubUrl"]),
+            skillUrl=bridge.ensure_string(data["skillUrl"]),
+            stars=stars,
+            updatedAt=updated_at,
+        )
 
-class SkillsMpPagination(BaseModel):
-    model_config = ConfigDict(extra="allow")
 
+@dataclass(frozen=True)
+class SkillsMpPagination:
     page: int
     limit: int
     total: int
@@ -59,206 +69,150 @@ class SkillsMpPagination(BaseModel):
     hasPrev: bool
     totalIsExact: bool | None = None
 
+    @classmethod
+    def from_data(cls, data: SkillsMpPaginationData) -> "SkillsMpPagination":
+        total_is_exact = data.get("totalIsExact")
+        if total_is_exact is not None and not isinstance(total_is_exact, bool):
+            raise TypeError(f"Expected bool, got {type(total_is_exact)!r}")
+        return cls(
+            page=_expect_int(data["page"]),
+            limit=_expect_int(data["limit"]),
+            total=_expect_int(data["total"]),
+            totalPages=_expect_int(data["totalPages"]),
+            hasNext=_expect_bool(data["hasNext"]),
+            hasPrev=_expect_bool(data["hasPrev"]),
+            totalIsExact=total_is_exact,
+        )
 
-class SkillsMpFilters(BaseModel):
-    model_config = ConfigDict(extra="allow")
 
+@dataclass(frozen=True)
+class SkillsMpFilters:
     search: str | None = None
     sortBy: str | None = None
     category: str | None = None
     occupation: str | None = None
 
+    @classmethod
+    def from_data(cls, data: SkillsMpFiltersData) -> "SkillsMpFilters":
+        return cls(
+            search=_optional_string(data.get("search")),
+            sortBy=_optional_string(data.get("sortBy")),
+            category=_optional_string(data.get("category")),
+            occupation=_optional_string(data.get("occupation")),
+        )
 
-class SkillsMpSearchData(BaseModel):
-    model_config = ConfigDict(extra="allow")
 
+@dataclass(frozen=True)
+class SkillsMpSearchData:
     skills: list[SkillsMpSkill]
     pagination: SkillsMpPagination
     filters: SkillsMpFilters
 
+    @classmethod
+    def from_data(cls, data: SkillsMpSearchPayload) -> "SkillsMpSearchData":
+        return cls(
+            skills=[SkillsMpSkill.from_data(item) for item in data["skills"]],
+            pagination=SkillsMpPagination.from_data(data["pagination"]),
+            filters=SkillsMpFilters.from_data(data["filters"]),
+        )
 
-class SkillsMpAiSearchData(BaseModel):
-    model_config = ConfigDict(extra="allow")
 
-    skills: list[SkillsMpSkill] = []
-    results: list[SkillsMpSkill] = []
+@dataclass(frozen=True)
+class SkillsMpAiSearchData:
+    skills: list[SkillsMpSkill] = field(default_factory=list)
+    results: list[SkillsMpSkill] = field(default_factory=list)
+
+    @classmethod
+    def from_data(cls, data: SkillsMpAiSearchPayload) -> "SkillsMpAiSearchData":
+        skills = [SkillsMpSkill.from_data(item) for item in data.get("skills", [])]
+        results = [SkillsMpSkill.from_data(item) for item in data.get("results", [])]
+        return cls(skills=skills, results=results)
 
 
-class SkillsMpMeta(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
+@dataclass(frozen=True)
+class SkillsMpMeta:
     requestId: str | None = None
     responseTimeMs: int | None = None
 
+    @classmethod
+    def from_data(cls, data: SkillsMpMetaData) -> "SkillsMpMeta":
+        response_time = data.get("responseTimeMs")
+        if response_time is not None and not isinstance(response_time, int):
+            raise TypeError(f"Expected int, got {type(response_time)!r}")
+        return cls(
+            requestId=_optional_string(data.get("requestId")),
+            responseTimeMs=response_time,
+        )
 
-class SkillsMpError(BaseModel):
-    model_config = ConfigDict(extra="allow")
 
+@dataclass(frozen=True)
+class SkillsMpError:
     code: str
     message: str
 
+    @classmethod
+    def from_data(cls, data: SkillsMpErrorData) -> "SkillsMpError":
+        return cls(
+            code=bridge.ensure_string(data["code"]),
+            message=bridge.ensure_string(data["message"]),
+        )
 
-class SkillsMpSearchApiResponse(BaseModel):
-    model_config = ConfigDict(extra="allow")
 
+@dataclass(frozen=True)
+class SkillsMpSearchApiResponse:
     success: bool
     data: SkillsMpSearchData
     meta: SkillsMpMeta | None = None
 
+    @classmethod
+    def from_data(
+        cls, data: SkillsMpSearchApiResponseData
+    ) -> "SkillsMpSearchApiResponse":
+        meta = data.get("meta")
+        return cls(
+            success=_expect_bool(data["success"]),
+            data=SkillsMpSearchData.from_data(data["data"]),
+            meta=None if meta is None else SkillsMpMeta.from_data(meta),
+        )
 
-class SkillsMpAiSearchApiResponse(BaseModel):
-    model_config = ConfigDict(extra="allow")
 
+@dataclass(frozen=True)
+class SkillsMpAiSearchApiResponse:
     success: bool
     data: SkillsMpAiSearchData
     meta: SkillsMpMeta | None = None
 
+    @classmethod
+    def from_data(
+        cls, data: SkillsMpAiSearchApiResponseData
+    ) -> "SkillsMpAiSearchApiResponse":
+        meta = data.get("meta")
+        return cls(
+            success=_expect_bool(data["success"]),
+            data=SkillsMpAiSearchData.from_data(data["data"]),
+            meta=None if meta is None else SkillsMpMeta.from_data(meta),
+        )
 
-class SkillsMpErrorApiResponse(BaseModel):
-    model_config = ConfigDict(extra="allow")
 
+@dataclass(frozen=True)
+class SkillsMpErrorApiResponse:
     success: bool
     error: SkillsMpError
     meta: SkillsMpMeta | None = None
 
-
-class GitHubContentEntry(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    type: str
-    name: str
-    path: str
-    url: str
-    html_url: str | None = None
-    size: int | None = None
-    download_url: str | None = None
-
-
-class GitHubContentEntries(RootModel[list[GitHubContentEntry]]):
-    pass
-
-
-class GitHubFileContent(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    type: str
-    name: str
-    path: str
-    html_url: str | None = None
-    size: int | None = None
-    encoding: str | None = None
-    content: str | None = None
-
-
-class GitHubRepositoryInfo(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    default_branch: str
-
-
-class GitHubCommitInfo(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    sha: str
-
-
-def _get_api_key_from_env() -> str | None:
-    return os.getenv(SKILLSMP_API_KEY_ENV_VAR)
-
-
-def _get_github_token_from_env() -> str | None:
-    for env_var in GITHUB_TOKEN_ENV_VARS:
-        token = os.getenv(env_var)
-        if token:
-            return token
-    return None
-
-
-def _normalize_query_item(value: object) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (str, int, float)):
-        return str(value)
-    raise TypeError(f"Unsupported query list item type: {type(value)!r}")
-
-
-def _normalize_query_value(value: object) -> QueryParamValue:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (str, int, float)):
-        return str(value)
-    if isinstance(value, list):
-        return [_normalize_query_item(item) for item in value]
-    raise TypeError(f"Unsupported query parameter type: {type(value)!r}")
-
-
-def _decode_github_file_content(file_content: GitHubFileContent) -> str:
-    if file_content.content is None:
-        raise ValueError(
-            f"GitHub file response for {file_content.path} is missing content"
+    @classmethod
+    def from_data(
+        cls, data: SkillsMpErrorApiResponseData
+    ) -> "SkillsMpErrorApiResponse":
+        meta = data.get("meta")
+        return cls(
+            success=_expect_bool(data["success"]),
+            error=SkillsMpError.from_data(data["error"]),
+            meta=None if meta is None else SkillsMpMeta.from_data(meta),
         )
-    if file_content.encoding not in (None, "base64"):
-        raise ValueError(
-            f"Unsupported GitHub file encoding for {file_content.path}: {file_content.encoding}"
-        )
-    normalized_content = file_content.content.replace("\n", "")
-    return base64.b64decode(normalized_content).decode("utf-8")
 
 
-def _extract_commit_sha_from_html_url(html_url: str | None) -> str | None:
-    if html_url is None:
-        return None
-    parts = [part for part in html_url.split("/") if part]
-    if len(parts) < 6 or parts[0] not in {"http:", "https:"}:
-        return None
-    if parts[1] != "github.com" or parts[4] not in {"blob", "tree"}:
-        return None
-    return parts[5]
-
-
-def _looks_like_commit_sha(value: str) -> bool:
-    return len(value) == 40 and all(
-        character in "0123456789abcdefABCDEF" for character in value
-    )
-
-
-def _extract_github_archive_files(
-    archive_bytes: bytes,
-    *,
-    commit_sha: str,
-) -> dict[PurePosixPath, GitHubFileBlob]:
-    files: dict[PurePosixPath, GitHubFileBlob] = {}
-    try:
-        with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as archive:
-            for member in archive.getmembers():
-                if not member.isfile():
-                    continue
-                member_path = PurePosixPath(member.name)
-                if len(member_path.parts) < 2:
-                    continue
-                extracted = archive.extractfile(member)
-                if extracted is None:
-                    continue
-                content_bytes = extracted.read()
-                try:
-                    content = content_bytes.decode("utf-8")
-                except UnicodeDecodeError:
-                    continue
-                relative_path = PurePosixPath(*member_path.parts[1:])
-                files[relative_path] = GitHubFileBlob(
-                    path=relative_path,
-                    content=content,
-                    size=len(content_bytes),
-                    commit_sha=commit_sha,
-                )
-    except tarfile.TarError as exc:
-        raise ValueError("Invalid GitHub archive response") from exc
-    return files
-
-
-class _SkillsMpBase(abc.ABC):
+class _SkillsMpBase:
     def __init__(
         self,
         *,
@@ -267,147 +221,101 @@ class _SkillsMpBase(abc.ABC):
         github_token: str | None = None,
         proxy: str | None = None,
     ) -> None:
-        self.base_url = base_url or "https://skillsmp.com/api/v1"
-        self._provided_api_key = api_key
-        self._provided_github_token = github_token
-        self._proxy = proxy
+        self.base_url = base_url
+        self.api_key = api_key
+        self.github_token = github_token
+        self.proxy = proxy
 
-    def _build_url(self, path: str) -> str:
-        return f"{self.base_url}{path}"
-
-    def _get_api_key(self) -> str:
-        api_key = self._provided_api_key or _get_api_key_from_env()
-        if not api_key:
-            raise ValueError(
-                "API key is required. Set it via environment variable "
-                f"{SKILLSMP_API_KEY_ENV_VAR} or pass it to the client."
-            )
-        return api_key
-
-    def _build_headers(self, *, require_api_key: bool = False) -> HeadersMap:
-        headers: HeadersMap = {
-            "Accept": "application/json",
-        }
-        api_key = self._provided_api_key or _get_api_key_from_env()
-        if api_key is not None:
-            headers["Authorization"] = f"Bearer {api_key}"
-        elif require_api_key:
-            self._get_api_key()
-        return headers
-
-    def _get_github_token(self) -> str | None:
-        return self._provided_github_token or _get_github_token_from_env()
-
-    def _build_github_headers(self) -> HeadersMap:
-        headers: HeadersMap = {
-            "Accept": "application/vnd.github+json",
-        }
-        github_token = self._get_github_token()
-        if github_token is not None:
-            headers["Authorization"] = f"Bearer {github_token}"
-        return headers
-
-    def _build_request(
-        self,
-        path: str,
-        query_params: dict[str, object],
-        *,
-        require_api_key: bool = False,
-    ) -> tuple[str, HeadersMap, QueryParams]:
-        headers = self._build_headers(require_api_key=require_api_key)
-        params: QueryParams = {}
-        for key, value in query_params.items():
-            normalized_value = _normalize_query_value(value)
-            if normalized_value is not None:
-                params[key] = normalized_value
-        return self._build_url(path), headers, params
-
-    def _build_proxies(self) -> ProxyConfig | None:
-        if self._proxy is None:
-            return None
+    def _client_kwargs(self) -> bridge.ClientConfigKwargs:
         return {
-            "http": self._proxy,
-            "https": self._proxy,
+            "base_url": self.base_url,
+            "api_key": self.api_key,
+            "github_token": self.github_token,
+            "proxy": self.proxy,
         }
 
-    def _build_github_api_url(
+
+class SkillsMp(_SkillsMpBase):
+    def search(
+        self,
+        q: str,
+        *,
+        page: int | None = None,
+        limit: int | None = None,
+        sort_by: str | None = None,
+        category: str | None = None,
+        occupation: str | None = None,
+    ) -> Response[SkillsMpSearchApiResponse]:
+        payload = bridge.skillsmp_search(
+            q,
+            page=page,
+            limit=limit,
+            sort_by=sort_by,
+            category=category,
+            occupation=occupation,
+            **self._client_kwargs(),
+        )
+        return Response(payload, SkillsMpSearchApiResponse.from_data(payload))
+
+    def ai_search(self, q: str) -> Response[SkillsMpAiSearchApiResponse]:
+        payload = bridge.skillsmp_ai_search(q, **self._client_kwargs())
+        return Response(payload, SkillsMpAiSearchApiResponse.from_data(payload))
+
+    def fetch_github_directory(
+        self,
+        location: GitHubSkillLocation,
+        current_path: PurePosixPath,
+    ) -> list[GitHubContentItem]:
+        payload = bridge.skillsmp_fetch_github_directory(
+            location.url,
+            current_path.as_posix(),
+            **self._client_kwargs(),
+        )
+        return [GitHubContentItem.from_data(item) for item in payload]
+
+    def fetch_github_file(
         self,
         location: GitHubSkillLocation,
         path: PurePosixPath,
-    ) -> str:
-        base_url = (
-            f"{GITHUB_API_BASE_URL}/repos/{location.owner}/{location.repo}/contents"
+    ) -> GitHubFileBlob:
+        payload = bridge.skillsmp_fetch_github_file(
+            location.url,
+            path.as_posix(),
+            **self._client_kwargs(),
         )
-        if str(path) in {"", "."}:
-            return base_url
-        return f"{base_url}/{path.as_posix()}"
+        return GitHubFileBlob.from_data(payload)
 
-    def _build_github_repo_api_url(
-        self, location: GitHubSkillLocation, suffix: str = ""
-    ) -> str:
-        base_url = f"{GITHUB_API_BASE_URL}/repos/{location.owner}/{location.repo}"
-        if not suffix:
-            return base_url
-        return f"{base_url}/{suffix.lstrip('/')}"
+    def fetch_github_snapshot(
+        self,
+        location: GitHubSkillLocation,
+    ) -> GitHubRepositorySnapshot:
+        payload = bridge.skillsmp_fetch_github_snapshot(
+            location.url,
+            **self._client_kwargs(),
+        )
+        return GitHubRepositorySnapshot.from_data(payload)
+
+    def resolve_github_ref_and_commit_sha(
+        self,
+        location: GitHubSkillLocation,
+    ) -> tuple[str, str]:
+        payload = bridge.skillsmp_resolve_github_ref_and_commit_sha(
+            location.url,
+            **self._client_kwargs(),
+        )
+        if len(payload) != 2:
+            raise ValueError(f"Expected 2 values, got {len(payload)}")
+        return bridge.ensure_string(payload[0]), bridge.ensure_string(payload[1])
 
 
 class AsyncSkillsMp(_SkillsMpBase):
-    def __init__(
-        self,
-        client: niquests.AsyncSession | None = None,
-        *,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        github_token: str | None = None,
-        proxy: str | None = None,
-    ) -> None:
-        super().__init__(
-            base_url=base_url,
-            api_key=api_key,
-            github_token=github_token,
-            proxy=proxy,
+    def _sync(self) -> SkillsMp:
+        return SkillsMp(
+            base_url=self.base_url,
+            api_key=self.api_key,
+            github_token=self.github_token,
+            proxy=self.proxy,
         )
-        self._client = client if client is not None else niquests.AsyncSession()
-
-    async def _request(
-        self,
-        path: str,
-        query_params: dict[str, object],
-        response_model: type[ResponseModelT],
-        *,
-        require_api_key: bool = False,
-    ) -> AsyncResponse[ResponseModelT]:
-        url, headers, params = self._build_request(
-            path,
-            query_params,
-            require_api_key=require_api_key,
-        )
-        response = await self._client.get(
-            url,
-            headers=headers,
-            params=params,
-            proxies=self._build_proxies(),
-            stream=False,
-        )
-        response.raise_for_status()
-        return AsyncResponse(response, response_model)
-
-    async def _github_request(
-        self,
-        url: str,
-        response_model: type[ResponseModelT],
-        *,
-        params: dict[str, object] | None = None,
-    ) -> AsyncResponse[ResponseModelT]:
-        response = await self._client.get(
-            url,
-            headers=self._build_github_headers(),
-            params=params,
-            proxies=self._build_proxies(),
-            stream=False,
-        )
-        response.raise_for_status()
-        return AsyncResponse(response, response_model)
 
     async def search(
         self,
@@ -419,241 +327,60 @@ class AsyncSkillsMp(_SkillsMpBase):
         category: str | None = None,
         occupation: str | None = None,
     ) -> AsyncResponse[SkillsMpSearchApiResponse]:
-        return await self._request(
-            "/skills/search",
-            {
-                "q": q,
-                "page": page,
-                "limit": limit,
-                "sortBy": sort_by,
-                "category": category,
-                "occupation": occupation,
-            },
-            SkillsMpSearchApiResponse,
+        response = self._sync().search(
+            q,
+            page=page,
+            limit=limit,
+            sort_by=sort_by,
+            category=category,
+            occupation=occupation,
         )
+        return AsyncResponse(response.raw_response, response.parsed_data)
 
     async def ai_search(self, q: str) -> AsyncResponse[SkillsMpAiSearchApiResponse]:
-        return await self._request(
-            "/skills/ai-search",
-            {"q": q},
-            SkillsMpAiSearchApiResponse,
-            require_api_key=True,
-        )
+        response = self._sync().ai_search(q)
+        return AsyncResponse(response.raw_response, response.parsed_data)
 
     async def fetch_github_directory(
         self,
         location: GitHubSkillLocation,
         current_path: PurePosixPath,
     ) -> list[GitHubContentItem]:
-        response = await self._github_request(
-            self._build_github_api_url(location, current_path),
-            GitHubContentEntries,
-            params={"ref": location.ref} if location.ref is not None else {},
-        )
-        entries = (await response.parsed_data).root
-        return [
-            GitHubContentItem(
-                type=entry.type,
-                name=entry.name,
-                path=PurePosixPath(entry.path),
-                commit_sha=_extract_commit_sha_from_html_url(entry.html_url),
-            )
-            for entry in entries
-        ]
+        return self._sync().fetch_github_directory(location, current_path)
 
     async def fetch_github_file(
         self,
         location: GitHubSkillLocation,
         path: PurePosixPath,
     ) -> GitHubFileBlob:
-        response = await self._github_request(
-            self._build_github_api_url(location, path),
-            GitHubFileContent,
-            params={"ref": location.ref} if location.ref is not None else {},
-        )
-        file_content = await response.parsed_data
-        return GitHubFileBlob(
-            path=PurePosixPath(file_content.path),
-            content=_decode_github_file_content(file_content),
-            size=file_content.size or 0,
-            commit_sha=_extract_commit_sha_from_html_url(file_content.html_url),
-        )
+        return self._sync().fetch_github_file(location, path)
 
-
-class SkillsMp(_SkillsMpBase):
-    def __init__(
-        self,
-        client: niquests.Session | None = None,
-        *,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        github_token: str | None = None,
-        proxy: str | None = None,
-    ) -> None:
-        super().__init__(
-            base_url=base_url,
-            api_key=api_key,
-            github_token=github_token,
-            proxy=proxy,
-        )
-        self._client = client if client is not None else niquests.Session()
-
-    def _request(
-        self,
-        path: str,
-        query_params: dict[str, object],
-        response_model: type[ResponseModelT],
-        *,
-        require_api_key: bool = False,
-    ) -> Response[ResponseModelT]:
-        url, headers, params = self._build_request(
-            path,
-            query_params,
-            require_api_key=require_api_key,
-        )
-        response = self._client.get(
-            url,
-            headers=headers,
-            params=params,
-            proxies=self._build_proxies(),
-            stream=False,
-        )
-        response.raise_for_status()
-        return Response(response, response_model)
-
-    def _github_request(
-        self,
-        url: str,
-        response_model: type[ResponseModelT],
-        *,
-        params: dict[str, object] | None = None,
-    ) -> Response[ResponseModelT]:
-        response = self._client.get(
-            url,
-            headers=self._build_github_headers(),
-            params=params,
-            proxies=self._build_proxies(),
-            stream=False,
-        )
-        response.raise_for_status()
-        return Response(response, response_model)
-
-    def _github_binary_request(
-        self,
-        url: str,
-        *,
-        params: dict[str, object] | None = None,
-    ) -> bytes:
-        response = self._client.get(
-            url,
-            headers=self._build_github_headers(),
-            params=params,
-            proxies=self._build_proxies(),
-            stream=False,
-        )
-        response.raise_for_status()
-        return bytes(response.content)
-
-    def search(
-        self,
-        q: str,
-        *,
-        page: int | None = None,
-        limit: int | None = None,
-        sort_by: str | None = None,
-        category: str | None = None,
-        occupation: str | None = None,
-    ) -> Response[SkillsMpSearchApiResponse]:
-        return self._request(
-            "/skills/search",
-            {
-                "q": q,
-                "page": page,
-                "limit": limit,
-                "sortBy": sort_by,
-                "category": category,
-                "occupation": occupation,
-            },
-            SkillsMpSearchApiResponse,
-        )
-
-    def ai_search(self, q: str) -> Response[SkillsMpAiSearchApiResponse]:
-        return self._request(
-            "/skills/ai-search",
-            {"q": q},
-            SkillsMpAiSearchApiResponse,
-            require_api_key=True,
-        )
-
-    def fetch_github_directory(
-        self,
-        location: GitHubSkillLocation,
-        current_path: PurePosixPath,
-    ) -> list[GitHubContentItem]:
-        response = self._github_request(
-            self._build_github_api_url(location, current_path),
-            GitHubContentEntries,
-            params={"ref": location.ref} if location.ref is not None else {},
-        )
-        return [
-            GitHubContentItem(
-                type=entry.type,
-                name=entry.name,
-                path=PurePosixPath(entry.path),
-                commit_sha=_extract_commit_sha_from_html_url(entry.html_url),
-            )
-            for entry in response.parsed_data.root
-        ]
-
-    def fetch_github_file(
-        self,
-        location: GitHubSkillLocation,
-        path: PurePosixPath,
-    ) -> GitHubFileBlob:
-        response = self._github_request(
-            self._build_github_api_url(location, path),
-            GitHubFileContent,
-            params={"ref": location.ref} if location.ref is not None else {},
-        )
-        file_content = response.parsed_data
-        return GitHubFileBlob(
-            path=PurePosixPath(file_content.path),
-            content=_decode_github_file_content(file_content),
-            size=file_content.size or 0,
-            commit_sha=_extract_commit_sha_from_html_url(file_content.html_url),
-        )
-
-    def fetch_github_snapshot(
+    async def fetch_github_snapshot(
         self,
         location: GitHubSkillLocation,
     ) -> GitHubRepositorySnapshot:
-        ref, commit_sha = self.resolve_github_ref_and_commit_sha(location)
-        archive_bytes = self._github_binary_request(
-            self._build_github_repo_api_url(location, f"tarball/{commit_sha}")
-        )
-        return GitHubRepositorySnapshot(
-            ref=ref,
-            commit_sha=commit_sha,
-            files=_extract_github_archive_files(archive_bytes, commit_sha=commit_sha),
-        )
+        return self._sync().fetch_github_snapshot(location)
 
-    def resolve_github_ref_and_commit_sha(
+    async def resolve_github_ref_and_commit_sha(
         self,
         location: GitHubSkillLocation,
     ) -> tuple[str, str]:
-        if location.ref is not None and _looks_like_commit_sha(location.ref):
-            return location.ref, location.ref
+        return self._sync().resolve_github_ref_and_commit_sha(location)
 
-        ref = location.ref
-        if ref is None:
-            repository = self._github_request(
-                self._build_github_repo_api_url(location),
-                GitHubRepositoryInfo,
-            ).parsed_data
-            ref = repository.default_branch
 
-        commit = self._github_request(
-            self._build_github_repo_api_url(location, f"commits/{ref}"),
-            GitHubCommitInfo,
-        ).parsed_data
-        return ref, commit.sha
+def _expect_bool(value: bridge.BridgeValue) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError(f"Expected bool, got {type(value)!r}")
+    return value
+
+
+def _expect_int(value: bridge.BridgeValue) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise TypeError(f"Expected int, got {type(value)!r}")
+    return value
+
+
+def _optional_string(value: bridge.BridgeValue | None) -> str | None:
+    if value is None:
+        return None
+    return bridge.ensure_string(value)

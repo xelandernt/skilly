@@ -1,6 +1,5 @@
 from pathlib import Path
 
-from skilly.filesystem import FileSystem
 from skilly.skills import Skill, discover_venv_skills
 
 
@@ -284,54 +283,6 @@ Invalid extra field.
     assert skills[0].name == "broken-skill"
 
 
-def test_discover_venv_uses_filesystem_protocol_for_traversal() -> None:
-    file_system = FakeFileSystem()
-    venv_path = Path("/workspace/.venv")
-    site_packages = Path("/workspace/.venv/lib/python3.13/site-packages")
-    file_system.add_dir(site_packages)
-    file_system.add_file(
-        site_packages / "demo-pkg-1.0.0.dist-info/METADATA",
-        "\n".join(
-            [
-                "Metadata-Version: 2.4",
-                "Name: demo-pkg",
-                "Version: 1.0.0",
-                "",
-            ]
-        ),
-    )
-    file_system.add_file(
-        site_packages / "demo-pkg-1.0.0.dist-info/RECORD",
-        "demo_pkg/.agents/skills/demo-skill/SKILL.md,,",
-    )
-    file_system.add_file(
-        site_packages / "demo_pkg/.agents/skills/demo-skill/SKILL.md",
-        """---
-name: demo-skill
-description: Use when the task mentions demos.
----
-Demo instructions.
-""",
-    )
-    file_system.add_file(
-        site_packages / "demo_pkg/.agents/skills/demo-skill/scripts/demo.py",
-        "print('demo')\n",
-    )
-    file_system.add_file(
-        site_packages / "demo_pkg/.agents/skills/demo-skill/references/REFERENCE.md",
-        "# Demo reference\n",
-    )
-
-    skills = discover_venv_skills(venv_path, file_system=file_system)
-
-    assert [skill.package_name for skill in skills] == ["demo-pkg"]
-    assert skills[0].name == "demo-skill"
-    assert [resource.relative_path.as_posix() for resource in skills[0].resources] == [
-        "references/REFERENCE.md",
-        "scripts/demo.py",
-    ]
-
-
 def test_discover_venv_supports_windows_site_packages_and_record_paths(
     tmp_path: Path,
 ) -> None:
@@ -430,80 +381,3 @@ def write_distribution(
 def write_skill(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-
-
-class FakeFileSystem(FileSystem):
-    def __init__(self) -> None:
-        self._dirs: set[Path] = set()
-        self._files: dict[Path, str] = {}
-
-    def add_dir(self, path: Path) -> None:
-        current = self.resolve(path)
-        while True:
-            self._dirs.add(current)
-            if current.parent == current:
-                break
-            current = current.parent
-
-    def add_file(self, path: Path, content: str) -> None:
-        resolved = self.resolve(path)
-        self.add_dir(resolved.parent)
-        self._files[resolved] = content
-
-    def read_file(self, path: Path) -> str:
-        resolved = self.resolve(path)
-        if resolved not in self._files:
-            raise FileNotFoundError(resolved)
-        return self._files[resolved]
-
-    def write_file(self, path: Path, content: str) -> None:
-        self.add_file(path, content)
-
-    def list_files(self, path: Path) -> list[str]:
-        resolved = self.resolve(path)
-        if resolved not in self._dirs:
-            raise FileNotFoundError(resolved)
-
-        children: set[str] = set()
-        for directory in self._dirs:
-            if directory.parent == resolved and directory != resolved:
-                children.add(directory.name)
-        for file_path in self._files:
-            if file_path.parent == resolved:
-                children.add(file_path.name)
-        return sorted(children)
-
-    def exists(self, path: Path) -> bool:
-        resolved = self.resolve(path)
-        return resolved in self._dirs or resolved in self._files
-
-    def is_dir(self, path: Path) -> bool:
-        return self.resolve(path) in self._dirs
-
-    def make_dir(
-        self, path: Path, *, parents: bool = False, exist_ok: bool = False
-    ) -> None:
-        del exist_ok
-        resolved = self.resolve(path)
-        if parents:
-            self.add_dir(resolved)
-            return
-        if resolved.parent not in self._dirs:
-            raise FileNotFoundError(resolved.parent)
-        self._dirs.add(resolved)
-
-    def remove_tree(self, path: Path) -> None:
-        resolved = self.resolve(path)
-        self._files = {
-            file_path: content
-            for file_path, content in self._files.items()
-            if not file_path.is_relative_to(resolved)
-        }
-        self._dirs = {
-            directory
-            for directory in self._dirs
-            if not directory.is_relative_to(resolved) or directory == Path("/")
-        }
-
-    def resolve(self, path: Path) -> Path:
-        return Path("/").joinpath(path).resolve() if not path.is_absolute() else path

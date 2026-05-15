@@ -1,14 +1,11 @@
+from enum import Enum
 from pathlib import Path
 from typing import Final, Literal, TypeAlias
-from enum import Enum
 
-try:
-    from enum import StrEnum
-except ImportError:
 
-    class StrEnum(str, Enum):
-        def __str__(self) -> str:
-            return str(self.value)
+class _StrEnum(str, Enum):
+    def __str__(self) -> str:
+        return str(self.value)
 
 
 DEFAULT_SKILLS_PATH: Final[Path] = Path(".agents/skills")
@@ -19,7 +16,7 @@ RESOURCE_KIND_ASSET: Final[ResourceKind] = "asset"
 RESOURCE_KIND_OTHER: Final[ResourceKind] = "other"
 
 
-class SkillInstallStatus(StrEnum):
+class SkillInstallStatus(_StrEnum):
     INSTALLED = "installed"
     INSTALLABLE = "installable"
     UPDATABLE = "updatable"

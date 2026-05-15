@@ -44,4 +44,18 @@ hooks = [
     language = "system",
     pass_filenames = false
     },
+    {
+    id = "rust-check",
+    name = "rust check",
+    entry = "cargo check",
+    language = "system",
+    pass_filenames = false
+    },
+    {
+    id = "rust-fmt",
+    name = "rust fmt",
+    entry = "cargo fmt",
+    language = "system",
+    pass_filenames = false
+    },
 ]
