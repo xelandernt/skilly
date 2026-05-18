@@ -330,7 +330,7 @@ fn skill_from_github_fetcher_impl(
     }
 }
 
-#[pyclass(name = "Skill", module = "skilly._rust")]
+#[pyclass(name = "Skill", module = "skilly._core")]
 #[derive(Clone)]
 struct PySkill {
     inner: SkillData,
@@ -1149,8 +1149,8 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
 }
 
 #[pymodule]
-#[pyo3(name = "_rust")]
-fn rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
+#[pyo3(name = "_core")]
+fn python_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySkill>()?;
     m.add_function(wrap_pyfunction!(skill_from_text_py, m)?)?;
     m.add_function(wrap_pyfunction!(skill_from_file_py, m)?)?;

@@ -4,10 +4,10 @@ from collections.abc import Mapping, Sequence
 from os import PathLike
 from typing import TYPE_CHECKING, Protocol, TypeAlias, TypedDict
 
-from . import _rust
+from . import _core
 
 if TYPE_CHECKING:
-    from ._rust import (
+    from ._core import (
         GitHubContentItemData,
         GitHubFileBlobData,
         GitHubRepositorySnapshotData,
@@ -64,7 +64,7 @@ def skill_from_text(
     github_commit_sha: str | None = None,
     skillsmp_id: str | None = None,
 ) -> Skill:
-    return _rust.skill_from_text(
+    return _core.skill_from_text(
         text,
         path=path,
         source=source,
@@ -85,7 +85,7 @@ def skill_from_file(
     github_commit_sha: str | None = None,
     skillsmp_id: str | None = None,
 ) -> Skill:
-    return _rust.skill_from_file(
+    return _core.skill_from_file(
         path,
         source=source,
         package_name=package_name,
@@ -105,7 +105,7 @@ def skill_from_dir(
     github_commit_sha: str | None = None,
     skillsmp_id: str | None = None,
 ) -> Skill:
-    return _rust.skill_from_dir(
+    return _core.skill_from_dir(
         path,
         source=source,
         package_name=package_name,
@@ -117,7 +117,7 @@ def skill_from_dir(
 
 
 def skill_render(skill: Skill, metadata: dict[str, str] | None = None) -> str:
-    return _rust.skill_render(skill, metadata)
+    return _core.skill_render(skill, metadata)
 
 
 def skill_install_to(
@@ -126,7 +126,7 @@ def skill_install_to(
     skill_name: str | None = None,
     overwrite: bool = False,
 ) -> Skill:
-    return _rust.skill_install_to(
+    return _core.skill_install_to(
         skill,
         directory=directory,
         skill_name=skill_name,
@@ -135,15 +135,15 @@ def skill_install_to(
 
 
 def discover_installed_skills(directory: StrPath | None = None) -> list[Skill]:
-    return _rust.discover_installed_skills(directory)
+    return _core.discover_installed_skills(directory)
 
 
 def discover_venv_skills(path: StrPath | None = None) -> list[Skill]:
-    return _rust.discover_venv_skills(path)
+    return _core.discover_venv_skills(path)
 
 
 def parse_github_skill_url(github_url: str) -> GitHubSkillLocationData:
-    return _rust.parse_github_skill_url(github_url)
+    return _core.parse_github_skill_url(github_url)
 
 
 def discover_github_skills(
@@ -155,7 +155,7 @@ def discover_github_skills(
     github_token: str | None = None,
     proxy: str | None = None,
 ) -> list[Skill]:
-    return _rust.discover_github_skills(
+    return _core.discover_github_skills(
         github_url,
         source=source,
         skillsmp_id=skillsmp_id,
@@ -167,11 +167,11 @@ def discover_github_skills(
 
 
 def github_versions_match(installed: Skill, available: Skill) -> bool:
-    return _rust.github_versions_match(installed, available)
+    return _core.github_versions_match(installed, available)
 
 
 def remove_skill(name: str, directory: StrPath | None = None) -> Skill:
-    return _rust.remove_skill(name, directory)
+    return _core.remove_skill(name, directory)
 
 
 def project_requirements(
@@ -179,7 +179,7 @@ def project_requirements(
     include_dev: bool = False,
     include_extras: list[str] | None = None,
 ) -> list[str]:
-    return _rust.project_requirements(
+    return _core.project_requirements(
         pyproject_toml_path=pyproject_toml_path,
         include_dev=include_dev,
         include_extras=include_extras,
@@ -198,7 +198,7 @@ def skillsmp_search(
     github_token: str | None = None,
     proxy: str | None = None,
 ) -> SkillsMpSearchApiResponseData:
-    return _rust.skillsmp_search(
+    return _core.skillsmp_search(
         q,
         page=page,
         limit=limit,
@@ -219,7 +219,7 @@ def skillsmp_ai_search(
     github_token: str | None = None,
     proxy: str | None = None,
 ) -> SkillsMpAiSearchApiResponseData:
-    return _rust.skillsmp_ai_search(
+    return _core.skillsmp_ai_search(
         q,
         base_url=base_url,
         api_key=api_key,
@@ -236,7 +236,7 @@ def skillsmp_fetch_github_directory(
     github_token: str | None = None,
     proxy: str | None = None,
 ) -> list[GitHubContentItemData]:
-    return _rust.skillsmp_fetch_github_directory(
+    return _core.skillsmp_fetch_github_directory(
         github_url,
         current_path,
         base_url=base_url,
@@ -254,7 +254,7 @@ def skillsmp_fetch_github_file(
     github_token: str | None = None,
     proxy: str | None = None,
 ) -> GitHubFileBlobData:
-    return _rust.skillsmp_fetch_github_file(
+    return _core.skillsmp_fetch_github_file(
         github_url,
         path,
         base_url=base_url,
@@ -271,7 +271,7 @@ def skillsmp_fetch_github_snapshot(
     github_token: str | None = None,
     proxy: str | None = None,
 ) -> GitHubRepositorySnapshotData:
-    return _rust.skillsmp_fetch_github_snapshot(
+    return _core.skillsmp_fetch_github_snapshot(
         github_url,
         base_url=base_url,
         api_key=api_key,
@@ -287,7 +287,7 @@ def skillsmp_resolve_github_ref_and_commit_sha(
     github_token: str | None = None,
     proxy: str | None = None,
 ) -> tuple[str, str]:
-    return _rust.skillsmp_resolve_github_ref_and_commit_sha(
+    return _core.skillsmp_resolve_github_ref_and_commit_sha(
         github_url,
         base_url=base_url,
         api_key=api_key,
@@ -297,7 +297,7 @@ def skillsmp_resolve_github_ref_and_commit_sha(
 
 
 def run_cli(args: list[str]) -> int:
-    return _rust.run_cli(args)
+    return _core.run_cli(args)
 
 
 def ensure_object(value: BridgeValue) -> BridgeObject:

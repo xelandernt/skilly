@@ -41,7 +41,7 @@ pythonpath=["src", "tests"]
 [tool.maturin]
 bindings = "pyo3"
 python-source = "src"
-module-name = "skilly._rust"
+module-name = "skilly._core"
 features = ["extension-module"]
 
 [tool.ruff]

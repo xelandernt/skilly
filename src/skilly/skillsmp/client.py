@@ -14,7 +14,7 @@ from ..skills import (
 from .response import AsyncResponse, Response
 
 if TYPE_CHECKING:
-    from .._rust import (
+    from .._core import (
         SkillsMpAiSearchApiResponseData,
         SkillsMpAiSearchData as SkillsMpAiSearchPayload,
         SkillsMpErrorApiResponseData,

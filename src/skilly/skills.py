@@ -5,11 +5,11 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Protocol
 
 from . import _bridge as bridge
-from ._rust import Skill
+from ._core import Skill
 from .constants import DEFAULT_SKILLS_PATH
 
 if TYPE_CHECKING:
-    from ._rust import (
+    from ._core import (
         GitHubContentItemData,
         GitHubFileBlobData,
         GitHubRepositorySnapshotData,
