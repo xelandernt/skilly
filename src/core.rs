@@ -163,13 +163,59 @@ fn split_frontmatter(text: &str) -> Result<(Vec<String>, String)> {
     bail!("unterminated YAML frontmatter");
 }
 
-fn parse_frontmatter(lines: &[String]) -> Result<Mapping> {
-    let parsed: YamlValue = serde_yaml::from_str(&lines.join("\n"))
-        .map_err(|error| anyhow!("invalid YAML frontmatter: {error}"))?;
+fn parse_yaml_frontmatter(text: &str) -> Result<Mapping> {
+    let parsed: YamlValue =
+        serde_yaml::from_str(text).map_err(|error| anyhow!("invalid YAML frontmatter: {error}"))?;
     match parsed {
         YamlValue::Null => Ok(Mapping::new()),
         YamlValue::Mapping(mapping) => Ok(mapping),
         _ => bail!("frontmatter must be a mapping"),
+    }
+}
+
+fn should_quote_relaxed_yaml_scalar(value: &str) -> bool {
+    !matches!(
+        value.chars().next(),
+        None | Some('|') | Some('>') | Some('"') | Some('\'') | Some('[') | Some('{')
+    )
+}
+
+fn relax_frontmatter_lines(lines: &[String]) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            let Some((prefix, suffix)) = line.split_once(':') else {
+                return line.clone();
+            };
+            let trimmed_value = suffix.trim_start();
+            if trimmed_value.is_empty()
+                || !trimmed_value.contains(": ")
+                || !should_quote_relaxed_yaml_scalar(trimmed_value)
+            {
+                return line.clone();
+            }
+            let indentation = suffix.len() - trimmed_value.len();
+            format!(
+                "{prefix}:{}{}",
+                " ".repeat(indentation),
+                format_scalar(trimmed_value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn parse_frontmatter(lines: &[String]) -> Result<Mapping> {
+    let frontmatter = lines.join("\n");
+    match parse_yaml_frontmatter(&frontmatter) {
+        Ok(mapping) => Ok(mapping),
+        Err(error) => {
+            let relaxed_frontmatter = relax_frontmatter_lines(lines);
+            if relaxed_frontmatter == frontmatter {
+                return Err(error);
+            }
+            parse_yaml_frontmatter(&relaxed_frontmatter).map_err(|_| error)
+        }
     }
 }
 
@@ -1082,7 +1128,7 @@ pub fn build_skill_from_github_files(
     });
     let mut skill = SkillData::from_text_with_overrides(
         &skill_blob.content,
-        Some(Path::new(skill_dir)),
+        None,
         Some(source),
         None,
         None,

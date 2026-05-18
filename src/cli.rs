@@ -21,6 +21,9 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wra
 use std::fs;
 use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 const BACK_CHOICE: &str = "back";
 const DELETE_CHOICE: &str = "delete";
@@ -30,6 +33,7 @@ const REMOVE_CHOICE: &str = "remove";
 const UPDATE_CHOICE: &str = "update";
 const DEFAULT_HELP_TEXT: &str = "Up/Down move | Enter select | Esc cancel";
 const DEFAULT_EMPTY_PREVIEW: &str = "No details available.";
+const LOADING_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
 #[derive(Debug, Clone)]
 struct MenuItemUi {
@@ -99,43 +103,86 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    #[command(about = "Scan dependency-provided skills from pyproject.toml and .venv.")]
     Scan {
-        #[arg(long, default_value = DEFAULT_SKILLS_PATH)]
+        #[arg(
+            long,
+            default_value = DEFAULT_SKILLS_PATH,
+            help = "Directory where skilly installs managed skills."
+        )]
         directory: PathBuf,
-        #[arg(long)]
+        #[arg(long, help = "Include development dependencies while scanning.")]
         dev: bool,
     },
+    #[command(about = "Download one or more skills from a GitHub repository URL.")]
     Download {
+        #[arg(help = "GitHub repository, tree, or skill URL to download from.")]
         github_url: String,
-        #[arg(long, default_value = DEFAULT_SKILLS_PATH)]
+        #[arg(
+            long,
+            default_value = DEFAULT_SKILLS_PATH,
+            help = "Directory where downloaded skills are installed."
+        )]
         directory: PathBuf,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Select a specific skill when the GitHub URL resolves to multiple skills."
+        )]
         skill_name: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "Download every skill found at the GitHub URL.")]
         all: bool,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Overwrite existing files when installing the downloaded skill."
+        )]
         overwrite: bool,
-        #[arg(long)]
+        #[arg(long, help = "GitHub token used for GitHub API requests.")]
         github_token: Option<String>,
     },
+    #[command(about = "Browse, update, or remove installed skills.")]
     List {
-        #[arg(long, default_value = DEFAULT_SKILLS_PATH)]
+        #[arg(
+            long,
+            default_value = DEFAULT_SKILLS_PATH,
+            help = "Directory containing installed skills."
+        )]
         directory: PathBuf,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "GitHub token used when checking for updates to GitHub-backed skills."
+        )]
         github_token: Option<String>,
     },
+    #[command(
+        about = "Show or apply dependency skill updates discovered from the current project."
+    )]
     Update {
-        #[arg(long, default_value = DEFAULT_SKILLS_PATH)]
+        #[arg(
+            long,
+            default_value = DEFAULT_SKILLS_PATH,
+            help = "Directory containing installed skills."
+        )]
         directory: PathBuf,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Apply the discovered updates instead of only printing them."
+        )]
         force: bool,
     },
+    #[command(about = "Remove one installed skill by directory name.")]
     Remove {
+        #[arg(help = "Installed skill directory name to remove.")]
         name: String,
-        #[arg(long, default_value = DEFAULT_SKILLS_PATH)]
+        #[arg(
+            long,
+            default_value = DEFAULT_SKILLS_PATH,
+            help = "Directory containing installed skills."
+        )]
         directory: PathBuf,
     },
+    #[command(about = "Search and manage SkillsMP-backed skills.")]
     Skillsmp(SkillsMpCommands),
+    #[command(about = "Utility commands for dependency and virtual environment inspection.")]
     Util(UtilCommands),
 }
 
@@ -147,19 +194,39 @@ struct SkillsMpCommands {
 
 #[derive(Subcommand, Debug)]
 enum SkillsMpSubcommand {
+    #[command(about = "Search SkillsMP and install a selected result.")]
     Search {
+        #[arg(help = "Search query sent to SkillsMP.")]
         query: String,
-        #[arg(long, default_value = DEFAULT_SKILLS_PATH)]
+        #[arg(
+            long,
+            default_value = DEFAULT_SKILLS_PATH,
+            help = "Directory where installed skills are stored."
+        )]
         directory: PathBuf,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Overwrite existing files when installing the selected skill."
+        )]
         overwrite: bool,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "GitHub token used for GitHub API requests while resolving skill contents."
+        )]
         github_token: Option<String>,
     },
+    #[command(about = "Browse installed SkillsMP skills and manage updates.")]
     List {
-        #[arg(long, default_value = DEFAULT_SKILLS_PATH)]
+        #[arg(
+            long,
+            default_value = DEFAULT_SKILLS_PATH,
+            help = "Directory containing installed skills."
+        )]
         directory: PathBuf,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "GitHub token used when checking for updates to SkillsMP-installed skills."
+        )]
         github_token: Option<String>,
     },
 }
@@ -172,18 +239,31 @@ struct UtilCommands {
 
 #[derive(Subcommand, Debug)]
 enum UtilSubcommand {
+    #[command(about = "Print dependency names resolved from pyproject.toml.")]
     Dependencies {
-        #[arg(long, default_value = "pyproject.toml")]
+        #[arg(
+            long,
+            default_value = "pyproject.toml",
+            help = "Path to the pyproject.toml file to inspect."
+        )]
         file: PathBuf,
-        #[arg(long)]
+        #[arg(long, help = "Include development dependencies.")]
         dev: bool,
-        #[arg(long)]
+        #[arg(long, help = "Include dependencies from the given optional extras.")]
         extras: Vec<String>,
     },
+    #[command(about = "List skills discovered inside a virtual environment.")]
     Venv {
-        #[arg(long, default_value = ".venv")]
+        #[arg(
+            long,
+            default_value = ".venv",
+            help = "Virtual environment path to inspect."
+        )]
         path: PathBuf,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Include bundled resource details for each discovered skill."
+        )]
         detailed: bool,
     },
 }
@@ -370,6 +450,62 @@ fn select_menu(menu: MenuUi) -> Result<Option<usize>> {
                     return Ok(None);
                 }
                 _ => {}
+            }
+        }
+    }
+}
+
+fn show_loading_message<T, F>(title: &str, message: &str, work: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    let mut session = TerminalSession::new()?;
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(work());
+    });
+
+    let mut frame_index = 0usize;
+    loop {
+        session.terminal.draw(|frame| {
+            let layout = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Min(3),
+                    Constraint::Length(1),
+                ])
+                .split(frame.area());
+            let spinner = LOADING_FRAMES[frame_index % LOADING_FRAMES.len()];
+            frame.render_widget(
+                Paragraph::new(title.to_string())
+                    .style(Style::default().add_modifier(Modifier::BOLD)),
+                layout[0],
+            );
+            frame.render_widget(
+                Paragraph::new(format!("{spinner} {message}"))
+                    .block(Block::default().borders(Borders::ALL).title("Loading"))
+                    .wrap(Wrap { trim: false }),
+                layout[1],
+            );
+            frame.render_widget(
+                Paragraph::new("Please wait...").style(
+                    Style::default()
+                        .fg(Color::Gray)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+                layout[2],
+            );
+        })?;
+
+        match receiver.recv_timeout(Duration::from_millis(120)) {
+            Ok(result) => return result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                frame_index = frame_index.wrapping_add(1);
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                bail!("Loading task ended unexpectedly");
             }
         }
     }
@@ -775,7 +911,7 @@ fn run_skillsmp_search(
     overwrite: bool,
     config: ClientConfig,
 ) -> Result<()> {
-    let client = SkillsMpClient::new(config)?;
+    let client = SkillsMpClient::new(config.clone())?;
     let response = client.search(query, None, None, None, None, None)?;
     if response.data.skills.is_empty() {
         println!("No SkillsMP skills found for {query}");
@@ -786,14 +922,22 @@ fn run_skillsmp_search(
     let mut messages = Vec::new();
     let mut status_message = None;
     loop {
+        let installed_skills = discover_installed_skills(directory)?;
+        let search_matches = response
+            .data
+            .skills
+            .iter()
+            .map(|skill| (skill, installed_skillsmp_match(skill, &installed_skills)))
+            .collect::<Vec<_>>();
         let mut items = response
             .data
             .skills
             .iter()
-            .map(|skill| MenuItemUi {
-                label: search_skill_label(skill),
-                preview_lines: skillsmp_search_preview_lines(skill),
-                installed: false,
+            .zip(search_matches.iter())
+            .map(|(skill, (_matched_skill, installed))| MenuItemUi {
+                label: search_skill_label(skill, installed.as_ref()),
+                preview_lines: skillsmp_search_preview_lines(skill, installed.as_ref()),
+                installed: installed.is_some(),
             })
             .collect::<Vec<_>>();
         items.push(exit_menu_item("Exit search"));
@@ -812,30 +956,47 @@ fn run_skillsmp_search(
         if index == response.data.skills.len() {
             break;
         }
-        let skill = &response.data.skills[index];
+        let skill = search_matches[index].0;
+        let matched_installed = search_matches[index].1.clone();
         let installable = if let Some(existing) = cache.get(&skill.id) {
             existing.clone()
         } else {
-            let skill_data = discover_github_skills(
-                &client,
-                &skill.github_url,
-                SKILLY_SOURCE_SKILLSMP,
-                Some(skill.id.clone()),
-            )?
-            .into_iter()
-            .next()
-            .context("GitHub URL resolves to no skills")?;
+            let selected_skill = skill.clone();
+            let selected_config = config.clone();
+            let skill_data = show_loading_message(
+                &format!("Preparing {}", selected_skill.name),
+                &format!(
+                    "Downloading skill metadata from GitHub for {}",
+                    selected_skill.github_url
+                ),
+                move || {
+                    let client = SkillsMpClient::new(selected_config)?;
+                    discover_github_skills(
+                        &client,
+                        &selected_skill.github_url,
+                        SKILLY_SOURCE_SKILLSMP,
+                        Some(selected_skill.id.clone()),
+                    )?
+                    .into_iter()
+                    .next()
+                    .context("GitHub URL resolves to no skills")
+                },
+            )?;
             cache.insert(skill.id.clone(), skill_data.clone());
             skill_data
         };
-        let actions = [INSTALL_CHOICE, BACK_CHOICE, EXIT_CHOICE];
+        let downloadable_match = DownloadableSkillMatch {
+            available: installable.clone(),
+            installed: matched_installed,
+        };
+        let actions = downloadable_skill_actions(&downloadable_match);
         let Some(action_index) = select_menu(MenuUi {
             title: format!("Choose an action for {}", skill.name),
             items: actions
                 .iter()
                 .map(|item| MenuItemUi {
                     label: (*item).to_string(),
-                    preview_lines: skillsmp_installable_preview_lines(skill, &installable),
+                    preview_lines: skillsmp_installable_preview_lines(skill, &downloadable_match),
                     installed: false,
                 })
                 .collect(),
@@ -858,6 +1019,27 @@ fn run_skillsmp_search(
                     installed.name,
                     installed.path.as_deref().unwrap_or_default()
                 ));
+                if let Some(message) = status_message.clone() {
+                    messages.push(message);
+                }
+            }
+            UPDATE_CHOICE => {
+                let installed = downloadable_match
+                    .installed
+                    .as_ref()
+                    .context("Only installed skills can be updated")?;
+                status_message = Some(update_skill(directory, installed, &client)?);
+                if let Some(message) = status_message.clone() {
+                    messages.push(message);
+                }
+            }
+            REMOVE_CHOICE => {
+                let installed = downloadable_match
+                    .installed
+                    .as_ref()
+                    .context("Only installed skills can be removed")?;
+                let removed = remove_skill(&skill_directory_name(installed), directory)?;
+                status_message = Some(format!("Removed {}", skill_directory_name(&removed)));
                 if let Some(message) = status_message.clone() {
                     messages.push(message);
                 }
@@ -1071,8 +1253,22 @@ fn update_skill(directory: &Path, skill: &SkillData, client: &SkillsMpClient) ->
     ))
 }
 
-fn search_skill_label(skill: &SkillsMpSkill) -> String {
-    format!("{} [{}] ({})", skill.name, skill.author, skill.id)
+fn skillsmp_search_status(installed: Option<&SkillData>) -> &'static str {
+    if installed.is_some() {
+        STATUS_INSTALLED
+    } else {
+        STATUS_INSTALLABLE
+    }
+}
+
+fn search_skill_label(skill: &SkillsMpSkill, installed: Option<&SkillData>) -> String {
+    format!(
+        "{} [{}] ({}) [{}]",
+        skill.name,
+        skill.author,
+        skill.id,
+        skillsmp_search_status(installed)
+    )
 }
 
 fn skill_directory_name(skill: &SkillData) -> String {
@@ -1271,15 +1467,25 @@ fn installed_skill_preview_lines(skill: &SkillData) -> Vec<String> {
     skill_preview_lines(skill, &[])
 }
 
-fn skillsmp_search_preview_lines(skill: &SkillsMpSkill) -> Vec<String> {
+fn skillsmp_search_preview_lines(
+    skill: &SkillsMpSkill,
+    installed: Option<&SkillData>,
+) -> Vec<String> {
     let mut lines = vec![
         format!("Name: {}", skill.name),
         format!("Description: {}", skill.description),
         format!("Author: {}", skill.author),
+        format!("Status: {}", skillsmp_search_status(installed)),
         format!("SkillsMP Url: {}", skill.skill_url),
         format!("GitHub Url: {}", skill.github_url),
         format!("SkillsMP Id: {}", skill.id),
     ];
+    if let Some(installed) = installed {
+        lines.push(format!(
+            "Installed Directory: {}",
+            skill_directory_name(installed)
+        ));
+    }
     if let Some(stars) = skill.stars {
         lines.push(format!("Stars: {stars}"));
     }
@@ -1291,12 +1497,114 @@ fn skillsmp_search_preview_lines(skill: &SkillsMpSkill) -> Vec<String> {
 
 fn skillsmp_installable_preview_lines(
     skill: &SkillsMpSkill,
-    installable: &SkillData,
+    download_match: &DownloadableSkillMatch,
 ) -> Vec<String> {
-    let mut lines = skillsmp_search_preview_lines(skill);
+    let mut lines = skillsmp_search_preview_lines(skill, download_match.installed.as_ref());
+    lines.push(format!("Resolved Status: {}", download_match.status()));
     lines.push(String::new());
-    lines.extend(bundled_file_lines(installable));
+    lines.extend(bundled_file_lines(&download_match.available));
     lines
+}
+
+fn installed_skillsmp_match(
+    skill: &SkillsMpSkill,
+    installed_skills: &[SkillData],
+) -> Option<SkillData> {
+    installed_skills
+        .iter()
+        .find(|installed| {
+            installed.skillsmp_id.as_deref() == Some(skill.id.as_str())
+                || installed.github_url.as_deref() == Some(skill.github_url.as_str())
+        })
+        .cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        installed_skillsmp_match, search_skill_label, skillsmp_search_preview_lines,
+        skillsmp_search_status,
+    };
+    use crate::client::SkillsMpSkill;
+    use crate::core::{SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP, SkillData};
+    use serde_json::Value as JsonValue;
+    use std::collections::BTreeMap;
+
+    fn installed_skill(skillsmp_id: Option<&str>, github_url: Option<&str>) -> SkillData {
+        SkillData {
+            name: "python".to_string(),
+            description: "Installed skill".to_string(),
+            path: Some("/tmp/python".to_string()),
+            content: "Body".to_string(),
+            license: None,
+            compatibility: None,
+            metadata: BTreeMap::new(),
+            allowed_tools: None,
+            resources: Vec::new(),
+            resource_warnings: Vec::new(),
+            source: if skillsmp_id.is_some() {
+                SKILLY_SOURCE_SKILLSMP.to_string()
+            } else {
+                SKILLY_SOURCE_GITHUB.to_string()
+            },
+            package_name: None,
+            package_version: None,
+            github_url: github_url.map(str::to_string),
+            github_commit_sha: Some("0123456789abcdef0123456789abcdef01234567".to_string()),
+            skillsmp_id: skillsmp_id.map(str::to_string),
+        }
+    }
+
+    fn search_result() -> SkillsMpSkill {
+        SkillsMpSkill {
+            id: "skill-1".to_string(),
+            name: "python-production".to_string(),
+            author: "idossha".to_string(),
+            description: "Python production code patterns.".to_string(),
+            github_url: "https://github.com/example/project/tree/main/skills/python".to_string(),
+            skill_url: "https://skillsmp.com/skills/skill-1".to_string(),
+            stars: Some(42),
+            updated_at: Some(JsonValue::String("1778091502".to_string())),
+        }
+    }
+
+    #[test]
+    fn skillsmp_search_detects_installed_skill_by_id() {
+        let matched =
+            installed_skillsmp_match(&search_result(), &[installed_skill(Some("skill-1"), None)]);
+
+        assert!(matched.is_some());
+        assert_eq!(skillsmp_search_status(matched.as_ref()), "installed");
+    }
+
+    #[test]
+    fn skillsmp_search_detects_installed_skill_by_github_url() {
+        let matched = installed_skillsmp_match(
+            &search_result(),
+            &[installed_skill(
+                None,
+                Some("https://github.com/example/project/tree/main/skills/python"),
+            )],
+        );
+
+        assert!(matched.is_some());
+    }
+
+    #[test]
+    fn skillsmp_search_label_and_preview_include_installed_status() {
+        let matched = installed_skill(Some("skill-1"), None);
+
+        let label = search_skill_label(&search_result(), Some(&matched));
+        let preview = skillsmp_search_preview_lines(&search_result(), Some(&matched));
+
+        assert_eq!(label, "python-production [idossha] (skill-1) [installed]");
+        assert!(preview.iter().any(|line| line == "Status: installed"));
+        assert!(
+            preview
+                .iter()
+                .any(|line| line == "Installed Directory: python")
+        );
+    }
 }
 
 fn downloadable_skill_preview_lines(item: &DownloadableSkillMatch) -> Vec<String> {

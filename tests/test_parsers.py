@@ -99,6 +99,27 @@ Block instructions.
     assert skill.metadata == {"owner": "docs"}
 
 
+def test_skill_from_text_accepts_unquoted_colons_in_scalar_values() -> None:
+    skill = Skill.from_text(
+        """---
+name: relaxed-colon-skill
+description: Padroniza composição FastAPI: app factory, lifespan e dependency injection.
+metadata:
+  owner: docs: platform
+---
+Relaxed instructions.
+""",
+        path=Path("/workspace/relaxed-colon-skill"),
+    )
+
+    assert skill.name == "relaxed-colon-skill"
+    assert skill.description == (
+        "Padroniza composição FastAPI: app factory, lifespan e dependency injection."
+    )
+    assert skill.metadata == {"owner": "docs: platform"}
+    assert skill.content == "Relaxed instructions."
+
+
 def test_skill_from_text_supports_nested_yaml_metadata() -> None:
     skill = Skill.from_text(
         """---

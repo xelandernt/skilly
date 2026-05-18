@@ -6,6 +6,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -20,6 +21,7 @@ class SkillsServer(BaseHTTPRequestHandler):
     tarball: bytes = b""
 
     def do_GET(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
         if self.path.startswith("/api/v1/skills/search"):
             self._json(
                 {
@@ -50,10 +52,11 @@ class SkillsServer(BaseHTTPRequestHandler):
                 }
             )
             return
-        if self.path == "/repos/example/project/commits/main":
+        parts = [part for part in path.split("/") if part]
+        if len(parts) == 5 and parts[0] == "repos" and parts[3] == "commits":
             self._json({"sha": COMMIT_SHA})
             return
-        if self.path == f"/repos/example/project/tarball/{COMMIT_SHA}":
+        if len(parts) == 5 and parts[0] == "repos" and parts[3] == "tarball":
             self.send_response(200)
             self.send_header("Content-Type", "application/gzip")
             self.send_header("Content-Length", str(len(self.tarball)))
@@ -76,9 +79,12 @@ class SkillsServer(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def running_server() -> Iterator[tuple[str, ThreadingHTTPServer]]:
+def running_server(
+    files: dict[str, str] | None = None,
+) -> Iterator[tuple[str, ThreadingHTTPServer]]:
     SkillsServer.tarball = build_tarball_bytes(
-        {
+        files
+        or {
             "skills/python/SKILL.md": "---\nname: python\ndescription: Use python.\n---\nBody\n",
             "skills/python/scripts/extract.py": "print('hi')\n",
         }
@@ -131,3 +137,70 @@ def test_skillsmp_client_search_and_github_download(
         assert [resource.relative_path.as_posix() for resource in skill.resources] == [
             "scripts/extract.py"
         ]
+
+
+def test_parse_github_skill_url_supports_hidden_skill_directories() -> None:
+    location = parse_github_skill_url(
+        "https://github.com/pedrovmjm/fastapi-template-workflow/tree/develop/.github/skills/fastapi-best-practices"
+    )
+
+    assert location.owner == "pedrovmjm"
+    assert location.repo == "fastapi-template-workflow"
+    assert location.ref == "develop"
+    assert location.path.as_posix() == ".github/skills/fastapi-best-practices"
+    assert location.skill_name == "fastapi-best-practices"
+
+
+def test_github_download_keeps_remote_skills_in_memory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    local_skill_dir = tmp_path / ".github" / "skills" / "fastapi-best-practices"
+    local_skill_dir.mkdir(parents=True)
+    (local_skill_dir / "SKILL.md").write_text(
+        """---
+name: local-fastapi-best-practices
+description: Local skill that should not be used.
+---
+Local body.
+""",
+        encoding="utf-8",
+    )
+    (local_skill_dir / "references" / "local-only.md").parent.mkdir(parents=True)
+    (local_skill_dir / "references" / "local-only.md").write_text(
+        "local\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with running_server(
+        {
+            ".github/skills/fastapi-best-practices/SKILL.md": (
+                "---\n"
+                "name: fastapi-best-practices\n"
+                "description: FastAPI application composition: app factory, lifespan and dependency injection.\n"
+                "---\n"
+                "Remote body.\n"
+            ),
+            ".github/skills/fastapi-best-practices/references/application-composition.md": (
+                "# Remote reference\n"
+            ),
+        }
+    ) as (server_url, _server):
+        monkeypatch.setenv("SKILLY_GITHUB_API_BASE_URL", server_url)
+        client = SkillsMp(base_url=f"{server_url}/api/v1")
+
+        skill = Skill.from_github(
+            client,
+            "https://github.com/pedrovmjm/fastapi-template-workflow/tree/develop/.github/skills/fastapi-best-practices",
+        )
+
+    assert skill.name == "fastapi-best-practices"
+    assert skill.path is None
+    assert skill.directory is None
+    assert skill.skill_markdown_path is None
+    assert skill.directory_name == "fastapi-best-practices"
+    assert skill.github_commit_sha == COMMIT_SHA
+    assert [resource.relative_path.as_posix() for resource in skill.resources] == [
+        "references/application-composition.md"
+    ]

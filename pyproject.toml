@@ -7,11 +7,10 @@ build-backend = "maturin"
 
 [project]
 name = "skilly"
-description = "Load skills from dependencies."
+description = "Manage agent skills."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "packaging>=20",
 ]
 dynamic = ["version"]
 

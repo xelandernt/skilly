@@ -5,6 +5,36 @@ from skilly.repository import SkillRepository
 from skilly.skills import Skill
 
 
+def test_run_cli_root_help_describes_commands(capfd) -> None:
+    exit_code = run_cli(["--help"])
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "Scan dependency-provided skills from pyproject.toml and .venv" in output
+    assert "Download one or more skills from a GitHub repository URL" in output
+    assert "Browse, update, or remove installed skills" in output
+
+
+def test_run_cli_scan_help_describes_options(capfd) -> None:
+    exit_code = run_cli(["scan", "--help"])
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "Scan dependency-provided skills from pyproject.toml and .venv" in output
+    assert "Directory where skilly installs managed skills" in output
+    assert "Include development dependencies while scanning" in output
+
+
+def test_run_cli_skillsmp_search_help_describes_options(capfd) -> None:
+    exit_code = run_cli(["skillsmp", "search", "--help"])
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "Search SkillsMP and install a selected result" in output
+    assert "Search query sent to SkillsMP" in output
+    assert "Overwrite existing files when installing the selected skill" in output
+
+
 def test_run_cli_update_force_updates_dependency_skill(
     tmp_path: Path,
     monkeypatch,

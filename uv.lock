@@ -325,9 +325,6 @@ wheels = [
 [[package]]
 name = "skilly"
 source = { editable = "." }
-dependencies = [
-    { name = "packaging" },
-]
 
 [package.dev-dependencies]
 dev = [
@@ -341,7 +338,6 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "packaging", specifier = ">=20" }]
 
 [package.metadata.requires-dev]
 dev = [
