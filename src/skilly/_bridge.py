@@ -25,10 +25,37 @@ StrPath: TypeAlias = str | PathLike[str]
 
 
 class ClientConfigSource(Protocol):
-    base_url: str | None
-    api_key: str | None
-    github_token: str | None
-    proxy: str | None
+    @property
+    def base_url(self) -> str | None: ...
+
+    @property
+    def api_key(self) -> str | None: ...
+
+    @property
+    def github_token(self) -> str | None: ...
+
+    @property
+    def proxy(self) -> str | None: ...
+
+
+class SkillOriginSource(Protocol):
+    @property
+    def source(self) -> str | None: ...
+
+    @property
+    def package_name(self) -> str | None: ...
+
+    @property
+    def package_version(self) -> str | None: ...
+
+    @property
+    def github_url(self) -> str | None: ...
+
+    @property
+    def github_commit_sha(self) -> str | None: ...
+
+    @property
+    def skillsmp_id(self) -> str | None: ...
 
 
 class ClientConfigKwargs(TypedDict):
@@ -36,6 +63,15 @@ class ClientConfigKwargs(TypedDict):
     api_key: str | None
     github_token: str | None
     proxy: str | None
+
+
+class SkillOriginKwargs(TypedDict):
+    source: str | None
+    package_name: str | None
+    package_version: str | None
+    github_url: str | None
+    github_commit_sha: str | None
+    skillsmp_id: str | None
 
 
 def client_config_kwargs(fetcher: ClientConfigSource | None) -> ClientConfigKwargs:
@@ -54,9 +90,30 @@ def client_config_kwargs(fetcher: ClientConfigSource | None) -> ClientConfigKwar
     }
 
 
+def skill_origin_kwargs(origin: SkillOriginSource | None) -> SkillOriginKwargs:
+    if origin is None:
+        return {
+            "source": None,
+            "package_name": None,
+            "package_version": None,
+            "github_url": None,
+            "github_commit_sha": None,
+            "skillsmp_id": None,
+        }
+    return {
+        "source": origin.source,
+        "package_name": origin.package_name,
+        "package_version": origin.package_version,
+        "github_url": origin.github_url,
+        "github_commit_sha": origin.github_commit_sha,
+        "skillsmp_id": origin.skillsmp_id,
+    }
+
+
 def skill_from_text(
     text: str,
     path: StrPath | None = None,
+    origin: SkillOriginSource | None = None,
     source: str | None = None,
     package_name: str | None = None,
     package_version: str | None = None,
@@ -64,20 +121,32 @@ def skill_from_text(
     github_commit_sha: str | None = None,
     skillsmp_id: str | None = None,
 ) -> Skill:
+    origin_kwargs = skill_origin_kwargs(origin)
     return _core.skill_from_text(
         text,
         path=path,
-        source=source,
-        package_name=package_name,
-        package_version=package_version,
-        github_url=github_url,
-        github_commit_sha=github_commit_sha,
-        skillsmp_id=skillsmp_id,
+        source=source if source is not None else origin_kwargs["source"],
+        package_name=package_name
+        if package_name is not None
+        else origin_kwargs["package_name"],
+        package_version=package_version
+        if package_version is not None
+        else origin_kwargs["package_version"],
+        github_url=github_url
+        if github_url is not None
+        else origin_kwargs["github_url"],
+        github_commit_sha=github_commit_sha
+        if github_commit_sha is not None
+        else origin_kwargs["github_commit_sha"],
+        skillsmp_id=skillsmp_id
+        if skillsmp_id is not None
+        else origin_kwargs["skillsmp_id"],
     )
 
 
 def skill_from_file(
     path: StrPath,
+    origin: SkillOriginSource | None = None,
     source: str | None = None,
     package_name: str | None = None,
     package_version: str | None = None,
@@ -85,19 +154,31 @@ def skill_from_file(
     github_commit_sha: str | None = None,
     skillsmp_id: str | None = None,
 ) -> Skill:
+    origin_kwargs = skill_origin_kwargs(origin)
     return _core.skill_from_file(
         path,
-        source=source,
-        package_name=package_name,
-        package_version=package_version,
-        github_url=github_url,
-        github_commit_sha=github_commit_sha,
-        skillsmp_id=skillsmp_id,
+        source=source if source is not None else origin_kwargs["source"],
+        package_name=package_name
+        if package_name is not None
+        else origin_kwargs["package_name"],
+        package_version=package_version
+        if package_version is not None
+        else origin_kwargs["package_version"],
+        github_url=github_url
+        if github_url is not None
+        else origin_kwargs["github_url"],
+        github_commit_sha=github_commit_sha
+        if github_commit_sha is not None
+        else origin_kwargs["github_commit_sha"],
+        skillsmp_id=skillsmp_id
+        if skillsmp_id is not None
+        else origin_kwargs["skillsmp_id"],
     )
 
 
 def skill_from_dir(
     path: StrPath,
+    origin: SkillOriginSource | None = None,
     source: str | None = None,
     package_name: str | None = None,
     package_version: str | None = None,
@@ -105,14 +186,25 @@ def skill_from_dir(
     github_commit_sha: str | None = None,
     skillsmp_id: str | None = None,
 ) -> Skill:
+    origin_kwargs = skill_origin_kwargs(origin)
     return _core.skill_from_dir(
         path,
-        source=source,
-        package_name=package_name,
-        package_version=package_version,
-        github_url=github_url,
-        github_commit_sha=github_commit_sha,
-        skillsmp_id=skillsmp_id,
+        source=source if source is not None else origin_kwargs["source"],
+        package_name=package_name
+        if package_name is not None
+        else origin_kwargs["package_name"],
+        package_version=package_version
+        if package_version is not None
+        else origin_kwargs["package_version"],
+        github_url=github_url
+        if github_url is not None
+        else origin_kwargs["github_url"],
+        github_commit_sha=github_commit_sha
+        if github_commit_sha is not None
+        else origin_kwargs["github_commit_sha"],
+        skillsmp_id=skillsmp_id
+        if skillsmp_id is not None
+        else origin_kwargs["skillsmp_id"],
     )
 
 
@@ -148,6 +240,7 @@ def parse_github_skill_url(github_url: str) -> GitHubSkillLocationData:
 
 def discover_github_skills(
     github_url: str,
+    origin: SkillOriginSource | None = None,
     source: str | None = None,
     skillsmp_id: str | None = None,
     base_url: str | None = None,
@@ -155,10 +248,13 @@ def discover_github_skills(
     github_token: str | None = None,
     proxy: str | None = None,
 ) -> list[Skill]:
+    origin_kwargs = skill_origin_kwargs(origin)
     return _core.discover_github_skills(
         github_url,
-        source=source,
-        skillsmp_id=skillsmp_id,
+        source=source if source is not None else origin_kwargs["source"],
+        skillsmp_id=skillsmp_id
+        if skillsmp_id is not None
+        else origin_kwargs["skillsmp_id"],
         base_url=base_url,
         api_key=api_key,
         github_token=github_token,

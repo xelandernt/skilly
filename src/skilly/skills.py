@@ -18,15 +18,35 @@ if TYPE_CHECKING:
 
 
 class GitHubSkillFetcher(Protocol):
-    base_url: str | None
-    api_key: str | None
-    github_token: str | None
-    proxy: str | None
+    @property
+    def base_url(self) -> str | None: ...
+
+    @property
+    def api_key(self) -> str | None: ...
+
+    @property
+    def github_token(self) -> str | None: ...
+
+    @property
+    def proxy(self) -> str | None: ...
 
 
 class SkillsMpInstallableSkill(Protocol):
-    id: str
-    githubUrl: str
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def githubUrl(self) -> str: ...
+
+
+@dataclass(frozen=True)
+class SkillOrigin:
+    source: str | None = None
+    package_name: str | None = None
+    package_version: str | None = None
+    github_url: str | None = None
+    github_commit_sha: str | None = None
+    skillsmp_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -130,13 +150,11 @@ def discover_github_skills(
     fetcher: GitHubSkillFetcher,
     github_url: str,
     *,
-    source: str | None = None,
-    skillsmp_id: str | None = None,
+    origin: SkillOrigin | None = None,
 ) -> list[Skill]:
     return bridge.discover_github_skills(
         github_url,
-        source=source,
-        skillsmp_id=skillsmp_id,
+        origin=origin,
         **bridge.client_config_kwargs(fetcher),
     )
 

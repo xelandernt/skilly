@@ -2,9 +2,10 @@ mod cli;
 mod client;
 mod core;
 
-use crate::client::{ClientConfig, SkillsMpClient};
+use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery};
 use crate::core::{
-    SkillData, SkillResourceData, discover_github_skills as rust_discover_github_skills,
+    SkillData, SkillResourceData, SkillSourceMetadata,
+    discover_github_skills as rust_discover_github_skills,
     discover_installed_skills as rust_discover_installed_skills,
     discover_venv_skills as rust_discover_venv_skills,
     github_versions_match as rust_github_versions_match,
@@ -181,14 +182,40 @@ fn py_resources(py: Python<'_>, values: &[SkillResourceData]) -> PyResult<Vec<Py
     values.iter().map(|value| py_resource(py, value)).collect()
 }
 
-fn skill_directory_name(skill: &SkillData) -> String {
-    skill
-        .path
-        .as_deref()
-        .and_then(|path| Path::new(path).file_name().and_then(|value| value.to_str()))
-        .filter(|value| !value.is_empty())
-        .unwrap_or(&skill.name)
-        .to_string()
+fn skill_source_metadata(
+    source: Option<String>,
+    package_name: Option<String>,
+    package_version: Option<String>,
+    github_url: Option<String>,
+    github_commit_sha: Option<String>,
+    skillsmp_id: Option<String>,
+) -> SkillSourceMetadata {
+    SkillSourceMetadata {
+        source,
+        package_name,
+        package_version,
+        github_url,
+        github_commit_sha,
+        skillsmp_id,
+    }
+}
+
+fn skillsmp_search_query(
+    q: String,
+    page: Option<u32>,
+    limit: Option<u32>,
+    sort_by: Option<String>,
+    category: Option<String>,
+    occupation: Option<String>,
+) -> SkillsMpSearchQuery {
+    SkillsMpSearchQuery {
+        q,
+        page,
+        limit,
+        sort_by,
+        category,
+        occupation,
+    }
 }
 
 fn skill_from_text_impl(
@@ -202,15 +229,17 @@ fn skill_from_text_impl(
     skillsmp_id: Option<String>,
 ) -> PyResult<PySkill> {
     Ok(PySkill::from_data(
-        SkillData::from_text_with_overrides(
+        SkillData::from_text(
             text,
             optional_path_arg(path)?.as_deref().map(Path::new),
-            source.as_deref(),
-            package_name.as_deref(),
-            package_version.as_deref(),
-            github_url.as_deref(),
-            github_commit_sha.as_deref(),
-            skillsmp_id.as_deref(),
+            &skill_source_metadata(
+                source,
+                package_name,
+                package_version,
+                github_url,
+                github_commit_sha,
+                skillsmp_id,
+            ),
         )
         .map_err(py_err)?,
     ))
@@ -229,14 +258,16 @@ fn skill_from_file_impl(
     let path = py_fspath_string(path)?;
     let skill = py
         .allow_threads(|| {
-            SkillData::from_file(
+            SkillData::from_file_with_source_metadata(
                 Path::new(&path),
-                source.as_deref(),
-                package_name.as_deref(),
-                package_version.as_deref(),
-                github_url.as_deref(),
-                github_commit_sha.as_deref(),
-                skillsmp_id.as_deref(),
+                &skill_source_metadata(
+                    source,
+                    package_name,
+                    package_version,
+                    github_url,
+                    github_commit_sha,
+                    skillsmp_id,
+                ),
             )
         })
         .map_err(py_err)?;
@@ -256,14 +287,16 @@ fn skill_from_dir_impl(
     let path = py_fspath_string(path)?;
     let skill = py
         .allow_threads(|| {
-            SkillData::from_dir(
+            SkillData::from_dir_with_source_metadata(
                 Path::new(&path),
-                source.as_deref(),
-                package_name.as_deref(),
-                package_version.as_deref(),
-                github_url.as_deref(),
-                github_commit_sha.as_deref(),
-                skillsmp_id.as_deref(),
+                &skill_source_metadata(
+                    source,
+                    package_name,
+                    package_version,
+                    github_url,
+                    github_commit_sha,
+                    skillsmp_id,
+                ),
             )
         })
         .map_err(py_err)?;
@@ -636,7 +669,7 @@ impl PySkill {
 
     #[getter]
     fn directory_name(&self) -> String {
-        skill_directory_name(&self.inner)
+        self.inner.directory_name()
     }
 
     #[getter]
@@ -1024,14 +1057,9 @@ fn skillsmp_search_py(
         .allow_threads(|| {
             let client =
                 SkillsMpClient::new(client_config(base_url, api_key, github_token, proxy))?;
-            client.search(
-                &q,
-                page,
-                limit,
-                sort_by.as_deref(),
-                category.as_deref(),
-                occupation.as_deref(),
-            )
+            client.search(&skillsmp_search_query(
+                q, page, limit, sort_by, category, occupation,
+            ))
         })
         .map_err(py_err)?;
     to_py_serialized(py, &response)

@@ -27,7 +27,33 @@ class SkillMatch:
         return SkillInstallStatus.UPDATABLE
 
 
+@dataclass(frozen=True)
+class ProjectSettings:
+    pyproject_toml_path: Path = Path("pyproject.toml")
+    venv_path: Path = Path(".venv")
+    include_dev: bool = False
+    include_extras: Sequence[str] = ()
+
+
 class SkillRepository:
+    def _project_settings(
+        self,
+        *,
+        project: ProjectSettings | None = None,
+        pyproject_toml_path: Path = Path("pyproject.toml"),
+        venv_path: Path = Path(".venv"),
+        include_dev: bool = False,
+        include_extras: Sequence[str] = (),
+    ) -> ProjectSettings:
+        if project is not None:
+            return project
+        return ProjectSettings(
+            pyproject_toml_path=pyproject_toml_path,
+            venv_path=venv_path,
+            include_dev=include_dev,
+            include_extras=tuple(include_extras),
+        )
+
     def list(self, directory: Path = DEFAULT_SKILLS_PATH) -> list[Skill]:
         return discover_installed_skills(directory)
 
@@ -74,36 +100,49 @@ class SkillRepository:
     def project_requirements(
         self,
         *,
+        project: ProjectSettings | None = None,
         pyproject_toml_path: Path = Path("pyproject.toml"),
         include_dev: bool = False,
         include_extras: Sequence[str] = (),
     ) -> Sequence[Requirement]:
-        requirements = bridge.project_requirements(
-            str(pyproject_toml_path),
+        settings = self._project_settings(
+            project=project,
+            pyproject_toml_path=pyproject_toml_path,
             include_dev=include_dev,
-            include_extras=list(include_extras),
+            include_extras=include_extras,
+        )
+        requirements = bridge.project_requirements(
+            str(settings.pyproject_toml_path),
+            include_dev=settings.include_dev,
+            include_extras=list(settings.include_extras),
         )
         return [Requirement(spec) for spec in requirements]
 
     def project_skills(
         self,
         *,
+        project: ProjectSettings | None = None,
         pyproject_toml_path: Path = Path("pyproject.toml"),
         venv_path: Path = Path(".venv"),
         include_dev: bool = False,
         include_extras: Sequence[str] = (),
     ) -> Sequence[Skill]:
+        settings = self._project_settings(
+            project=project,
+            pyproject_toml_path=pyproject_toml_path,
+            venv_path=venv_path,
+            include_dev=include_dev,
+            include_extras=include_extras,
+        )
         package_names = {
             requirement.name
             for requirement in self.project_requirements(
-                pyproject_toml_path=pyproject_toml_path,
-                include_dev=include_dev,
-                include_extras=include_extras,
+                project=settings,
             )
         }
         return [
             skill
-            for skill in discover_venv_skills(venv_path)
+            for skill in discover_venv_skills(settings.venv_path)
             if skill.package_name in package_names
         ]
 
@@ -111,11 +150,19 @@ class SkillRepository:
         self,
         *,
         directory: Path = DEFAULT_SKILLS_PATH,
+        project: ProjectSettings | None = None,
         pyproject_toml_path: Path = Path("pyproject.toml"),
         venv_path: Path = Path(".venv"),
         include_dev: bool = False,
         include_extras: Sequence[str] = (),
     ) -> Sequence[SkillMatch]:
+        settings = self._project_settings(
+            project=project,
+            pyproject_toml_path=pyproject_toml_path,
+            venv_path=venv_path,
+            include_dev=include_dev,
+            include_extras=include_extras,
+        )
         installed = self.list(directory)
         matches = [
             SkillMatch(
@@ -123,10 +170,7 @@ class SkillRepository:
                 installed=self.match_installed(installed, skill),
             )
             for skill in self.project_skills(
-                pyproject_toml_path=pyproject_toml_path,
-                venv_path=venv_path,
-                include_dev=include_dev,
-                include_extras=include_extras,
+                project=settings,
             )
         ]
         return sorted(
@@ -142,6 +186,7 @@ class SkillRepository:
         self,
         *,
         directory: Path = DEFAULT_SKILLS_PATH,
+        project: ProjectSettings | None = None,
         pyproject_toml_path: Path = Path("pyproject.toml"),
         venv_path: Path = Path(".venv"),
         include_dev: bool = False,
@@ -151,10 +196,13 @@ class SkillRepository:
             item
             for item in self.scan_project(
                 directory=directory,
-                pyproject_toml_path=pyproject_toml_path,
-                venv_path=venv_path,
-                include_dev=include_dev,
-                include_extras=include_extras,
+                project=self._project_settings(
+                    project=project,
+                    pyproject_toml_path=pyproject_toml_path,
+                    venv_path=venv_path,
+                    include_dev=include_dev,
+                    include_extras=include_extras,
+                ),
             )
             if item.status is SkillInstallStatus.UPDATABLE
         ]
@@ -163,16 +211,21 @@ class SkillRepository:
         self,
         installed_skill: Skill,
         *,
+        project: ProjectSettings | None = None,
         pyproject_toml_path: Path = Path("pyproject.toml"),
         venv_path: Path = Path(".venv"),
         include_dev: bool = False,
         include_extras: Sequence[str] = (),
     ) -> Skill | None:
-        for skill in self.project_skills(
+        settings = self._project_settings(
+            project=project,
             pyproject_toml_path=pyproject_toml_path,
             venv_path=venv_path,
             include_dev=include_dev,
             include_extras=include_extras,
+        )
+        for skill in self.project_skills(
+            project=settings,
         ):
             if skill.matches(installed_skill):
                 return skill

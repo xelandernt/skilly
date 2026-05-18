@@ -20,6 +20,7 @@ const GITHUB_TOKEN_ENV_VARS: [&str; 3] = [SKILLY_GITHUB_TOKEN_ENV_VAR, "GITHUB_T
 const DEFAULT_SKILLSMP_API_BASE_URL: &str = "https://skillsmp.com/api/v1";
 const DEFAULT_GITHUB_API_BASE_URL: &str = "https://api.github.com";
 const GITHUB_API_BASE_URL_ENV_VAR: &str = "SKILLY_GITHUB_API_BASE_URL";
+const SKILLY_USER_AGENT: &str = "skilly/0.0.1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClientConfig {
@@ -56,6 +57,45 @@ impl ClientConfig {
         GITHUB_TOKEN_ENV_VARS
             .iter()
             .find_map(|name| env::var(name).ok().filter(|value| !value.is_empty()))
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkillsMpSearchQuery {
+    pub q: String,
+    pub page: Option<u32>,
+    pub limit: Option<u32>,
+    pub sort_by: Option<String>,
+    pub category: Option<String>,
+    pub occupation: Option<String>,
+}
+
+impl SkillsMpSearchQuery {
+    pub fn new(q: impl Into<String>) -> Self {
+        Self {
+            q: q.into(),
+            ..Self::default()
+        }
+    }
+
+    fn params(&self) -> Vec<(String, String)> {
+        let mut params = vec![("q".to_string(), self.q.clone())];
+        if let Some(page) = self.page {
+            params.push(("page".to_string(), page.to_string()));
+        }
+        if let Some(limit) = self.limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+        if let Some(sort_by) = self.sort_by.as_ref() {
+            params.push(("sortBy".to_string(), sort_by.clone()));
+        }
+        if let Some(category) = self.category.as_ref() {
+            params.push(("category".to_string(), category.clone()));
+        }
+        if let Some(occupation) = self.occupation.as_ref() {
+            params.push(("occupation".to_string(), occupation.clone()));
+        }
+        params
     }
 }
 
@@ -170,7 +210,7 @@ pub struct SkillsMpClient {
 
 impl SkillsMpClient {
     pub fn new(config: ClientConfig) -> Result<Self> {
-        let mut builder = Client::builder().user_agent("skilly/0.0.1");
+        let mut builder = Client::builder().user_agent(SKILLY_USER_AGENT);
         if let Some(proxy) = config.proxy.as_ref() {
             builder = builder.proxy(reqwest::Proxy::all(proxy)?);
         }
@@ -202,7 +242,7 @@ impl SkillsMpClient {
             ACCEPT,
             HeaderValue::from_static("application/vnd.github+json"),
         );
-        headers.insert(USER_AGENT, HeaderValue::from_static("skilly/0.0.1"));
+        headers.insert(USER_AGENT, HeaderValue::from_static(SKILLY_USER_AGENT));
         if let Some(token) = self.config.github_token() {
             headers.insert(
                 AUTHORIZATION,
@@ -214,6 +254,14 @@ impl SkillsMpClient {
 
     fn skillsmp_url(&self, path: &str) -> String {
         format!("{}{}", self.config.base_url().trim_end_matches('/'), path)
+    }
+
+    fn github_ref_params(&self, location: &GitHubSkillLocationData) -> Vec<(String, String)> {
+        let mut params = Vec::new();
+        if let Some(reference) = location.r#ref.as_ref() {
+            params.push(("ref".to_string(), reference.clone()));
+        }
+        params
     }
 
     fn github_contents_url(&self, location: &GitHubSkillLocationData, path: &str) -> String {
@@ -277,35 +325,11 @@ impl SkillsMpClient {
             .to_vec())
     }
 
-    pub fn search(
-        &self,
-        q: &str,
-        page: Option<u32>,
-        limit: Option<u32>,
-        sort_by: Option<&str>,
-        category: Option<&str>,
-        occupation: Option<&str>,
-    ) -> Result<SkillsMpSearchApiResponse> {
-        let mut params = vec![("q".to_string(), q.to_string())];
-        if let Some(page) = page {
-            params.push(("page".to_string(), page.to_string()));
-        }
-        if let Some(limit) = limit {
-            params.push(("limit".to_string(), limit.to_string()));
-        }
-        if let Some(sort_by) = sort_by {
-            params.push(("sortBy".to_string(), sort_by.to_string()));
-        }
-        if let Some(category) = category {
-            params.push(("category".to_string(), category.to_string()));
-        }
-        if let Some(occupation) = occupation {
-            params.push(("occupation".to_string(), occupation.to_string()));
-        }
+    pub fn search(&self, query: &SkillsMpSearchQuery) -> Result<SkillsMpSearchApiResponse> {
         self.get_json(
             &self.skillsmp_url("/skills/search"),
             self.api_headers(false)?,
-            &params,
+            &query.params(),
         )
     }
 
@@ -322,14 +346,10 @@ impl SkillsMpClient {
         location: &GitHubSkillLocationData,
         current_path: &str,
     ) -> Result<Vec<GitHubContentItemData>> {
-        let mut params = Vec::new();
-        if let Some(reference) = location.r#ref.as_ref() {
-            params.push(("ref".to_string(), reference.clone()));
-        }
         let entries = self.get_json::<Vec<GitHubContentEntry>>(
             &self.github_contents_url(location, current_path),
             self.github_headers()?,
-            &params,
+            &self.github_ref_params(location),
         )?;
         Ok(entries
             .into_iter()
@@ -347,14 +367,10 @@ impl SkillsMpClient {
         location: &GitHubSkillLocationData,
         path: &str,
     ) -> Result<GitHubFileBlobData> {
-        let mut params = Vec::new();
-        if let Some(reference) = location.r#ref.as_ref() {
-            params.push(("ref".to_string(), reference.clone()));
-        }
         let file = self.get_json::<GitHubFileContent>(
             &self.github_contents_url(location, path),
             self.github_headers()?,
-            &params,
+            &self.github_ref_params(location),
         )?;
         let content = decode_github_file_content(&file)?;
         Ok(GitHubFileBlobData {

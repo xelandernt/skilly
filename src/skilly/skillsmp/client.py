@@ -212,21 +212,27 @@ class SkillsMpErrorApiResponse:
         )
 
 
-class _SkillsMpBase:
-    def __init__(
-        self,
-        *,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        github_token: str | None = None,
-        proxy: str | None = None,
-    ) -> None:
-        self.base_url = base_url
-        self.api_key = api_key
-        self.github_token = github_token
-        self.proxy = proxy
+@dataclass(frozen=True)
+class ClientSettings:
+    base_url: str | None = None
+    api_key: str | None = None
+    github_token: str | None = None
+    proxy: str | None = None
 
-    def _client_kwargs(self) -> bridge.ClientConfigKwargs:
+    @classmethod
+    def from_source(
+        cls, source: bridge.ClientConfigSource | None = None
+    ) -> "ClientSettings":
+        if source is None:
+            return cls()
+        return cls(
+            base_url=source.base_url,
+            api_key=source.api_key,
+            github_token=source.github_token,
+            proxy=source.proxy,
+        )
+
+    def as_bridge_kwargs(self) -> bridge.ClientConfigKwargs:
         return {
             "base_url": self.base_url,
             "api_key": self.api_key,
@@ -235,24 +241,71 @@ class _SkillsMpBase:
         }
 
 
+@dataclass(frozen=True)
+class SkillsMpSearchQuery:
+    text: str
+    page: int | None = None
+    limit: int | None = None
+    sort_by: str | None = None
+    category: str | None = None
+    occupation: str | None = None
+
+
+class _SkillsMpBase:
+    def __init__(
+        self,
+        *,
+        settings: ClientSettings | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        github_token: str | None = None,
+        proxy: str | None = None,
+    ) -> None:
+        self._settings = settings or ClientSettings(
+            base_url=base_url,
+            api_key=api_key,
+            github_token=github_token,
+            proxy=proxy,
+        )
+
+    def _client_kwargs(self) -> bridge.ClientConfigKwargs:
+        return self._settings.as_bridge_kwargs()
+
+    @property
+    def base_url(self) -> str | None:
+        return self._settings.base_url
+
+    @property
+    def api_key(self) -> str | None:
+        return self._settings.api_key
+
+    @property
+    def github_token(self) -> str | None:
+        return self._settings.github_token
+
+    @property
+    def proxy(self) -> str | None:
+        return self._settings.proxy
+
+    def _search_query(self, query: str | SkillsMpSearchQuery) -> SkillsMpSearchQuery:
+        if isinstance(query, SkillsMpSearchQuery):
+            return query
+        return SkillsMpSearchQuery(text=query)
+
+
 class SkillsMp(_SkillsMpBase):
     def search(
         self,
-        q: str,
-        *,
-        page: int | None = None,
-        limit: int | None = None,
-        sort_by: str | None = None,
-        category: str | None = None,
-        occupation: str | None = None,
+        query: str | SkillsMpSearchQuery,
     ) -> Response[SkillsMpSearchApiResponse]:
+        search_query = self._search_query(query)
         payload = bridge.skillsmp_search(
-            q,
-            page=page,
-            limit=limit,
-            sort_by=sort_by,
-            category=category,
-            occupation=occupation,
+            search_query.text,
+            page=search_query.page,
+            limit=search_query.limit,
+            sort_by=search_query.sort_by,
+            category=search_query.category,
+            occupation=search_query.occupation,
             **self._client_kwargs(),
         )
         return Response(payload, SkillsMpSearchApiResponse.from_data(payload))
@@ -310,31 +363,13 @@ class SkillsMp(_SkillsMpBase):
 
 class AsyncSkillsMp(_SkillsMpBase):
     def _sync(self) -> SkillsMp:
-        return SkillsMp(
-            base_url=self.base_url,
-            api_key=self.api_key,
-            github_token=self.github_token,
-            proxy=self.proxy,
-        )
+        return SkillsMp(settings=self._settings)
 
     async def search(
         self,
-        q: str,
-        *,
-        page: int | None = None,
-        limit: int | None = None,
-        sort_by: str | None = None,
-        category: str | None = None,
-        occupation: str | None = None,
+        query: str | SkillsMpSearchQuery,
     ) -> AsyncResponse[SkillsMpSearchApiResponse]:
-        response = self._sync().search(
-            q,
-            page=page,
-            limit=limit,
-            sort_by=sort_by,
-            category=category,
-            occupation=occupation,
-        )
+        response = self._sync().search(query)
         return AsyncResponse(response.raw_response, response.parsed_data)
 
     async def ai_search(self, q: str) -> AsyncResponse[SkillsMpAiSearchApiResponse]:

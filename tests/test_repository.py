@@ -1,7 +1,8 @@
 from pathlib import Path
 
-from skilly.repository import SkillRepository
+from skilly.repository import ProjectSettings, SkillRepository
 from skilly.skills import Skill
+from helpers import make_venv, write_distribution, write_skill
 
 
 def test_repository_scan_project_detects_updatable_dependency_skill(
@@ -57,50 +58,12 @@ Body
 
     matches = repository.scan_project(
         directory=install_directory,
-        pyproject_toml_path=pyproject_toml,
-        venv_path=venv_path,
+        project=ProjectSettings(
+            pyproject_toml_path=pyproject_toml, venv_path=venv_path
+        ),
     )
 
     assert len(matches) == 1
     assert matches[0].installed == installed
     assert matches[0].available.package_version == "1.2.4"
     assert matches[0].status.value == "updatable"
-
-
-def make_venv(
-    root: Path,
-    *,
-    site_packages_relative: Path = Path("lib/python3.13/site-packages"),
-) -> tuple[Path, Path]:
-    venv_path = root / ".venv"
-    site_packages = venv_path / site_packages_relative
-    site_packages.mkdir(parents=True)
-    return venv_path, site_packages.resolve()
-
-
-def write_distribution(
-    *,
-    site_packages: Path,
-    package_name: str,
-    package_version: str,
-    record_rows: list[str],
-) -> None:
-    dist_info = site_packages / f"{package_name}-{package_version}.dist-info"
-    dist_info.mkdir()
-    (dist_info / "METADATA").write_text(
-        "\n".join(
-            [
-                "Metadata-Version: 2.4",
-                f"Name: {package_name}",
-                f"Version: {package_version}",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    (dist_info / "RECORD").write_text("\n".join(record_rows), encoding="utf-8")
-
-
-def write_skill(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")

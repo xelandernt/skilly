@@ -105,6 +105,144 @@ pub struct SkillMatchData {
     pub installed: Option<SkillData>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct SkillSourceMetadata {
+    pub source: Option<String>,
+    pub package_name: Option<String>,
+    pub package_version: Option<String>,
+    pub github_url: Option<String>,
+    pub github_commit_sha: Option<String>,
+    pub skillsmp_id: Option<String>,
+}
+
+impl SkillSourceMetadata {
+    pub fn new(
+        source: Option<&str>,
+        package_name: Option<&str>,
+        package_version: Option<&str>,
+        github_url: Option<&str>,
+        github_commit_sha: Option<&str>,
+        skillsmp_id: Option<&str>,
+    ) -> Self {
+        Self {
+            source: source.map(str::to_string),
+            package_name: package_name.map(str::to_string),
+            package_version: package_version.map(str::to_string),
+            github_url: github_url.map(str::to_string),
+            github_commit_sha: github_commit_sha.map(str::to_string),
+            skillsmp_id: skillsmp_id.map(str::to_string),
+        }
+    }
+
+    fn apply_missing_from_metadata(&mut self, metadata: &BTreeMap<String, String>) {
+        if self.package_name.is_none() {
+            self.package_name = metadata
+                .get(SKILLY_DEPENDENCY_PACKAGE_NAME_METADATA_KEY)
+                .cloned();
+        }
+        if self.package_version.is_none() {
+            self.package_version = metadata
+                .get(SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY)
+                .cloned();
+        }
+        if self.github_url.is_none() {
+            self.github_url = metadata.get(SKILLY_GITHUB_URL_METADATA_KEY).cloned();
+        }
+        if self.github_commit_sha.is_none() {
+            self.github_commit_sha = metadata.get(SKILLY_GITHUB_COMMIT_SHA_METADATA_KEY).cloned();
+        }
+        if self.skillsmp_id.is_none() {
+            self.skillsmp_id = metadata.get(SKILLY_SKILLSMP_ID_METADATA_KEY).cloned();
+        }
+    }
+
+    fn resolved_source(&self, metadata: &BTreeMap<String, String>) -> String {
+        self.source
+            .clone()
+            .unwrap_or_else(|| infer_source(metadata))
+    }
+
+    fn insert_managed_metadata(&self, metadata: &mut BTreeMap<String, String>) {
+        if let Some(source) = self.source.as_deref().filter(|source| {
+            matches!(
+                *source,
+                SKILLY_SOURCE_DEPENDENCY | SKILLY_SOURCE_GITHUB | SKILLY_SOURCE_SKILLSMP
+            )
+        }) {
+            metadata.insert(SKILLY_SOURCE_METADATA_KEY.to_string(), source.to_string());
+        }
+        if let Some(package_name) = self.package_name.as_ref() {
+            metadata.insert(
+                SKILLY_DEPENDENCY_PACKAGE_NAME_METADATA_KEY.to_string(),
+                package_name.clone(),
+            );
+        }
+        if let Some(package_version) = self.package_version.as_ref() {
+            metadata.insert(
+                SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY.to_string(),
+                package_version.clone(),
+            );
+        }
+        if let Some(github_url) = self.github_url.as_ref() {
+            metadata.insert(
+                SKILLY_GITHUB_URL_METADATA_KEY.to_string(),
+                github_url.clone(),
+            );
+        }
+        if let Some(github_commit_sha) = self.github_commit_sha.as_ref() {
+            metadata.insert(
+                SKILLY_GITHUB_COMMIT_SHA_METADATA_KEY.to_string(),
+                github_commit_sha.clone(),
+            );
+        }
+        if let Some(skillsmp_id) = self.skillsmp_id.as_ref() {
+            metadata.insert(
+                SKILLY_SKILLSMP_ID_METADATA_KEY.to_string(),
+                skillsmp_id.clone(),
+            );
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectEnvironment {
+    pub directory: PathBuf,
+    pub pyproject_toml_path: PathBuf,
+    pub venv_path: PathBuf,
+    pub include_dev: bool,
+    pub include_extras: Vec<String>,
+}
+
+impl Default for ProjectEnvironment {
+    fn default() -> Self {
+        Self {
+            directory: PathBuf::from(DEFAULT_SKILLS_PATH),
+            pyproject_toml_path: PathBuf::from("pyproject.toml"),
+            venv_path: PathBuf::from(".venv"),
+            include_dev: false,
+            include_extras: Vec::new(),
+        }
+    }
+}
+
+impl ProjectEnvironment {
+    pub fn with_paths(
+        directory: &Path,
+        pyproject_toml_path: &Path,
+        venv_path: &Path,
+        include_dev: bool,
+        include_extras: &[String],
+    ) -> Self {
+        Self {
+            directory: directory.to_path_buf(),
+            pyproject_toml_path: pyproject_toml_path.to_path_buf(),
+            venv_path: venv_path.to_path_buf(),
+            include_dev,
+            include_extras: include_extras.to_vec(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DistributionInfo {
     pub name: String,
@@ -364,16 +502,10 @@ fn find_skill_markdown_path(path: &Path) -> Result<PathBuf> {
 }
 
 impl SkillData {
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_text_with_overrides(
+    pub fn from_text(
         text: &str,
         path: Option<&Path>,
-        source: Option<&str>,
-        package_name: Option<&str>,
-        package_version: Option<&str>,
-        github_url: Option<&str>,
-        github_commit_sha: Option<&str>,
-        skillsmp_id: Option<&str>,
+        source_metadata: &SkillSourceMetadata,
     ) -> Result<Self> {
         let skill_directory = normalize_skill_directory(path)?;
         let (frontmatter, body) = split_frontmatter(text)?;
@@ -388,6 +520,8 @@ impl SkillData {
                 .collect::<BTreeMap<_, _>>(),
             _ => BTreeMap::new(),
         };
+        let mut source_metadata = source_metadata.clone();
+        source_metadata.apply_missing_from_metadata(&metadata);
 
         let mut skill = Self {
             name: required_string_field(&parsed, "name")?,
@@ -402,43 +536,14 @@ impl SkillData {
             allowed_tools: optional_string_field(&parsed, "allowed-tools"),
             resources: Vec::new(),
             resource_warnings: Vec::new(),
-            source: source
-                .map(str::to_string)
-                .unwrap_or_else(|| infer_source(&BTreeMap::new())),
-            package_name: package_name.map(str::to_string),
-            package_version: package_version.map(str::to_string),
-            github_url: github_url.map(str::to_string),
-            github_commit_sha: github_commit_sha.map(str::to_string),
-            skillsmp_id: skillsmp_id.map(str::to_string),
+            source: source_metadata.resolved_source(&BTreeMap::new()),
+            package_name: source_metadata.package_name.clone(),
+            package_version: source_metadata.package_version.clone(),
+            github_url: source_metadata.github_url.clone(),
+            github_commit_sha: source_metadata.github_commit_sha.clone(),
+            skillsmp_id: source_metadata.skillsmp_id.clone(),
         };
-
-        if source.is_none() {
-            skill.source = infer_source(&skill.metadata);
-        }
-        if skill.package_name.is_none() {
-            skill.package_name = skill
-                .metadata
-                .get(SKILLY_DEPENDENCY_PACKAGE_NAME_METADATA_KEY)
-                .cloned();
-        }
-        if skill.package_version.is_none() {
-            skill.package_version = skill
-                .metadata
-                .get(SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY)
-                .cloned();
-        }
-        if skill.github_url.is_none() {
-            skill.github_url = skill.metadata.get(SKILLY_GITHUB_URL_METADATA_KEY).cloned();
-        }
-        if skill.github_commit_sha.is_none() {
-            skill.github_commit_sha = skill
-                .metadata
-                .get(SKILLY_GITHUB_COMMIT_SHA_METADATA_KEY)
-                .cloned();
-        }
-        if skill.skillsmp_id.is_none() {
-            skill.skillsmp_id = skill.metadata.get(SKILLY_SKILLSMP_ID_METADATA_KEY).cloned();
-        }
+        skill.source = source_metadata.resolved_source(&skill.metadata);
 
         if let Some(directory) = skill_directory.as_ref() {
             let (resources, warnings) = load_resource_files(directory);
@@ -449,27 +554,20 @@ impl SkillData {
         Ok(skill)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_file(
+    pub fn from_file_with_source_metadata(
         path: &Path,
-        source: Option<&str>,
-        package_name: Option<&str>,
-        package_version: Option<&str>,
-        github_url: Option<&str>,
-        github_commit_sha: Option<&str>,
-        skillsmp_id: Option<&str>,
+        source_metadata: &SkillSourceMetadata,
     ) -> Result<Self> {
         let text = fs::read_to_string(path)?;
-        Self::from_text_with_overrides(
-            &text,
-            Some(path),
-            source,
-            package_name,
-            package_version,
-            github_url,
-            github_commit_sha,
-            skillsmp_id,
-        )
+        Self::from_text(&text, Some(path), source_metadata)
+    }
+
+    pub fn from_dir_with_source_metadata(
+        path: &Path,
+        source_metadata: &SkillSourceMetadata,
+    ) -> Result<Self> {
+        let skill_path = find_skill_markdown_path(path)?;
+        Self::from_file_with_source_metadata(&skill_path, source_metadata)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -482,15 +580,16 @@ impl SkillData {
         github_commit_sha: Option<&str>,
         skillsmp_id: Option<&str>,
     ) -> Result<Self> {
-        let skill_path = find_skill_markdown_path(path)?;
-        Self::from_file(
-            &skill_path,
-            source,
-            package_name,
-            package_version,
-            github_url,
-            github_commit_sha,
-            skillsmp_id,
+        Self::from_dir_with_source_metadata(
+            path,
+            &SkillSourceMetadata::new(
+                source,
+                package_name,
+                package_version,
+                github_url,
+                github_commit_sha,
+                skillsmp_id,
+            ),
         )
     }
 
@@ -560,43 +659,29 @@ impl SkillData {
             SKILLY_MANAGED_METADATA_KEY.to_string(),
             SKILLY_MANAGED_METADATA_VALUE.to_string(),
         );
-        if matches!(
-            self.source.as_str(),
-            SKILLY_SOURCE_DEPENDENCY | SKILLY_SOURCE_GITHUB | SKILLY_SOURCE_SKILLSMP
-        ) {
-            metadata.insert(SKILLY_SOURCE_METADATA_KEY.to_string(), self.source.clone());
-        }
-        if let Some(package_name) = self.package_name.as_ref() {
-            metadata.insert(
-                SKILLY_DEPENDENCY_PACKAGE_NAME_METADATA_KEY.to_string(),
-                package_name.clone(),
-            );
-        }
-        if let Some(package_version) = self.package_version.as_ref() {
-            metadata.insert(
-                SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY.to_string(),
-                package_version.clone(),
-            );
-        }
-        if let Some(github_url) = self.github_url.as_ref() {
-            metadata.insert(
-                SKILLY_GITHUB_URL_METADATA_KEY.to_string(),
-                github_url.clone(),
-            );
-        }
-        if let Some(github_commit_sha) = self.github_commit_sha.as_ref() {
-            metadata.insert(
-                SKILLY_GITHUB_COMMIT_SHA_METADATA_KEY.to_string(),
-                github_commit_sha.clone(),
-            );
-        }
-        if let Some(skillsmp_id) = self.skillsmp_id.as_ref() {
-            metadata.insert(
-                SKILLY_SKILLSMP_ID_METADATA_KEY.to_string(),
-                skillsmp_id.clone(),
-            );
-        }
+        self.source_metadata()
+            .insert_managed_metadata(&mut metadata);
         metadata
+    }
+
+    pub fn source_metadata(&self) -> SkillSourceMetadata {
+        SkillSourceMetadata {
+            source: Some(self.source.clone()),
+            package_name: self.package_name.clone(),
+            package_version: self.package_version.clone(),
+            github_url: self.github_url.clone(),
+            github_commit_sha: self.github_commit_sha.clone(),
+            skillsmp_id: self.skillsmp_id.clone(),
+        }
+    }
+
+    pub fn directory_name(&self) -> String {
+        self.path
+            .as_deref()
+            .and_then(|path| Path::new(path).file_name().and_then(|value| value.to_str()))
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&self.name)
+            .to_string()
     }
 
     pub fn package_reference(&self) -> Option<String> {
@@ -641,13 +726,13 @@ impl SkillData {
     }
 }
 
-pub fn scan_match_status(available: &SkillData, installed: Option<&SkillData>) -> String {
+pub fn scan_match_status(available: &SkillData, installed: Option<&SkillData>) -> &'static str {
     match installed {
-        None => STATUS_INSTALLABLE.to_string(),
+        None => STATUS_INSTALLABLE,
         Some(installed) if installed.package_version == available.package_version => {
-            STATUS_INSTALLED.to_string()
+            STATUS_INSTALLED
         }
-        Some(_) => STATUS_UPDATABLE.to_string(),
+        Some(_) => STATUS_UPDATABLE,
     }
 }
 
@@ -669,7 +754,9 @@ pub fn discover_installed_skills(directory: &Path) -> Result<Vec<SkillData>> {
         if !child_path.is_dir() {
             continue;
         }
-        if let Ok(skill) = SkillData::from_dir(&child_path, None, None, None, None, None, None) {
+        if let Ok(skill) =
+            SkillData::from_dir_with_source_metadata(&child_path, &SkillSourceMetadata::default())
+        {
             skills.push(skill);
         }
     }
@@ -690,12 +777,7 @@ pub fn remove_skill(name: &str, directory: &Path) -> Result<SkillData> {
 pub fn require_installed_skill(name: &str, directory: &Path) -> Result<SkillData> {
     let skills = discover_installed_skills(directory)?;
     for skill in &skills {
-        let directory_name = skill
-            .path
-            .as_ref()
-            .and_then(|path| Path::new(path).file_name().and_then(|value| value.to_str()))
-            .unwrap_or(&skill.name);
-        if directory_name == name {
+        if skill.directory_name() == name {
             return Ok(skill.clone());
         }
     }
@@ -831,14 +913,16 @@ pub fn discover_venv_skills(path: &Path) -> Result<Vec<SkillData>> {
             if !seen_directories.insert(directory.to_path_buf()) {
                 continue;
             }
-            if let Ok(skill) = SkillData::from_file(
+            if let Ok(skill) = SkillData::from_file_with_source_metadata(
                 &skill_path,
-                Some(SKILLY_SOURCE_DEPENDENCY),
-                Some(&distribution.name),
-                distribution.version.as_deref(),
-                None,
-                None,
-                None,
+                &SkillSourceMetadata::new(
+                    Some(SKILLY_SOURCE_DEPENDENCY),
+                    Some(&distribution.name),
+                    distribution.version.as_deref(),
+                    None,
+                    None,
+                    None,
+                ),
             ) {
                 skills.push(skill);
             }
@@ -948,21 +1032,20 @@ pub fn match_installed(
         .cloned()
 }
 
-pub fn scan_project(
-    directory: &Path,
-    pyproject_toml_path: &Path,
-    venv_path: &Path,
-    include_dev: bool,
-    include_extras: &[String],
-) -> Result<Vec<SkillMatchData>> {
-    let installed = discover_installed_skills(directory)?;
-    let mut matches = project_skills(pyproject_toml_path, venv_path, include_dev, include_extras)?
-        .into_iter()
-        .map(|skill| SkillMatchData {
-            installed: match_installed(&installed, &skill),
-            available: skill,
-        })
-        .collect::<Vec<_>>();
+pub fn scan_project_in(environment: &ProjectEnvironment) -> Result<Vec<SkillMatchData>> {
+    let installed = discover_installed_skills(&environment.directory)?;
+    let mut matches = project_skills(
+        &environment.pyproject_toml_path,
+        &environment.venv_path,
+        environment.include_dev,
+        &environment.include_extras,
+    )?
+    .into_iter()
+    .map(|skill| SkillMatchData {
+        installed: match_installed(&installed, &skill),
+        available: skill,
+    })
+    .collect::<Vec<_>>();
     matches.sort_by(|left, right| {
         (
             left.available.package_name.as_deref().unwrap_or(""),
@@ -978,37 +1061,27 @@ pub fn scan_project(
     Ok(matches)
 }
 
-pub fn dependency_updates(
-    directory: &Path,
-    pyproject_toml_path: &Path,
-    venv_path: &Path,
-    include_dev: bool,
-    include_extras: &[String],
-) -> Result<Vec<SkillMatchData>> {
-    Ok(scan_project(
-        directory,
-        pyproject_toml_path,
-        venv_path,
-        include_dev,
-        include_extras,
-    )?
-    .into_iter()
-    .filter(|item| scan_match_status(&item.available, item.installed.as_ref()) == STATUS_UPDATABLE)
-    .collect())
+pub fn dependency_updates_in(environment: &ProjectEnvironment) -> Result<Vec<SkillMatchData>> {
+    Ok(scan_project_in(environment)?
+        .into_iter()
+        .filter(|item| {
+            scan_match_status(&item.available, item.installed.as_ref()) == STATUS_UPDATABLE
+        })
+        .collect())
 }
 
-pub fn available_dependency_skill(
+pub fn available_dependency_skill_in(
     installed_skill: &SkillData,
-    pyproject_toml_path: &Path,
-    venv_path: &Path,
-    include_dev: bool,
-    include_extras: &[String],
+    environment: &ProjectEnvironment,
 ) -> Result<Option<SkillData>> {
-    Ok(
-        project_skills(pyproject_toml_path, venv_path, include_dev, include_extras)?
-            .into_iter()
-            .find(|skill| skill.matches(installed_skill)),
-    )
+    Ok(project_skills(
+        &environment.pyproject_toml_path,
+        &environment.venv_path,
+        environment.include_dev,
+        &environment.include_extras,
+    )?
+    .into_iter()
+    .find(|skill| skill.matches(installed_skill)))
 }
 
 pub fn parse_github_skill_url(github_url: &str) -> Result<GitHubSkillLocationData> {
@@ -1126,15 +1199,17 @@ pub fn build_skill_from_github_files(
             .flatten()
         })
     });
-    let mut skill = SkillData::from_text_with_overrides(
+    let mut skill = SkillData::from_text(
         &skill_blob.content,
         None,
-        Some(source),
-        None,
-        None,
-        github_url.as_deref(),
-        github_commit_sha.as_deref(),
-        skillsmp_id.as_deref(),
+        &SkillSourceMetadata::new(
+            Some(source),
+            None,
+            None,
+            github_url.as_deref(),
+            github_commit_sha.as_deref(),
+            skillsmp_id.as_deref(),
+        ),
     )?;
     let prefix = if skill_dir == "." {
         String::new()

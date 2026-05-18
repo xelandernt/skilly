@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from skilly.skills import Skill, parse_github_skill_url
-from skilly.skillsmp.client import SkillsMp
+from skilly.skillsmp.client import ClientSettings, SkillsMp, SkillsMpSearchQuery
 
 
 COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -119,9 +119,9 @@ def test_skillsmp_client_search_and_github_download(
 ) -> None:
     with running_server() as (server_url, _server):
         monkeypatch.setenv("SKILLY_GITHUB_API_BASE_URL", server_url)
-        client = SkillsMp(base_url=f"{server_url}/api/v1")
+        client = SkillsMp(settings=ClientSettings(base_url=f"{server_url}/api/v1"))
 
-        response = client.search("python")
+        response = client.search(SkillsMpSearchQuery(text="python", limit=10))
 
         assert response.parsed_data.data.skills[0].name == "python-production"
         location = parse_github_skill_url(response.parsed_data.data.skills[0].githubUrl)
@@ -188,7 +188,7 @@ Local body.
         }
     ) as (server_url, _server):
         monkeypatch.setenv("SKILLY_GITHUB_API_BASE_URL", server_url)
-        client = SkillsMp(base_url=f"{server_url}/api/v1")
+        client = SkillsMp(settings=ClientSettings(base_url=f"{server_url}/api/v1"))
 
         skill = Skill.from_github(
             client,

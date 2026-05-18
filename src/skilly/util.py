@@ -1,11 +1,12 @@
 from pathlib import Path
 
 from skilly.constants import DEFAULT_SKILLS_PATH
-from skilly.repository import SkillRepository
+from skilly.repository import ProjectSettings, SkillRepository
 from skilly.skills import Skill, discover_venv_skills
 
 
 def get_project_skills(
+    project: ProjectSettings | None = None,
     pyproject_toml_path: Path = Path("pyproject.toml"),
     venv_path: Path = Path(".venv"),
     include_dev: bool = False,
@@ -13,6 +14,7 @@ def get_project_skills(
     repository = SkillRepository()
     return list(
         repository.project_skills(
+            project=project,
             pyproject_toml_path=pyproject_toml_path,
             venv_path=venv_path,
             include_dev=include_dev,

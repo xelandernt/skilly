@@ -14,14 +14,20 @@ class SkillResourceLike(Protocol):
     def content(self) -> str: ...
 
 class GitHubSkillFetcherLike(Protocol):
-    base_url: str | None
-    api_key: str | None
-    github_token: str | None
-    proxy: str | None
+    @property
+    def base_url(self) -> str | None: ...
+    @property
+    def api_key(self) -> str | None: ...
+    @property
+    def github_token(self) -> str | None: ...
+    @property
+    def proxy(self) -> str | None: ...
 
 class SkillsMpInstallableSkillLike(Protocol):
-    id: str
-    githubUrl: str
+    @property
+    def id(self) -> str: ...
+    @property
+    def githubUrl(self) -> str: ...
 
 class GitHubSkillLocationData(TypedDict):
     owner: str

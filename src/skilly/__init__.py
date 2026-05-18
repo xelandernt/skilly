@@ -1,6 +1,7 @@
-from skilly.repository import SkillMatch, SkillRepository
+from skilly.repository import ProjectSettings, SkillMatch, SkillRepository
 from skilly.skills import (
     Skill,
+    SkillOrigin,
     SkillResource,
     discover_installed_skills,
     discover_venv_skills,
@@ -10,6 +11,7 @@ from skilly.util import get_project_skills, get_skills_from_directory, get_venv_
 
 __all__ = [
     "Skill",
+    "SkillOrigin",
     "SkillMatch",
     "SkillRepository",
     "SkillResource",
@@ -19,4 +21,5 @@ __all__ = [
     "get_skills_from_directory",
     "get_venv_skills",
     "parse_github_skill_url",
+    "ProjectSettings",
 ]

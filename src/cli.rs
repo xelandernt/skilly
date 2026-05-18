@@ -1,9 +1,10 @@
-use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSkill};
+use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery, SkillsMpSkill};
 use crate::core::{
-    DEFAULT_SKILLS_PATH, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP, STATUS_INSTALLABLE,
-    STATUS_INSTALLED, STATUS_UPDATABLE, SkillData, SkillMatchData, available_dependency_skill,
-    dependency_updates, discover_github_skills, discover_installed_skills, github_versions_match,
-    project_requirements, remove_skill, scan_match_status, scan_project,
+    DEFAULT_SKILLS_PATH, ProjectEnvironment, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP,
+    STATUS_INSTALLABLE, STATUS_INSTALLED, STATUS_UPDATABLE, SkillData, SkillMatchData,
+    available_dependency_skill_in, dependency_updates_in, discover_github_skills,
+    discover_installed_skills, github_versions_match, project_requirements, remove_skill,
+    scan_match_status, scan_project_in,
 };
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
@@ -60,13 +61,13 @@ struct DownloadableSkillMatch {
 }
 
 impl DownloadableSkillMatch {
-    fn status(&self) -> String {
+    fn status(&self) -> &'static str {
         match self.installed.as_ref() {
-            None => STATUS_INSTALLABLE.to_string(),
+            None => STATUS_INSTALLABLE,
             Some(installed) if github_versions_match(installed, &self.available) => {
-                STATUS_INSTALLED.to_string()
+                STATUS_INSTALLED
             }
-            Some(_) => STATUS_UPDATABLE.to_string(),
+            Some(_) => STATUS_UPDATABLE,
         }
     }
 }
@@ -512,13 +513,14 @@ where
 }
 
 fn run_scan(directory: &Path, include_dev: bool) -> Result<()> {
-    let matches = scan_project(
+    let environment = ProjectEnvironment::with_paths(
         directory,
         Path::new("pyproject.toml"),
         Path::new(".venv"),
         include_dev,
         &[],
-    )?;
+    );
+    let matches = scan_project_in(&environment)?;
     if matches.is_empty() {
         println!("No dependency skills found in pyproject.toml and .venv");
         return Ok(());
@@ -601,7 +603,7 @@ fn run_scan(directory: &Path, include_dev: bool) -> Result<()> {
                     selected.installed.is_some(),
                 )?;
                 actionable.retain(|item| !item.available.matches(&selected.available));
-                status_message = Some(if selected.installed.is_none() {
+                let message = if selected.installed.is_none() {
                     format!(
                         "Installed {} to {}",
                         skill_directory_name(&installed),
@@ -613,10 +615,8 @@ fn run_scan(directory: &Path, include_dev: bool) -> Result<()> {
                         skill_directory_name(&installed),
                         installed.package_version.as_deref().unwrap_or("unknown")
                     )
-                });
-                if let Some(message) = status_message.clone() {
-                    messages.push(message);
-                }
+                };
+                remember_status(&mut messages, &mut status_message, message);
             }
             _ => {}
         }
@@ -746,19 +746,27 @@ fn download_selected_skills(
             EXIT_CHOICE => break,
             INSTALL_CHOICE => {
                 let installed = selected.available.install_to(directory, None, overwrite)?;
-                status_message = Some(format!(
-                    "Downloaded {} with {} files to {}",
-                    skill_directory_name(&installed),
-                    installed.resources.len() + 1,
-                    installed.path.as_deref().unwrap_or_default()
-                ));
+                remember_status(
+                    &mut messages,
+                    &mut status_message,
+                    format!(
+                        "Downloaded {} with {} files to {}",
+                        skill_directory_name(&installed),
+                        installed.resources.len() + 1,
+                        installed.path.as_deref().unwrap_or_default()
+                    ),
+                );
             }
             UPDATE_CHOICE => {
                 let installed = selected
                     .installed
                     .as_ref()
                     .context("Only installed skills can be updated")?;
-                status_message = Some(update_skill(directory, installed, client)?);
+                remember_status(
+                    &mut messages,
+                    &mut status_message,
+                    update_skill(directory, installed, client)?,
+                );
             }
             REMOVE_CHOICE => {
                 let installed = selected
@@ -766,12 +774,13 @@ fn download_selected_skills(
                     .as_ref()
                     .context("Only installed skills can be removed")?;
                 let removed = remove_skill(&skill_directory_name(installed), directory)?;
-                status_message = Some(format!("Removed {}", skill_directory_name(&removed)));
+                remember_status(
+                    &mut messages,
+                    &mut status_message,
+                    format!("Removed {}", skill_directory_name(&removed)),
+                );
             }
             _ => {}
-        }
-        if let Some(message) = status_message.clone() {
-            messages.push(message);
         }
     }
 
@@ -841,15 +850,22 @@ fn run_list(directory: &Path, config: ClientConfig) -> Result<()> {
         match actions[action_index] {
             BACK_CHOICE => continue,
             EXIT_CHOICE => break,
-            UPDATE_CHOICE => status_message = Some(update_skill(directory, &selected, &client)?),
+            UPDATE_CHOICE => {
+                remember_status(
+                    &mut messages,
+                    &mut status_message,
+                    update_skill(directory, &selected, &client)?,
+                );
+            }
             REMOVE_CHOICE => {
                 let removed = remove_skill(&skill_directory_name(&selected), directory)?;
-                status_message = Some(format!("Removed {}", skill_directory_name(&removed)));
+                remember_status(
+                    &mut messages,
+                    &mut status_message,
+                    format!("Removed {}", skill_directory_name(&removed)),
+                );
             }
             _ => {}
-        }
-        if let Some(message) = status_message.clone() {
-            messages.push(message);
         }
     }
 
@@ -860,13 +876,14 @@ fn run_list(directory: &Path, config: ClientConfig) -> Result<()> {
 }
 
 fn run_update(directory: &Path, force: bool) -> Result<()> {
-    let matches = dependency_updates(
+    let environment = ProjectEnvironment::with_paths(
         directory,
         Path::new("pyproject.toml"),
         Path::new(".venv"),
         false,
         &[],
-    )?;
+    );
+    let matches = dependency_updates_in(&environment)?;
     if matches.is_empty() {
         println!("No dependency skill updates available");
         return Ok(());
@@ -912,7 +929,7 @@ fn run_skillsmp_search(
     config: ClientConfig,
 ) -> Result<()> {
     let client = SkillsMpClient::new(config.clone())?;
-    let response = client.search(query, None, None, None, None, None)?;
+    let response = client.search(&SkillsMpSearchQuery::new(query))?;
     if response.data.skills.is_empty() {
         println!("No SkillsMP skills found for {query}");
         return Ok(());
@@ -1014,24 +1031,26 @@ fn run_skillsmp_search(
             EXIT_CHOICE => break,
             INSTALL_CHOICE => {
                 let installed = installable.install_to(directory, None, overwrite)?;
-                status_message = Some(format!(
-                    "Installed {} to {}",
-                    installed.name,
-                    installed.path.as_deref().unwrap_or_default()
-                ));
-                if let Some(message) = status_message.clone() {
-                    messages.push(message);
-                }
+                remember_status(
+                    &mut messages,
+                    &mut status_message,
+                    format!(
+                        "Installed {} to {}",
+                        installed.name,
+                        installed.path.as_deref().unwrap_or_default()
+                    ),
+                );
             }
             UPDATE_CHOICE => {
                 let installed = downloadable_match
                     .installed
                     .as_ref()
                     .context("Only installed skills can be updated")?;
-                status_message = Some(update_skill(directory, installed, &client)?);
-                if let Some(message) = status_message.clone() {
-                    messages.push(message);
-                }
+                remember_status(
+                    &mut messages,
+                    &mut status_message,
+                    update_skill(directory, installed, &client)?,
+                );
             }
             REMOVE_CHOICE => {
                 let installed = downloadable_match
@@ -1039,10 +1058,11 @@ fn run_skillsmp_search(
                     .as_ref()
                     .context("Only installed skills can be removed")?;
                 let removed = remove_skill(&skill_directory_name(installed), directory)?;
-                status_message = Some(format!("Removed {}", skill_directory_name(&removed)));
-                if let Some(message) = status_message.clone() {
-                    messages.push(message);
-                }
+                remember_status(
+                    &mut messages,
+                    &mut status_message,
+                    format!("Removed {}", skill_directory_name(&removed)),
+                );
             }
             _ => {}
         }
@@ -1119,15 +1139,22 @@ fn run_skillsmp_list(directory: &Path, config: ClientConfig) -> Result<()> {
         match actions[action_index] {
             BACK_CHOICE => continue,
             EXIT_CHOICE => break,
-            UPDATE_CHOICE => status_message = Some(update_skill(directory, &selected, &client)?),
+            UPDATE_CHOICE => {
+                remember_status(
+                    &mut messages,
+                    &mut status_message,
+                    update_skill(directory, &selected, &client)?,
+                );
+            }
             DELETE_CHOICE => {
                 let removed = remove_skill(&skill_directory_name(&selected), directory)?;
-                status_message = Some(format!("Removed {}", skill_directory_name(&removed)));
+                remember_status(
+                    &mut messages,
+                    &mut status_message,
+                    format!("Removed {}", skill_directory_name(&removed)),
+                );
             }
             _ => {}
-        }
-        if let Some(message) = status_message.clone() {
-            messages.push(message);
         }
     }
     if !messages.is_empty() {
@@ -1162,6 +1189,15 @@ fn run_util_venv(path: &Path, detailed: bool) -> Result<()> {
     Ok(())
 }
 
+fn remember_status(
+    messages: &mut Vec<String>,
+    status_message: &mut Option<String>,
+    message: String,
+) {
+    *status_message = Some(message.clone());
+    messages.push(message);
+}
+
 fn install_available_skill(
     directory: &Path,
     skill: &SkillData,
@@ -1180,14 +1216,14 @@ fn install_available_skill(
 
 fn update_skill(directory: &Path, skill: &SkillData, client: &SkillsMpClient) -> Result<String> {
     if skill.is_dependency() {
-        let Some(available) = available_dependency_skill(
-            skill,
+        let environment = ProjectEnvironment::with_paths(
+            directory,
             Path::new("pyproject.toml"),
             Path::new(".venv"),
             false,
             &[],
-        )?
-        else {
+        );
+        let Some(available) = available_dependency_skill_in(skill, &environment)? else {
             return Ok(format!(
                 "No dependency source found for {}",
                 skill_directory_name(skill)
@@ -1272,16 +1308,7 @@ fn search_skill_label(skill: &SkillsMpSkill, installed: Option<&SkillData>) -> S
 }
 
 fn skill_directory_name(skill: &SkillData) -> String {
-    skill
-        .path
-        .as_ref()
-        .and_then(|path| {
-            Path::new(path)
-                .file_name()
-                .and_then(|value| value.to_str())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| skill.name.clone())
+    skill.directory_name()
 }
 
 fn installed_skill_label(skill: &SkillData) -> String {
