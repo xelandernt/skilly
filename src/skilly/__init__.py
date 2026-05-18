@@ -1,3 +1,4 @@
+from skilly.filesystem import FileSystem
 from skilly.repository import ProjectSettings, SkillMatch, SkillRepository
 from skilly.skills import (
     Skill,
@@ -17,6 +18,7 @@ __all__ = [
     "SkillResource",
     "discover_installed_skills",
     "discover_venv_skills",
+    "FileSystem",
     "get_project_skills",
     "get_skills_from_directory",
     "get_venv_skills",

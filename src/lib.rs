@@ -4,13 +4,17 @@ mod core;
 
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery};
 use crate::core::{
-    SkillData, SkillResourceData, SkillSourceMetadata,
+    FileSystem, SkillData, SkillResourceData, SkillSourceMetadata,
     discover_github_skills as rust_discover_github_skills,
     discover_installed_skills as rust_discover_installed_skills,
+    discover_installed_skills_in as rust_discover_installed_skills_in,
     discover_venv_skills as rust_discover_venv_skills,
+    discover_venv_skills_in as rust_discover_venv_skills_in,
     github_versions_match as rust_github_versions_match,
     parse_github_skill_url as rust_parse_github_skill_url,
-    project_requirements as rust_project_requirements, remove_skill as rust_remove_skill,
+    project_requirements as rust_project_requirements,
+    project_requirements_in as rust_project_requirements_in, remove_skill as rust_remove_skill,
+    remove_skill_in as rust_remove_skill_in,
 };
 use pyo3::class::basic::CompareOp;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
@@ -19,7 +23,7 @@ use pyo3::types::{PyAny, PyDict, PyList, PyModule, PyType};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn py_err<E: ToString>(error: E) -> PyErr {
     PyRuntimeError::new_err(error.to_string())
@@ -218,6 +222,110 @@ fn skillsmp_search_query(
     }
 }
 
+struct PythonFileSystem {
+    inner: Py<PyAny>,
+}
+
+impl PythonFileSystem {
+    fn new(file_system: &Bound<'_, PyAny>) -> Self {
+        Self {
+            inner: file_system.clone().unbind(),
+        }
+    }
+}
+
+impl FileSystem for PythonFileSystem {
+    fn read_file(&self, path: &Path) -> anyhow::Result<String> {
+        Python::with_gil(|py| {
+            let path_arg = py_path(py, &path.to_string_lossy())?;
+            self.inner
+                .bind(py)
+                .call_method1("read_file", (path_arg,))?
+                .extract()
+        })
+        .map_err(|error: PyErr| anyhow::anyhow!(error.to_string()))
+    }
+
+    fn write_file(&self, path: &Path, content: &str) -> anyhow::Result<()> {
+        Python::with_gil(|py| {
+            let path_arg = py_path(py, &path.to_string_lossy())?;
+            self.inner
+                .bind(py)
+                .call_method1("write_file", (path_arg, content))?;
+            Ok(())
+        })
+        .map_err(|error: PyErr| anyhow::anyhow!(error.to_string()))
+    }
+
+    fn list_files(&self, path: &Path) -> anyhow::Result<Vec<String>> {
+        Python::with_gil(|py| {
+            let path_arg = py_path(py, &path.to_string_lossy())?;
+            self.inner
+                .bind(py)
+                .call_method1("list_files", (path_arg,))?
+                .extract()
+        })
+        .map_err(|error: PyErr| anyhow::anyhow!(error.to_string()))
+    }
+
+    fn exists(&self, path: &Path) -> anyhow::Result<bool> {
+        Python::with_gil(|py| {
+            let path_arg = py_path(py, &path.to_string_lossy())?;
+            self.inner
+                .bind(py)
+                .call_method1("exists", (path_arg,))?
+                .extract()
+        })
+        .map_err(|error: PyErr| anyhow::anyhow!(error.to_string()))
+    }
+
+    fn is_dir(&self, path: &Path) -> anyhow::Result<bool> {
+        Python::with_gil(|py| {
+            let path_arg = py_path(py, &path.to_string_lossy())?;
+            self.inner
+                .bind(py)
+                .call_method1("is_dir", (path_arg,))?
+                .extract()
+        })
+        .map_err(|error: PyErr| anyhow::anyhow!(error.to_string()))
+    }
+
+    fn make_dir(&self, path: &Path, parents: bool, exist_ok: bool) -> anyhow::Result<()> {
+        Python::with_gil(|py| {
+            let path_arg = py_path(py, &path.to_string_lossy())?;
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("parents", parents)?;
+            kwargs.set_item("exist_ok", exist_ok)?;
+            self.inner
+                .bind(py)
+                .call_method("make_dir", (path_arg,), Some(&kwargs))?;
+            Ok(())
+        })
+        .map_err(|error: PyErr| anyhow::anyhow!(error.to_string()))
+    }
+
+    fn remove_tree(&self, path: &Path) -> anyhow::Result<()> {
+        Python::with_gil(|py| {
+            let path_arg = py_path(py, &path.to_string_lossy())?;
+            self.inner
+                .bind(py)
+                .call_method1("remove_tree", (path_arg,))?;
+            Ok(())
+        })
+        .map_err(|error: PyErr| anyhow::anyhow!(error.to_string()))
+    }
+
+    fn resolve(&self, path: &Path) -> anyhow::Result<PathBuf> {
+        Python::with_gil(|py| {
+            let path_arg = py_path(py, &path.to_string_lossy())?;
+            let resolved = self.inner.bind(py).call_method1("resolve", (path_arg,))?;
+            let resolved = py_fspath_string(&resolved)?;
+            Ok(PathBuf::from(resolved))
+        })
+        .map_err(|error: PyErr| anyhow::anyhow!(error.to_string()))
+    }
+}
+
 fn skill_from_text_impl(
     text: &str,
     path: Option<&Bound<'_, PyAny>>,
@@ -227,22 +335,30 @@ fn skill_from_text_impl(
     github_url: Option<String>,
     github_commit_sha: Option<String>,
     skillsmp_id: Option<String>,
+    file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
-    Ok(PySkill::from_data(
-        SkillData::from_text(
+    let source_metadata = skill_source_metadata(
+        source,
+        package_name,
+        package_version,
+        github_url,
+        github_commit_sha,
+        skillsmp_id,
+    );
+    let path = optional_path_arg(path)?;
+    let skill = if let Some(file_system) = file_system {
+        let file_system = PythonFileSystem::new(file_system);
+        SkillData::from_text_in(
+            &file_system,
             text,
-            optional_path_arg(path)?.as_deref().map(Path::new),
-            &skill_source_metadata(
-                source,
-                package_name,
-                package_version,
-                github_url,
-                github_commit_sha,
-                skillsmp_id,
-            ),
+            path.as_deref().map(Path::new),
+            &source_metadata,
         )
-        .map_err(py_err)?,
-    ))
+    } else {
+        SkillData::from_text(text, path.as_deref().map(Path::new), &source_metadata)
+    }
+    .map_err(py_err)?;
+    Ok(PySkill::from_data(skill))
 }
 
 fn skill_from_file_impl(
@@ -254,23 +370,31 @@ fn skill_from_file_impl(
     github_url: Option<String>,
     github_commit_sha: Option<String>,
     skillsmp_id: Option<String>,
+    file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
     let path = py_fspath_string(path)?;
-    let skill = py
-        .allow_threads(|| {
-            SkillData::from_file_with_source_metadata(
-                Path::new(&path),
-                &skill_source_metadata(
-                    source,
-                    package_name,
-                    package_version,
-                    github_url,
-                    github_commit_sha,
-                    skillsmp_id,
-                ),
-            )
+    let source_metadata = skill_source_metadata(
+        source,
+        package_name,
+        package_version,
+        github_url,
+        github_commit_sha,
+        skillsmp_id,
+    );
+    let skill = if let Some(file_system) = file_system {
+        let file_system = PythonFileSystem::new(file_system);
+        SkillData::from_file_with_source_metadata_in(
+            &file_system,
+            Path::new(&path),
+            &source_metadata,
+        )
+        .map_err(py_err)?
+    } else {
+        py.allow_threads(|| {
+            SkillData::from_file_with_source_metadata(Path::new(&path), &source_metadata)
         })
-        .map_err(py_err)?;
+        .map_err(py_err)?
+    };
     Ok(PySkill::from_data(skill))
 }
 
@@ -283,23 +407,31 @@ fn skill_from_dir_impl(
     github_url: Option<String>,
     github_commit_sha: Option<String>,
     skillsmp_id: Option<String>,
+    file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
     let path = py_fspath_string(path)?;
-    let skill = py
-        .allow_threads(|| {
-            SkillData::from_dir_with_source_metadata(
-                Path::new(&path),
-                &skill_source_metadata(
-                    source,
-                    package_name,
-                    package_version,
-                    github_url,
-                    github_commit_sha,
-                    skillsmp_id,
-                ),
-            )
+    let source_metadata = skill_source_metadata(
+        source,
+        package_name,
+        package_version,
+        github_url,
+        github_commit_sha,
+        skillsmp_id,
+    );
+    let skill = if let Some(file_system) = file_system {
+        let file_system = PythonFileSystem::new(file_system);
+        SkillData::from_dir_with_source_metadata_in(
+            &file_system,
+            Path::new(&path),
+            &source_metadata,
+        )
+        .map_err(py_err)?
+    } else {
+        py.allow_threads(|| {
+            SkillData::from_dir_with_source_metadata(Path::new(&path), &source_metadata)
         })
-        .map_err(py_err)?;
+        .map_err(py_err)?
+    };
     Ok(PySkill::from_data(skill))
 }
 
@@ -446,7 +578,8 @@ impl PySkill {
         package_version=None,
         github_url=None,
         github_commit_sha=None,
-        skillsmp_id=None
+        skillsmp_id=None,
+        file_system=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn from_text(
@@ -459,6 +592,7 @@ impl PySkill {
         github_url: Option<String>,
         github_commit_sha: Option<String>,
         skillsmp_id: Option<String>,
+        file_system: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         skill_from_text_impl(
             &text,
@@ -469,6 +603,7 @@ impl PySkill {
             github_url,
             github_commit_sha,
             skillsmp_id,
+            file_system,
         )
     }
 
@@ -480,7 +615,8 @@ impl PySkill {
         package_version=None,
         github_url=None,
         github_commit_sha=None,
-        skillsmp_id=None
+        skillsmp_id=None,
+        file_system=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn from_file(
@@ -493,6 +629,7 @@ impl PySkill {
         github_url: Option<String>,
         github_commit_sha: Option<String>,
         skillsmp_id: Option<String>,
+        file_system: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         skill_from_file_impl(
             py,
@@ -503,6 +640,7 @@ impl PySkill {
             github_url,
             github_commit_sha,
             skillsmp_id,
+            file_system,
         )
     }
 
@@ -514,7 +652,8 @@ impl PySkill {
         package_version=None,
         github_url=None,
         github_commit_sha=None,
-        skillsmp_id=None
+        skillsmp_id=None,
+        file_system=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn from_dir(
@@ -527,6 +666,7 @@ impl PySkill {
         github_url: Option<String>,
         github_commit_sha: Option<String>,
         skillsmp_id: Option<String>,
+        file_system: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         skill_from_dir_impl(
             py,
@@ -537,6 +677,7 @@ impl PySkill {
             github_url,
             github_commit_sha,
             skillsmp_id,
+            file_system,
         )
     }
 
@@ -759,21 +900,33 @@ impl PySkill {
         self.inner.render(metadata.as_ref())
     }
 
-    #[pyo3(signature = (directory=None, skill_name=None, overwrite=false))]
+    #[pyo3(signature = (directory=None, skill_name=None, overwrite=false, file_system=None))]
     fn install_to(
         &self,
         py: Python<'_>,
         directory: Option<&Bound<'_, PyAny>>,
         skill_name: Option<String>,
         overwrite: bool,
+        file_system: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let directory = default_directory_arg(directory, core::DEFAULT_SKILLS_PATH)?;
-        let installed = py
-            .allow_threads(|| {
+        let installed = if let Some(file_system) = file_system {
+            let file_system = PythonFileSystem::new(file_system);
+            self.inner
+                .install_to_in(
+                    &file_system,
+                    Path::new(&directory),
+                    skill_name.as_deref(),
+                    overwrite,
+                )
+                .map_err(py_err)?
+        } else {
+            py.allow_threads(|| {
                 self.inner
                     .install_to(Path::new(&directory), skill_name.as_deref(), overwrite)
             })
-            .map_err(py_err)?;
+            .map_err(py_err)?
+        };
         Ok(Self::from_data(installed))
     }
 
@@ -817,7 +970,8 @@ impl PySkill {
     package_version=None,
     github_url=None,
     github_commit_sha=None,
-    skillsmp_id=None
+    skillsmp_id=None,
+    file_system=None
 ))]
 #[allow(clippy::too_many_arguments)]
 fn skill_from_text_py(
@@ -829,6 +983,7 @@ fn skill_from_text_py(
     github_url: Option<String>,
     github_commit_sha: Option<String>,
     skillsmp_id: Option<String>,
+    file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
     skill_from_text_impl(
         &text,
@@ -839,6 +994,7 @@ fn skill_from_text_py(
         github_url,
         github_commit_sha,
         skillsmp_id,
+        file_system,
     )
 }
 
@@ -850,7 +1006,8 @@ fn skill_from_text_py(
     package_version=None,
     github_url=None,
     github_commit_sha=None,
-    skillsmp_id=None
+    skillsmp_id=None,
+    file_system=None
 ))]
 #[allow(clippy::too_many_arguments)]
 fn skill_from_file_py(
@@ -862,6 +1019,7 @@ fn skill_from_file_py(
     github_url: Option<String>,
     github_commit_sha: Option<String>,
     skillsmp_id: Option<String>,
+    file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
     skill_from_file_impl(
         py,
@@ -872,6 +1030,7 @@ fn skill_from_file_py(
         github_url,
         github_commit_sha,
         skillsmp_id,
+        file_system,
     )
 }
 
@@ -883,7 +1042,8 @@ fn skill_from_file_py(
     package_version=None,
     github_url=None,
     github_commit_sha=None,
-    skillsmp_id=None
+    skillsmp_id=None,
+    file_system=None
 ))]
 #[allow(clippy::too_many_arguments)]
 fn skill_from_dir_py(
@@ -895,6 +1055,7 @@ fn skill_from_dir_py(
     github_url: Option<String>,
     github_commit_sha: Option<String>,
     skillsmp_id: Option<String>,
+    file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
     skill_from_dir_impl(
         py,
@@ -905,6 +1066,7 @@ fn skill_from_dir_py(
         github_url,
         github_commit_sha,
         skillsmp_id,
+        file_system,
     )
 }
 
@@ -915,40 +1077,51 @@ fn skill_render_py(skill: &PySkill, metadata: Option<BTreeMap<String, String>>) 
 }
 
 #[pyfunction]
-#[pyo3(name = "skill_install_to", signature = (skill, directory=None, skill_name=None, overwrite=false))]
+#[pyo3(name = "skill_install_to", signature = (skill, directory=None, skill_name=None, overwrite=false, file_system=None))]
 fn skill_install_to_py(
     py: Python<'_>,
     skill: &PySkill,
     directory: Option<&Bound<'_, PyAny>>,
     skill_name: Option<String>,
     overwrite: bool,
+    file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
-    skill.install_to(py, directory, skill_name, overwrite)
+    skill.install_to(py, directory, skill_name, overwrite, file_system)
 }
 
 #[pyfunction]
-#[pyo3(name = "discover_installed_skills", signature = (directory=None))]
+#[pyo3(name = "discover_installed_skills", signature = (directory=None, file_system=None))]
 fn discover_installed_skills_py(
     py: Python<'_>,
     directory: Option<&Bound<'_, PyAny>>,
+    file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Vec<PySkill>> {
     let directory = default_directory_arg(directory, core::DEFAULT_SKILLS_PATH)?;
-    let skills = py
-        .allow_threads(|| rust_discover_installed_skills(Path::new(&directory)))
-        .map_err(py_err)?;
+    let skills = if let Some(file_system) = file_system {
+        let file_system = PythonFileSystem::new(file_system);
+        rust_discover_installed_skills_in(&file_system, Path::new(&directory)).map_err(py_err)?
+    } else {
+        py.allow_threads(|| rust_discover_installed_skills(Path::new(&directory)))
+            .map_err(py_err)?
+    };
     Ok(skills.into_iter().map(PySkill::from_data).collect())
 }
 
 #[pyfunction]
-#[pyo3(name = "discover_venv_skills", signature = (path=None))]
+#[pyo3(name = "discover_venv_skills", signature = (path=None, file_system=None))]
 fn discover_venv_skills_py(
     py: Python<'_>,
     path: Option<&Bound<'_, PyAny>>,
+    file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Vec<PySkill>> {
     let path = default_directory_arg(path, ".venv")?;
-    let skills = py
-        .allow_threads(|| rust_discover_venv_skills(Path::new(&path)))
-        .map_err(py_err)?;
+    let skills = if let Some(file_system) = file_system {
+        let file_system = PythonFileSystem::new(file_system);
+        rust_discover_venv_skills_in(&file_system, Path::new(&path)).map_err(py_err)?
+    } else {
+        py.allow_threads(|| rust_discover_venv_skills(Path::new(&path)))
+            .map_err(py_err)?
+    };
     Ok(skills.into_iter().map(PySkill::from_data).collect())
 }
 
@@ -999,31 +1172,45 @@ fn github_versions_match_py(installed: &PySkill, available: &PySkill) -> bool {
 }
 
 #[pyfunction]
-#[pyo3(name = "remove_skill", signature = (name, directory=None))]
+#[pyo3(name = "remove_skill", signature = (name, directory=None, file_system=None))]
 fn remove_skill_py(
     py: Python<'_>,
     name: String,
     directory: Option<&Bound<'_, PyAny>>,
+    file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
     let directory = default_directory_arg(directory, core::DEFAULT_SKILLS_PATH)?;
-    let removed = py
-        .allow_threads(|| rust_remove_skill(&name, Path::new(&directory)))
-        .map_err(py_err)?;
+    let removed = if let Some(file_system) = file_system {
+        let file_system = PythonFileSystem::new(file_system);
+        rust_remove_skill_in(&file_system, &name, Path::new(&directory)).map_err(py_err)?
+    } else {
+        py.allow_threads(|| rust_remove_skill(&name, Path::new(&directory)))
+            .map_err(py_err)?
+    };
     Ok(PySkill::from_data(removed))
 }
 
 #[pyfunction]
-#[pyo3(name = "project_requirements", signature = (pyproject_toml_path=None, include_dev=false, include_extras=None))]
+#[pyo3(name = "project_requirements", signature = (pyproject_toml_path=None, include_dev=false, include_extras=None, file_system=None))]
 fn project_requirements_py(
     py: Python<'_>,
     pyproject_toml_path: Option<&Bound<'_, PyAny>>,
     include_dev: bool,
     include_extras: Option<Vec<String>>,
+    file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Vec<String>> {
     let path = default_directory_arg(pyproject_toml_path, "pyproject.toml")?;
     let include_extras = include_extras.unwrap_or_default();
-    py.allow_threads(|| rust_project_requirements(Path::new(&path), include_dev, &include_extras))
+    if let Some(file_system) = file_system {
+        let file_system = PythonFileSystem::new(file_system);
+        rust_project_requirements_in(&file_system, Path::new(&path), include_dev, &include_extras)
+            .map_err(py_err)
+    } else {
+        py.allow_threads(|| {
+            rust_project_requirements(Path::new(&path), include_dev, &include_extras)
+        })
         .map_err(py_err)
+    }
 }
 
 #[pyfunction]

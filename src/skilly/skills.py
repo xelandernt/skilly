@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         GitHubRepositorySnapshotData,
         GitHubSkillLocationData,
     )
+    from .filesystem import FileSystem
 
 
 class GitHubSkillFetcher(Protocol):
@@ -138,12 +139,20 @@ class GitHubRepositorySnapshot:
         )
 
 
-def discover_installed_skills(directory: Path = DEFAULT_SKILLS_PATH) -> list[Skill]:
-    return bridge.discover_installed_skills(directory)
+def discover_installed_skills(
+    directory: Path = DEFAULT_SKILLS_PATH,
+    *,
+    file_system: FileSystem | None = None,
+) -> list[Skill]:
+    return bridge.discover_installed_skills(directory, file_system=file_system)
 
 
-def discover_venv_skills(path: Path = Path(".venv")) -> list[Skill]:
-    return bridge.discover_venv_skills(path)
+def discover_venv_skills(
+    path: Path = Path(".venv"),
+    *,
+    file_system: FileSystem | None = None,
+) -> list[Skill]:
+    return bridge.discover_venv_skills(path, file_system=file_system)
 
 
 def discover_github_skills(

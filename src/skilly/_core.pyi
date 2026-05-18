@@ -2,6 +2,8 @@ from os import PathLike
 from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol, TypeAlias, TypedDict
 
+from .filesystem import FileSystem
+
 ResourceKind: TypeAlias = Literal["script", "reference", "asset", "other"]
 StrPath: TypeAlias = str | PathLike[str]
 
@@ -84,6 +86,7 @@ class Skill:
         github_url: str | None = ...,
         github_commit_sha: str | None = ...,
         skillsmp_id: str | None = ...,
+        file_system: FileSystem | None = ...,
     ) -> Skill: ...
     @classmethod
     def from_file(
@@ -95,6 +98,7 @@ class Skill:
         github_url: str | None = ...,
         github_commit_sha: str | None = ...,
         skillsmp_id: str | None = ...,
+        file_system: FileSystem | None = ...,
     ) -> Skill: ...
     @classmethod
     def from_dir(
@@ -106,6 +110,7 @@ class Skill:
         github_url: str | None = ...,
         github_commit_sha: str | None = ...,
         skillsmp_id: str | None = ...,
+        file_system: FileSystem | None = ...,
     ) -> Skill: ...
     @classmethod
     def from_github(
@@ -180,6 +185,7 @@ class Skill:
         directory: StrPath | None = ...,
         skill_name: str | None = ...,
         overwrite: bool = ...,
+        file_system: FileSystem | None = ...,
     ) -> Skill: ...
 
 class SkillsMpSkillData(TypedDict):
@@ -256,6 +262,7 @@ def skill_from_text(
     github_url: str | None = ...,
     github_commit_sha: str | None = ...,
     skillsmp_id: str | None = ...,
+    file_system: FileSystem | None = ...,
 ) -> Skill: ...
 def skill_from_file(
     path: StrPath,
@@ -265,6 +272,7 @@ def skill_from_file(
     github_url: str | None = ...,
     github_commit_sha: str | None = ...,
     skillsmp_id: str | None = ...,
+    file_system: FileSystem | None = ...,
 ) -> Skill: ...
 def skill_from_dir(
     path: StrPath,
@@ -274,6 +282,7 @@ def skill_from_dir(
     github_url: str | None = ...,
     github_commit_sha: str | None = ...,
     skillsmp_id: str | None = ...,
+    file_system: FileSystem | None = ...,
 ) -> Skill: ...
 def skill_render(skill: Skill, metadata: dict[str, str] | None = ...) -> str: ...
 def skill_install_to(
@@ -281,9 +290,14 @@ def skill_install_to(
     directory: StrPath | None = ...,
     skill_name: str | None = ...,
     overwrite: bool = ...,
+    file_system: FileSystem | None = ...,
 ) -> Skill: ...
-def discover_installed_skills(directory: StrPath | None = ...) -> list[Skill]: ...
-def discover_venv_skills(path: StrPath | None = ...) -> list[Skill]: ...
+def discover_installed_skills(
+    directory: StrPath | None = ..., file_system: FileSystem | None = ...
+) -> list[Skill]: ...
+def discover_venv_skills(
+    path: StrPath | None = ..., file_system: FileSystem | None = ...
+) -> list[Skill]: ...
 def parse_github_skill_url(github_url: str) -> GitHubSkillLocationData: ...
 def discover_github_skills(
     github_url: str,
@@ -295,11 +309,16 @@ def discover_github_skills(
     proxy: str | None = ...,
 ) -> list[Skill]: ...
 def github_versions_match(installed: Skill, available: Skill) -> bool: ...
-def remove_skill(name: str, directory: StrPath | None = ...) -> Skill: ...
+def remove_skill(
+    name: str,
+    directory: StrPath | None = ...,
+    file_system: FileSystem | None = ...,
+) -> Skill: ...
 def project_requirements(
     pyproject_toml_path: StrPath | None = ...,
     include_dev: bool = ...,
     include_extras: list[str] | None = ...,
+    file_system: FileSystem | None = ...,
 ) -> list[str]: ...
 def skillsmp_search(
     q: str,

@@ -16,6 +16,7 @@ if TYPE_CHECKING:
         SkillsMpAiSearchApiResponseData,
         SkillsMpSearchApiResponseData,
     )
+    from .filesystem import FileSystem
 
 BridgeScalar: TypeAlias = str | int | float | bool | None
 BridgeObject: TypeAlias = Mapping[str, "BridgeValue"]
@@ -120,6 +121,7 @@ def skill_from_text(
     github_url: str | None = None,
     github_commit_sha: str | None = None,
     skillsmp_id: str | None = None,
+    file_system: FileSystem | None = None,
 ) -> Skill:
     origin_kwargs = skill_origin_kwargs(origin)
     return _core.skill_from_text(
@@ -141,6 +143,7 @@ def skill_from_text(
         skillsmp_id=skillsmp_id
         if skillsmp_id is not None
         else origin_kwargs["skillsmp_id"],
+        file_system=file_system,
     )
 
 
@@ -153,6 +156,7 @@ def skill_from_file(
     github_url: str | None = None,
     github_commit_sha: str | None = None,
     skillsmp_id: str | None = None,
+    file_system: FileSystem | None = None,
 ) -> Skill:
     origin_kwargs = skill_origin_kwargs(origin)
     return _core.skill_from_file(
@@ -173,6 +177,7 @@ def skill_from_file(
         skillsmp_id=skillsmp_id
         if skillsmp_id is not None
         else origin_kwargs["skillsmp_id"],
+        file_system=file_system,
     )
 
 
@@ -185,6 +190,7 @@ def skill_from_dir(
     github_url: str | None = None,
     github_commit_sha: str | None = None,
     skillsmp_id: str | None = None,
+    file_system: FileSystem | None = None,
 ) -> Skill:
     origin_kwargs = skill_origin_kwargs(origin)
     return _core.skill_from_dir(
@@ -205,6 +211,7 @@ def skill_from_dir(
         skillsmp_id=skillsmp_id
         if skillsmp_id is not None
         else origin_kwargs["skillsmp_id"],
+        file_system=file_system,
     )
 
 
@@ -217,21 +224,29 @@ def skill_install_to(
     directory: StrPath | None = None,
     skill_name: str | None = None,
     overwrite: bool = False,
+    file_system: FileSystem | None = None,
 ) -> Skill:
     return _core.skill_install_to(
         skill,
         directory=directory,
         skill_name=skill_name,
         overwrite=overwrite,
+        file_system=file_system,
     )
 
 
-def discover_installed_skills(directory: StrPath | None = None) -> list[Skill]:
-    return _core.discover_installed_skills(directory)
+def discover_installed_skills(
+    directory: StrPath | None = None,
+    file_system: FileSystem | None = None,
+) -> list[Skill]:
+    return _core.discover_installed_skills(directory, file_system=file_system)
 
 
-def discover_venv_skills(path: StrPath | None = None) -> list[Skill]:
-    return _core.discover_venv_skills(path)
+def discover_venv_skills(
+    path: StrPath | None = None,
+    file_system: FileSystem | None = None,
+) -> list[Skill]:
+    return _core.discover_venv_skills(path, file_system=file_system)
 
 
 def parse_github_skill_url(github_url: str) -> GitHubSkillLocationData:
@@ -266,19 +281,25 @@ def github_versions_match(installed: Skill, available: Skill) -> bool:
     return _core.github_versions_match(installed, available)
 
 
-def remove_skill(name: str, directory: StrPath | None = None) -> Skill:
-    return _core.remove_skill(name, directory)
+def remove_skill(
+    name: str,
+    directory: StrPath | None = None,
+    file_system: FileSystem | None = None,
+) -> Skill:
+    return _core.remove_skill(name, directory, file_system=file_system)
 
 
 def project_requirements(
     pyproject_toml_path: StrPath | None = None,
     include_dev: bool = False,
     include_extras: list[str] | None = None,
+    file_system: FileSystem | None = None,
 ) -> list[str]:
     return _core.project_requirements(
         pyproject_toml_path=pyproject_toml_path,
         include_dev=include_dev,
         include_extras=include_extras,
+        file_system=file_system,
     )
 
 

@@ -46,7 +46,13 @@ When downloading from a repository URL that contains multiple skills, use `--ski
 ```python
 from pathlib import Path
 
-from skilly import ProjectSettings, Skill, SkillRepository
+from skilly import (
+    FileSystem,
+    ProjectSettings,
+    Skill,
+    SkillRepository,
+    discover_venv_skills,
+)
 from skilly.skillsmp import ClientSettings, SkillsMp, SkillsMpSearchQuery
 
 generated = Skill(
@@ -65,6 +71,12 @@ github_skill = Skill.from_github(
 repository = SkillRepository()
 for match in repository.scan_project(project=ProjectSettings(include_dev=True)):
     print(match.available.name, match.status)
+
+class CustomFileSystem(FileSystem):
+    ...
+
+skills = repository.list(file_system=CustomFileSystem())
+dependency_skills = discover_venv_skills(file_system=CustomFileSystem())
 
 client = SkillsMp(settings=ClientSettings(base_url="https://skillsmp.com/api/v1"))
 response = client.search(SkillsMpSearchQuery(text="python", limit=5))

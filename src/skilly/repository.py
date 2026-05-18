@@ -3,14 +3,17 @@ from __future__ import annotations
 import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from packaging.requirements import Requirement
 
 from . import _bridge as bridge
 from .constants import DEFAULT_SKILLS_PATH, SkillInstallStatus
 from .skills import Skill, discover_installed_skills, discover_venv_skills
+
+if TYPE_CHECKING:
+    from .filesystem import FileSystem
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,14 @@ class ProjectSettings:
 
 
 class SkillRepository:
+    def __init__(self, *, file_system: FileSystem | None = None) -> None:
+        self._file_system = file_system
+
+    def _resolve_file_system(
+        self, file_system: FileSystem | None = None
+    ) -> FileSystem | None:
+        return file_system if file_system is not None else self._file_system
+
     def _project_settings(
         self,
         *,
@@ -54,17 +65,36 @@ class SkillRepository:
             include_extras=tuple(include_extras),
         )
 
-    def list(self, directory: Path = DEFAULT_SKILLS_PATH) -> list[Skill]:
-        return discover_installed_skills(directory)
+    def list(
+        self,
+        directory: Path = DEFAULT_SKILLS_PATH,
+        *,
+        file_system: FileSystem | None = None,
+    ) -> list[Skill]:
+        return discover_installed_skills(
+            directory, file_system=self._resolve_file_system(file_system)
+        )
 
-    def find(self, name: str, *, directory: Path = DEFAULT_SKILLS_PATH) -> Skill | None:
+    def find(
+        self,
+        name: str,
+        *,
+        directory: Path = DEFAULT_SKILLS_PATH,
+        file_system: FileSystem | None = None,
+    ) -> Skill | None:
         try:
-            return self.require(name, directory=directory)
+            return self.require(name, directory=directory, file_system=file_system)
         except FileNotFoundError:
             return None
 
-    def require(self, name: str, *, directory: Path = DEFAULT_SKILLS_PATH) -> Skill:
-        skills = self.list(directory)
+    def require(
+        self,
+        name: str,
+        *,
+        directory: Path = DEFAULT_SKILLS_PATH,
+        file_system: FileSystem | None = None,
+    ) -> Skill:
+        skills = self.list(directory, file_system=file_system)
         for skill in skills:
             if skill.directory_name == name:
                 return skill
@@ -84,18 +114,35 @@ class SkillRepository:
         skill_name: str | None = None,
         overwrite: bool = False,
         replace: bool = False,
+        file_system: FileSystem | None = None,
     ) -> Skill:
+        resolved_file_system = self._resolve_file_system(file_system)
         destination = directory / (skill_name or skill.name)
-        if replace and destination.exists():
-            shutil.rmtree(destination)
+        if replace:
+            if resolved_file_system is not None:
+                if resolved_file_system.exists(destination):
+                    resolved_file_system.remove_tree(destination)
+            elif destination.exists():
+                shutil.rmtree(destination)
         return skill.install_to(
             directory,
             skill_name=skill_name,
             overwrite=overwrite or replace,
+            file_system=resolved_file_system,
         )
 
-    def remove(self, name: str, *, directory: Path = DEFAULT_SKILLS_PATH) -> Skill:
-        return bridge.remove_skill(name, directory)
+    def remove(
+        self,
+        name: str,
+        *,
+        directory: Path = DEFAULT_SKILLS_PATH,
+        file_system: FileSystem | None = None,
+    ) -> Skill:
+        return bridge.remove_skill(
+            name,
+            directory,
+            file_system=self._resolve_file_system(file_system),
+        )
 
     def project_requirements(
         self,
@@ -104,6 +151,7 @@ class SkillRepository:
         pyproject_toml_path: Path = Path("pyproject.toml"),
         include_dev: bool = False,
         include_extras: Sequence[str] = (),
+        file_system: FileSystem | None = None,
     ) -> Sequence[Requirement]:
         settings = self._project_settings(
             project=project,
@@ -115,6 +163,7 @@ class SkillRepository:
             str(settings.pyproject_toml_path),
             include_dev=settings.include_dev,
             include_extras=list(settings.include_extras),
+            file_system=self._resolve_file_system(file_system),
         )
         return [Requirement(spec) for spec in requirements]
 
@@ -126,6 +175,7 @@ class SkillRepository:
         venv_path: Path = Path(".venv"),
         include_dev: bool = False,
         include_extras: Sequence[str] = (),
+        file_system: FileSystem | None = None,
     ) -> Sequence[Skill]:
         settings = self._project_settings(
             project=project,
@@ -138,11 +188,14 @@ class SkillRepository:
             requirement.name
             for requirement in self.project_requirements(
                 project=settings,
+                file_system=file_system,
             )
         }
         return [
             skill
-            for skill in discover_venv_skills(settings.venv_path)
+            for skill in discover_venv_skills(
+                settings.venv_path, file_system=self._resolve_file_system(file_system)
+            )
             if skill.package_name in package_names
         ]
 
@@ -155,6 +208,7 @@ class SkillRepository:
         venv_path: Path = Path(".venv"),
         include_dev: bool = False,
         include_extras: Sequence[str] = (),
+        file_system: FileSystem | None = None,
     ) -> Sequence[SkillMatch]:
         settings = self._project_settings(
             project=project,
@@ -163,7 +217,7 @@ class SkillRepository:
             include_dev=include_dev,
             include_extras=include_extras,
         )
-        installed = self.list(directory)
+        installed = self.list(directory, file_system=file_system)
         matches = [
             SkillMatch(
                 available=skill,
@@ -171,6 +225,7 @@ class SkillRepository:
             )
             for skill in self.project_skills(
                 project=settings,
+                file_system=file_system,
             )
         ]
         return sorted(
@@ -191,6 +246,7 @@ class SkillRepository:
         venv_path: Path = Path(".venv"),
         include_dev: bool = False,
         include_extras: Sequence[str] = (),
+        file_system: FileSystem | None = None,
     ) -> Sequence[SkillMatch]:
         return [
             item
@@ -203,6 +259,7 @@ class SkillRepository:
                     include_dev=include_dev,
                     include_extras=include_extras,
                 ),
+                file_system=file_system,
             )
             if item.status is SkillInstallStatus.UPDATABLE
         ]
@@ -216,6 +273,7 @@ class SkillRepository:
         venv_path: Path = Path(".venv"),
         include_dev: bool = False,
         include_extras: Sequence[str] = (),
+        file_system: FileSystem | None = None,
     ) -> Skill | None:
         settings = self._project_settings(
             project=project,
@@ -226,6 +284,7 @@ class SkillRepository:
         )
         for skill in self.project_skills(
             project=settings,
+            file_system=file_system,
         ):
             if skill.matches(installed_skill):
                 return skill
