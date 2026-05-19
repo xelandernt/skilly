@@ -48,12 +48,12 @@ class SkillsMpSkill:
         if stars is not None and not isinstance(stars, int):
             raise TypeError(f"Expected int, got {type(stars)!r}")
         return cls(
-            id=bridge.ensure_string(data["id"]),
-            name=bridge.ensure_string(data["name"]),
-            author=bridge.ensure_string(data["author"]),
-            description=bridge.ensure_string(data["description"]),
-            githubUrl=bridge.ensure_string(data["githubUrl"]),
-            skillUrl=bridge.ensure_string(data["skillUrl"]),
+            id=data["id"],
+            name=data["name"],
+            author=data["author"],
+            description=data["description"],
+            githubUrl=data["githubUrl"],
+            skillUrl=data["skillUrl"],
             stars=stars,
             updatedAt=updated_at,
         )
@@ -75,12 +75,12 @@ class SkillsMpPagination:
         if total_is_exact is not None and not isinstance(total_is_exact, bool):
             raise TypeError(f"Expected bool, got {type(total_is_exact)!r}")
         return cls(
-            page=_expect_int(data["page"]),
-            limit=_expect_int(data["limit"]),
-            total=_expect_int(data["total"]),
-            totalPages=_expect_int(data["totalPages"]),
-            hasNext=_expect_bool(data["hasNext"]),
-            hasPrev=_expect_bool(data["hasPrev"]),
+            page=data["page"],
+            limit=data["limit"],
+            total=data["total"],
+            totalPages=data["totalPages"],
+            hasNext=data["hasNext"],
+            hasPrev=data["hasPrev"],
             totalIsExact=total_is_exact,
         )
 
@@ -95,10 +95,10 @@ class SkillsMpFilters:
     @classmethod
     def from_data(cls, data: SkillsMpFiltersData) -> "SkillsMpFilters":
         return cls(
-            search=_optional_string(data.get("search")),
-            sortBy=_optional_string(data.get("sortBy")),
-            category=_optional_string(data.get("category")),
-            occupation=_optional_string(data.get("occupation")),
+            search=data.get("search"),
+            sortBy=data.get("sortBy"),
+            category=data.get("category"),
+            occupation=data.get("occupation"),
         )
 
 
@@ -140,7 +140,7 @@ class SkillsMpMeta:
         if response_time is not None and not isinstance(response_time, int):
             raise TypeError(f"Expected int, got {type(response_time)!r}")
         return cls(
-            requestId=_optional_string(data.get("requestId")),
+            requestId=data.get("requestId"),
             responseTimeMs=response_time,
         )
 
@@ -153,8 +153,8 @@ class SkillsMpError:
     @classmethod
     def from_data(cls, data: SkillsMpErrorData) -> "SkillsMpError":
         return cls(
-            code=bridge.ensure_string(data["code"]),
-            message=bridge.ensure_string(data["message"]),
+            code=data["code"],
+            message=data["message"],
         )
 
 
@@ -170,7 +170,7 @@ class SkillsMpSearchApiResponse:
     ) -> "SkillsMpSearchApiResponse":
         meta = data.get("meta")
         return cls(
-            success=_expect_bool(data["success"]),
+            success=data["success"],
             data=SkillsMpSearchData.from_data(data["data"]),
             meta=None if meta is None else SkillsMpMeta.from_data(meta),
         )
@@ -188,7 +188,7 @@ class SkillsMpAiSearchApiResponse:
     ) -> "SkillsMpAiSearchApiResponse":
         meta = data.get("meta")
         return cls(
-            success=_expect_bool(data["success"]),
+            success=data["success"],
             data=SkillsMpAiSearchData.from_data(data["data"]),
             meta=None if meta is None else SkillsMpMeta.from_data(meta),
         )
@@ -206,7 +206,7 @@ class SkillsMpErrorApiResponse:
     ) -> "SkillsMpErrorApiResponse":
         meta = data.get("meta")
         return cls(
-            success=_expect_bool(data["success"]),
+            success=data["success"],
             error=SkillsMpError.from_data(data["error"]),
             meta=None if meta is None else SkillsMpMeta.from_data(meta),
         )
@@ -358,7 +358,7 @@ class SkillsMp(_SkillsMpBase):
         )
         if len(payload) != 2:
             raise ValueError(f"Expected 2 values, got {len(payload)}")
-        return bridge.ensure_string(payload[0]), bridge.ensure_string(payload[1])
+        return payload[0], payload[1]
 
 
 class AsyncSkillsMp(_SkillsMpBase):
@@ -401,21 +401,3 @@ class AsyncSkillsMp(_SkillsMpBase):
         location: GitHubSkillLocation,
     ) -> tuple[str, str]:
         return self._sync().resolve_github_ref_and_commit_sha(location)
-
-
-def _expect_bool(value: bridge.BridgeValue) -> bool:
-    if not isinstance(value, bool):
-        raise TypeError(f"Expected bool, got {type(value)!r}")
-    return value
-
-
-def _expect_int(value: bridge.BridgeValue) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"Expected int, got {type(value)!r}")
-    return value
-
-
-def _optional_string(value: bridge.BridgeValue | None) -> str | None:
-    if value is None:
-        return None
-    return bridge.ensure_string(value)

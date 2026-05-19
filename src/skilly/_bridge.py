@@ -415,21 +415,3 @@ def skillsmp_resolve_github_ref_and_commit_sha(
 
 def run_cli(args: list[str]) -> int:
     return _core.run_cli(args)
-
-
-def ensure_object(value: BridgeValue) -> BridgeObject:
-    if not isinstance(value, dict):
-        raise TypeError(f"Expected object, got {type(value)!r}")
-    return value
-
-
-def ensure_array(value: BridgeValue) -> BridgeArray:
-    if not isinstance(value, list):
-        raise TypeError(f"Expected array, got {type(value)!r}")
-    return value
-
-
-def ensure_string(value: BridgeValue) -> str:
-    if not isinstance(value, str):
-        raise TypeError(f"Expected string, got {type(value)!r}")
-    return value
