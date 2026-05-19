@@ -72,11 +72,11 @@ class GitHubSkillLocation:
     @classmethod
     def from_data(cls, data: GitHubSkillLocationData) -> "GitHubSkillLocation":
         return cls(
-            owner=str(data["owner"]),
-            repo=str(data["repo"]),
-            ref=None if data.get("ref") is None else str(data["ref"]),
-            path=PurePosixPath(str(data.get("path", "."))),
-            url=str(data["url"]),
+            owner=data["owner"],
+            repo=data["repo"],
+            ref=None if data.get("ref") is None else data["ref"],
+            path=PurePosixPath(data.get("path", ".")),
+            url=data["url"],
         )
 
 
@@ -90,12 +90,10 @@ class GitHubContentItem:
     @classmethod
     def from_data(cls, data: GitHubContentItemData) -> "GitHubContentItem":
         return cls(
-            type=str(data["type"]),
-            name=str(data["name"]),
-            path=PurePosixPath(str(data["path"])),
-            commit_sha=None
-            if data.get("commit_sha") is None
-            else str(data["commit_sha"]),
+            type=data["type"],
+            name=data["name"],
+            path=PurePosixPath(data["path"]),
+            commit_sha=None if data.get("commit_sha") is None else data["commit_sha"],
         )
 
 
@@ -109,12 +107,10 @@ class GitHubFileBlob:
     @classmethod
     def from_data(cls, data: GitHubFileBlobData) -> "GitHubFileBlob":
         return cls(
-            path=PurePosixPath(str(data["path"])),
-            content=str(data["content"]),
-            size=int(str(data["size"])),
-            commit_sha=None
-            if data.get("commit_sha") is None
-            else str(data["commit_sha"]),
+            path=PurePosixPath(data["path"]),
+            content=data["content"],
+            size=data["size"],
+            commit_sha=None if data.get("commit_sha") is None else data["commit_sha"],
         )
 
 
@@ -133,8 +129,8 @@ class GitHubRepositorySnapshot:
             for path, blob in data["files"].items()
         }
         return cls(
-            ref=str(data["ref"]),
-            commit_sha=str(data["commit_sha"]),
+            ref=data["ref"],
+            commit_sha=data["commit_sha"],
             files=files,
         )
 

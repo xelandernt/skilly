@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import sys
 
 from ._bridge import run_cli

@@ -31,6 +31,3 @@ class FileSystem(Protocol):
 
     def resolve(self, path: Path) -> Path:
         """Return a normalized absolute path."""
-
-
-__all__ = ["FileSystem"]
