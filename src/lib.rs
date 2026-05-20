@@ -120,6 +120,137 @@ fn py_pure_posix_path(py: Python<'_>, value: &str) -> PyResult<Py<PyAny>> {
         .unbind())
 }
 
+fn py_pure_windows_path(py: Python<'_>, value: &str) -> PyResult<Py<PyAny>> {
+    Ok(py
+        .import("pathlib")?
+        .getattr("PureWindowsPath")?
+        .call1((value,))?
+        .unbind())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BridgePathFlavor {
+    Host,
+    Posix,
+    Windows,
+}
+
+fn has_windows_drive_prefix(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some(drive), Some(':')) if drive.is_ascii_alphabetic()
+    )
+}
+
+fn bridge_path_flavor(value: &str) -> BridgePathFlavor {
+    if value.starts_with('/') {
+        return BridgePathFlavor::Posix;
+    }
+    if has_windows_drive_prefix(value) || value.starts_with('\\') {
+        return BridgePathFlavor::Windows;
+    }
+    BridgePathFlavor::Host
+}
+
+fn normalize_bridge_path(value: &str) -> (String, BridgePathFlavor) {
+    let flavor = bridge_path_flavor(value);
+    let normalized = match flavor {
+        BridgePathFlavor::Host => value.to_string(),
+        BridgePathFlavor::Posix => value.replace('\\', "/"),
+        BridgePathFlavor::Windows => value.replace('/', "\\"),
+    };
+    (normalized, flavor)
+}
+
+fn py_bridge_path(py: Python<'_>, value: &str) -> PyResult<Py<PyAny>> {
+    let (normalized, flavor) = normalize_bridge_path(value);
+    match flavor {
+        BridgePathFlavor::Host => py_path(py, &normalized),
+        BridgePathFlavor::Posix => {
+            if cfg!(windows) {
+                py_pure_posix_path(py, &normalized)
+            } else {
+                py_path(py, &normalized)
+            }
+        }
+        BridgePathFlavor::Windows => {
+            if cfg!(windows) {
+                py_path(py, &normalized)
+            } else {
+                py_pure_windows_path(py, &normalized)
+            }
+        }
+    }
+}
+
+fn bridge_join_path(base: &str, child: &str) -> String {
+    let (normalized, flavor) = normalize_bridge_path(base);
+    match flavor {
+        BridgePathFlavor::Host => Path::new(&normalized).join(child).display().to_string(),
+        BridgePathFlavor::Posix => {
+            if normalized.ends_with('/') {
+                format!("{normalized}{child}")
+            } else {
+                format!("{normalized}/{child}")
+            }
+        }
+        BridgePathFlavor::Windows => {
+            if normalized.ends_with('\\') {
+                format!("{normalized}{child}")
+            } else {
+                format!("{normalized}\\{child}")
+            }
+        }
+    }
+}
+
+fn windows_root_to_posix(value: &str) -> Option<String> {
+    if !value.starts_with('\\') || value.starts_with("\\\\") || has_windows_drive_prefix(value) {
+        return None;
+    }
+    Some(format!(
+        "/{}",
+        value.trim_start_matches(['\\', '/']).replace('\\', "/")
+    ))
+}
+
+fn path_exists_in_custom_fs(py: Python<'_>, file_system: &Bound<'_, PyAny>, value: &str) -> bool {
+    let Ok(path_arg) = py_bridge_path(py, value) else {
+        return false;
+    };
+    match file_system.call_method1("exists", (path_arg,)) {
+        Ok(result) if result.extract().unwrap_or(false) => true,
+        Ok(_) => {
+            let Ok(path_arg) = py_bridge_path(py, value) else {
+                return false;
+            };
+            match file_system.call_method1("is_dir", (path_arg,)) {
+                Ok(result) => result.extract().unwrap_or(false),
+                Err(_) => false,
+            }
+        }
+        Err(_) => false,
+    }
+}
+
+fn normalize_resolved_custom_path(
+    py: Python<'_>,
+    file_system: &Bound<'_, PyAny>,
+    value: &str,
+) -> String {
+    let Some(posix_path) = windows_root_to_posix(value) else {
+        return value.to_string();
+    };
+    if path_exists_in_custom_fs(py, file_system, value) {
+        return value.to_string();
+    }
+    if path_exists_in_custom_fs(py, file_system, &posix_path) {
+        return posix_path;
+    }
+    value.to_string()
+}
+
 fn py_fspath_string(value: &Bound<'_, PyAny>) -> PyResult<String> {
     value
         .py()
@@ -237,7 +368,7 @@ impl PythonFileSystem {
 impl FileSystem for PythonFileSystem {
     fn read_file(&self, path: &Path) -> anyhow::Result<String> {
         Python::with_gil(|py| {
-            let path_arg = py_path(py, &path.to_string_lossy())?;
+            let path_arg = py_bridge_path(py, &path.to_string_lossy())?;
             self.inner
                 .bind(py)
                 .call_method1("read_file", (path_arg,))?
@@ -248,7 +379,7 @@ impl FileSystem for PythonFileSystem {
 
     fn write_file(&self, path: &Path, content: &str) -> anyhow::Result<()> {
         Python::with_gil(|py| {
-            let path_arg = py_path(py, &path.to_string_lossy())?;
+            let path_arg = py_bridge_path(py, &path.to_string_lossy())?;
             self.inner
                 .bind(py)
                 .call_method1("write_file", (path_arg, content))?;
@@ -259,7 +390,7 @@ impl FileSystem for PythonFileSystem {
 
     fn list_files(&self, path: &Path) -> anyhow::Result<Vec<String>> {
         Python::with_gil(|py| {
-            let path_arg = py_path(py, &path.to_string_lossy())?;
+            let path_arg = py_bridge_path(py, &path.to_string_lossy())?;
             self.inner
                 .bind(py)
                 .call_method1("list_files", (path_arg,))?
@@ -270,7 +401,7 @@ impl FileSystem for PythonFileSystem {
 
     fn exists(&self, path: &Path) -> anyhow::Result<bool> {
         Python::with_gil(|py| {
-            let path_arg = py_path(py, &path.to_string_lossy())?;
+            let path_arg = py_bridge_path(py, &path.to_string_lossy())?;
             self.inner
                 .bind(py)
                 .call_method1("exists", (path_arg,))?
@@ -281,7 +412,7 @@ impl FileSystem for PythonFileSystem {
 
     fn is_dir(&self, path: &Path) -> anyhow::Result<bool> {
         Python::with_gil(|py| {
-            let path_arg = py_path(py, &path.to_string_lossy())?;
+            let path_arg = py_bridge_path(py, &path.to_string_lossy())?;
             self.inner
                 .bind(py)
                 .call_method1("is_dir", (path_arg,))?
@@ -292,7 +423,7 @@ impl FileSystem for PythonFileSystem {
 
     fn make_dir(&self, path: &Path, parents: bool, exist_ok: bool) -> anyhow::Result<()> {
         Python::with_gil(|py| {
-            let path_arg = py_path(py, &path.to_string_lossy())?;
+            let path_arg = py_bridge_path(py, &path.to_string_lossy())?;
             let kwargs = PyDict::new(py);
             kwargs.set_item("parents", parents)?;
             kwargs.set_item("exist_ok", exist_ok)?;
@@ -306,7 +437,7 @@ impl FileSystem for PythonFileSystem {
 
     fn remove_tree(&self, path: &Path) -> anyhow::Result<()> {
         Python::with_gil(|py| {
-            let path_arg = py_path(py, &path.to_string_lossy())?;
+            let path_arg = py_bridge_path(py, &path.to_string_lossy())?;
             self.inner
                 .bind(py)
                 .call_method1("remove_tree", (path_arg,))?;
@@ -317,10 +448,15 @@ impl FileSystem for PythonFileSystem {
 
     fn resolve(&self, path: &Path) -> anyhow::Result<PathBuf> {
         Python::with_gil(|py| {
-            let path_arg = py_path(py, &path.to_string_lossy())?;
-            let resolved = self.inner.bind(py).call_method1("resolve", (path_arg,))?;
+            let file_system = self.inner.bind(py);
+            let path_arg = py_bridge_path(py, &path.to_string_lossy())?;
+            let resolved = file_system.call_method1("resolve", (path_arg,))?;
             let resolved = py_fspath_string(&resolved)?;
-            Ok(PathBuf::from(resolved))
+            Ok(PathBuf::from(normalize_resolved_custom_path(
+                py,
+                file_system,
+                &resolved,
+            )))
         })
         .map_err(|error: PyErr| anyhow::anyhow!(error.to_string()))
     }
@@ -725,7 +861,7 @@ impl PySkill {
         self.inner
             .path
             .as_deref()
-            .map(|value| py_path(py, value))
+            .map(|value| py_bridge_path(py, value))
             .transpose()
     }
 
@@ -799,7 +935,7 @@ impl PySkill {
         self.inner
             .path
             .as_deref()
-            .map(|value| py_path(py, &Path::new(value).join("SKILL.md").display().to_string()))
+            .map(|value| py_bridge_path(py, &bridge_join_path(value, "SKILL.md")))
             .transpose()
     }
 
