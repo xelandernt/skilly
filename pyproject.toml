@@ -11,6 +11,7 @@ description = "Manage agent skills."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "packaging>=26.2",
     "typing-extensions>=4.15.0",
 ]
 dynamic = ["version"]

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from skilly.constants import DEFAULT_SKILLS_PATH
 from skilly.repository import ProjectSettings, SkillRepository
-from skilly.skills import Skill, discover_venv_skills
+from skilly.skills import Skill, discover_installed_skills, discover_venv_skills
 
 if TYPE_CHECKING:
     from skilly.filesystem import FileSystem
@@ -25,7 +25,6 @@ def get_project_skills(
             pyproject_toml_path=pyproject_toml_path,
             venv_path=venv_path,
             include_dev=include_dev,
-            file_system=file_system,
         )
     )
 
@@ -41,5 +40,4 @@ def get_skills_from_directory(
     directory: Path = DEFAULT_SKILLS_PATH,
     file_system: FileSystem | None = None,
 ) -> list[Skill]:
-    repository = SkillRepository(file_system=file_system)
-    return repository.list(directory, file_system=file_system)
+    return discover_installed_skills(directory, file_system=file_system)

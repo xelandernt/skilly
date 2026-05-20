@@ -340,18 +340,21 @@ fn resolve_path(path: &Path) -> Result<PathBuf> {
     Ok(env::current_dir()?.join(path))
 }
 
+fn skill_directory_from_resolved_path(resolved: PathBuf) -> Option<PathBuf> {
+    let Some(name) = resolved.file_name().and_then(|value| value.to_str()) else {
+        return Some(resolved);
+    };
+    if name.eq_ignore_ascii_case("SKILL.md") {
+        return resolved.parent().map(Path::to_path_buf);
+    }
+    Some(resolved)
+}
+
 fn normalize_skill_directory(path: Option<&Path>) -> Result<Option<PathBuf>> {
     let Some(path) = path else {
         return Ok(None);
     };
-    let resolved = resolve_path(path)?;
-    let Some(name) = resolved.file_name().and_then(|value| value.to_str()) else {
-        return Ok(Some(resolved));
-    };
-    if name.eq_ignore_ascii_case("SKILL.md") {
-        return Ok(resolved.parent().map(Path::to_path_buf));
-    }
-    Ok(Some(resolved))
+    Ok(skill_directory_from_resolved_path(resolve_path(path)?))
 }
 
 fn resolve_path_in(file_system: &dyn FileSystem, path: &Path) -> Result<PathBuf> {
@@ -365,14 +368,10 @@ fn normalize_skill_directory_in(
     let Some(path) = path else {
         return Ok(None);
     };
-    let resolved = resolve_path_in(file_system, path)?;
-    let Some(name) = resolved.file_name().and_then(|value| value.to_str()) else {
-        return Ok(Some(resolved));
-    };
-    if name.eq_ignore_ascii_case("SKILL.md") {
-        return Ok(resolved.parent().map(Path::to_path_buf));
-    }
-    Ok(Some(resolved))
+    Ok(skill_directory_from_resolved_path(resolve_path_in(
+        file_system,
+        path,
+    )?))
 }
 
 fn split_frontmatter(text: &str) -> Result<(Vec<String>, String)> {
@@ -473,6 +472,18 @@ fn required_string_field(mapping: &Mapping, key: &str) -> Result<String> {
 
 fn optional_string_field(mapping: &Mapping, key: &str) -> Option<String> {
     mapping_get(mapping, key).and_then(yaml_scalar_to_string)
+}
+
+fn frontmatter_metadata(parsed: &Mapping) -> BTreeMap<String, String> {
+    match mapping_get(parsed, "metadata") {
+        Some(YamlValue::Mapping(mapping)) => mapping
+            .iter()
+            .filter_map(|(key, value)| {
+                Some((yaml_scalar_to_string(key)?, yaml_scalar_to_string(value)?))
+            })
+            .collect(),
+        _ => BTreeMap::new(),
+    }
 }
 
 fn infer_source(metadata: &BTreeMap<String, String>) -> String {
@@ -705,29 +716,19 @@ fn find_skill_markdown_path_in(file_system: &dyn FileSystem, path: &Path) -> Res
 }
 
 impl SkillData {
-    pub fn from_text_in(
-        file_system: &dyn FileSystem,
+    fn from_text_parts(
         text: &str,
-        path: Option<&Path>,
+        skill_directory: Option<PathBuf>,
         source_metadata: &SkillSourceMetadata,
     ) -> Result<Self> {
-        let skill_directory = normalize_skill_directory_in(file_system, path)?;
         let (frontmatter, body) = split_frontmatter(text)?;
         let parsed = parse_frontmatter(&frontmatter)?;
-
-        let metadata = match mapping_get(&parsed, "metadata") {
-            Some(YamlValue::Mapping(mapping)) => mapping
-                .iter()
-                .filter_map(|(key, value)| {
-                    Some((yaml_scalar_to_string(key)?, yaml_scalar_to_string(value)?))
-                })
-                .collect::<BTreeMap<_, _>>(),
-            _ => BTreeMap::new(),
-        };
+        let metadata = frontmatter_metadata(&parsed);
         let mut source_metadata = source_metadata.clone();
         source_metadata.apply_missing_from_metadata(&metadata);
+        let source = source_metadata.resolved_source(&metadata);
 
-        let mut skill = Self {
+        Ok(Self {
             name: required_string_field(&parsed, "name")?,
             description: required_string_field(&parsed, "description")?,
             path: skill_directory
@@ -740,14 +741,23 @@ impl SkillData {
             allowed_tools: optional_string_field(&parsed, "allowed-tools"),
             resources: Vec::new(),
             resource_warnings: Vec::new(),
-            source: source_metadata.resolved_source(&BTreeMap::new()),
+            source,
             package_name: source_metadata.package_name.clone(),
             package_version: source_metadata.package_version.clone(),
             github_url: source_metadata.github_url.clone(),
             github_commit_sha: source_metadata.github_commit_sha.clone(),
             skillsmp_id: source_metadata.skillsmp_id.clone(),
-        };
-        skill.source = source_metadata.resolved_source(&skill.metadata);
+        })
+    }
+
+    pub fn from_text_in(
+        file_system: &dyn FileSystem,
+        text: &str,
+        path: Option<&Path>,
+        source_metadata: &SkillSourceMetadata,
+    ) -> Result<Self> {
+        let skill_directory = normalize_skill_directory_in(file_system, path)?;
+        let mut skill = Self::from_text_parts(text, skill_directory.clone(), source_metadata)?;
 
         if let Some(directory) = skill_directory.as_ref() {
             let (resources, warnings) = load_resource_files_in(file_system, directory);
@@ -764,42 +774,7 @@ impl SkillData {
         source_metadata: &SkillSourceMetadata,
     ) -> Result<Self> {
         let skill_directory = normalize_skill_directory(path)?;
-        let (frontmatter, body) = split_frontmatter(text)?;
-        let parsed = parse_frontmatter(&frontmatter)?;
-
-        let metadata = match mapping_get(&parsed, "metadata") {
-            Some(YamlValue::Mapping(mapping)) => mapping
-                .iter()
-                .filter_map(|(key, value)| {
-                    Some((yaml_scalar_to_string(key)?, yaml_scalar_to_string(value)?))
-                })
-                .collect::<BTreeMap<_, _>>(),
-            _ => BTreeMap::new(),
-        };
-        let mut source_metadata = source_metadata.clone();
-        source_metadata.apply_missing_from_metadata(&metadata);
-
-        let mut skill = Self {
-            name: required_string_field(&parsed, "name")?,
-            description: required_string_field(&parsed, "description")?,
-            path: skill_directory
-                .as_ref()
-                .map(|value| value.to_string_lossy().to_string()),
-            content: body,
-            license: optional_string_field(&parsed, "license"),
-            compatibility: optional_string_field(&parsed, "compatibility"),
-            metadata,
-            allowed_tools: optional_string_field(&parsed, "allowed-tools"),
-            resources: Vec::new(),
-            resource_warnings: Vec::new(),
-            source: source_metadata.resolved_source(&BTreeMap::new()),
-            package_name: source_metadata.package_name.clone(),
-            package_version: source_metadata.package_version.clone(),
-            github_url: source_metadata.github_url.clone(),
-            github_commit_sha: source_metadata.github_commit_sha.clone(),
-            skillsmp_id: source_metadata.skillsmp_id.clone(),
-        };
-        skill.source = source_metadata.resolved_source(&skill.metadata);
+        let mut skill = Self::from_text_parts(text, skill_directory.clone(), source_metadata)?;
 
         if let Some(directory) = skill_directory.as_ref() {
             let (resources, warnings) = load_resource_files(directory);
@@ -1318,6 +1293,21 @@ pub fn resolve_record_path(site_packages: &Path, installed_path: &str) -> PathBu
         .fold(site_packages.to_path_buf(), |path, part| path.join(part))
 }
 
+fn sort_dependency_skills(skills: &mut [SkillData]) {
+    skills.sort_by(|left, right| {
+        (
+            left.package_name.as_deref().unwrap_or(""),
+            left.package_version.as_deref().unwrap_or(""),
+            left.name.as_str(),
+        )
+            .cmp(&(
+                right.package_name.as_deref().unwrap_or(""),
+                right.package_version.as_deref().unwrap_or(""),
+                right.name.as_str(),
+            ))
+    });
+}
+
 pub fn discover_venv_skills(path: &Path) -> Result<Vec<SkillData>> {
     let venv_path = resolve_path(path)?;
     let Some(site_packages) = find_site_packages_dir(&venv_path) else {
@@ -1366,18 +1356,7 @@ pub fn discover_venv_skills(path: &Path) -> Result<Vec<SkillData>> {
         }
     }
 
-    skills.sort_by(|left, right| {
-        (
-            left.package_name.as_deref().unwrap_or(""),
-            left.package_version.as_deref().unwrap_or(""),
-            left.name.as_str(),
-        )
-            .cmp(&(
-                right.package_name.as_deref().unwrap_or(""),
-                right.package_version.as_deref().unwrap_or(""),
-                right.name.as_str(),
-            ))
-    });
+    sort_dependency_skills(&mut skills);
     Ok(skills)
 }
 
@@ -1433,27 +1412,15 @@ pub fn discover_venv_skills_in(
         }
     }
 
-    skills.sort_by(|left, right| {
-        (
-            left.package_name.as_deref().unwrap_or(""),
-            left.package_version.as_deref().unwrap_or(""),
-            left.name.as_str(),
-        )
-            .cmp(&(
-                right.package_name.as_deref().unwrap_or(""),
-                right.package_version.as_deref().unwrap_or(""),
-                right.name.as_str(),
-            ))
-    });
+    sort_dependency_skills(&mut skills);
     Ok(skills)
 }
 
-pub fn project_requirements(
-    pyproject_toml_path: &Path,
+fn parse_project_requirements(
+    text: &str,
     include_dev: bool,
     include_extras: &[String],
 ) -> Result<Vec<String>> {
-    let text = fs::read_to_string(pyproject_toml_path)?;
     let parsed: toml::Value = text.parse()?;
     let mut dependencies = parsed
         .get("project")
@@ -1489,6 +1456,15 @@ pub fn project_requirements(
         }
     }
     Ok(dependencies)
+}
+
+pub fn project_requirements(
+    pyproject_toml_path: &Path,
+    include_dev: bool,
+    include_extras: &[String],
+) -> Result<Vec<String>> {
+    let text = fs::read_to_string(pyproject_toml_path)?;
+    parse_project_requirements(&text, include_dev, include_extras)
 }
 
 pub fn project_requirements_in(
@@ -1498,41 +1474,7 @@ pub fn project_requirements_in(
     include_extras: &[String],
 ) -> Result<Vec<String>> {
     let text = file_system.read_file(pyproject_toml_path)?;
-    let parsed: toml::Value = text.parse()?;
-    let mut dependencies = parsed
-        .get("project")
-        .and_then(|value| value.get("dependencies"))
-        .and_then(|value| value.as_array())
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str().map(str::to_string))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let mut extras = include_extras.iter().cloned().collect::<BTreeSet<_>>();
-    if include_dev {
-        extras.insert("dev".to_string());
-    }
-    if let Some(groups) = parsed
-        .get("dependency-groups")
-        .and_then(|value| value.as_table())
-    {
-        for (group_name, values) in groups {
-            if !extras.contains(group_name) {
-                continue;
-            }
-            if let Some(values) = values.as_array() {
-                dependencies.extend(
-                    values
-                        .iter()
-                        .filter_map(|value| value.as_str().map(str::to_string)),
-                );
-            }
-        }
-    }
-    Ok(dependencies)
+    parse_project_requirements(&text, include_dev, include_extras)
 }
 
 pub fn requirement_name(spec: &str) -> Option<String> {

@@ -223,22 +223,10 @@ class ClientSettings:
     def from_source(
         cls, source: bridge.ClientConfigSource | None = None
     ) -> "ClientSettings":
-        if source is None:
-            return cls()
-        return cls(
-            base_url=source.base_url,
-            api_key=source.api_key,
-            github_token=source.github_token,
-            proxy=source.proxy,
-        )
+        return cls(**bridge.client_config_kwargs(source))
 
     def as_bridge_kwargs(self) -> bridge.ClientConfigKwargs:
-        return {
-            "base_url": self.base_url,
-            "api_key": self.api_key,
-            "github_token": self.github_token,
-            "proxy": self.proxy,
-        }
+        return bridge.client_config_kwargs(self)
 
 
 @dataclass(frozen=True)

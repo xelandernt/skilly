@@ -104,6 +104,40 @@ fn client_config(
     }
 }
 
+fn skillsmp_client(
+    base_url: Option<String>,
+    api_key: Option<String>,
+    github_token: Option<String>,
+    proxy: Option<String>,
+) -> anyhow::Result<SkillsMpClient> {
+    SkillsMpClient::new(client_config(base_url, api_key, github_token, proxy))
+}
+
+fn with_skillsmp_client<T>(
+    base_url: Option<String>,
+    api_key: Option<String>,
+    github_token: Option<String>,
+    proxy: Option<String>,
+    action: impl FnOnce(&SkillsMpClient) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let client = skillsmp_client(base_url, api_key, github_token, proxy)?;
+    action(&client)
+}
+
+fn with_github_location<T>(
+    github_url: String,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    github_token: Option<String>,
+    proxy: Option<String>,
+    action: impl FnOnce(&SkillsMpClient, &core::GitHubSkillLocationData) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    with_skillsmp_client(base_url, api_key, github_token, proxy, |client| {
+        let location = rust_parse_github_skill_url(&github_url)?;
+        action(client, &location)
+    })
+}
+
 fn py_path(py: Python<'_>, value: &str) -> PyResult<Py<PyAny>> {
     Ok(py
         .import("pathlib")?
@@ -315,6 +349,18 @@ fn py_resource(py: Python<'_>, value: &SkillResourceData) -> PyResult<Py<PyAny>>
 
 fn py_resources(py: Python<'_>, values: &[SkillResourceData]) -> PyResult<Vec<Py<PyAny>>> {
     values.iter().map(|value| py_resource(py, value)).collect()
+}
+
+fn py_resources_by_kind(
+    py: Python<'_>,
+    values: &[SkillResourceData],
+    kind: &str,
+) -> PyResult<Vec<Py<PyAny>>> {
+    values
+        .iter()
+        .filter(|value| value.kind == kind)
+        .map(|value| py_resource(py, value))
+        .collect()
 }
 
 fn skill_source_metadata(
@@ -583,8 +629,7 @@ fn discover_github_skills_impl(
 ) -> PyResult<Vec<PySkill>> {
     let skills = py
         .allow_threads(|| {
-            let client =
-                SkillsMpClient::new(client_config(base_url, api_key, github_token, proxy))?;
+            let client = skillsmp_client(base_url, api_key, github_token, proxy)?;
             rust_discover_github_skills(
                 &client,
                 &github_url,
@@ -951,38 +996,17 @@ impl PySkill {
 
     #[getter]
     fn scripts(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
-        let values = self
-            .inner
-            .resources
-            .iter()
-            .filter(|value| value.kind == core::RESOURCE_KIND_SCRIPT)
-            .cloned()
-            .collect::<Vec<_>>();
-        py_resources(py, &values)
+        py_resources_by_kind(py, &self.inner.resources, core::RESOURCE_KIND_SCRIPT)
     }
 
     #[getter]
     fn references(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
-        let values = self
-            .inner
-            .resources
-            .iter()
-            .filter(|value| value.kind == core::RESOURCE_KIND_REFERENCE)
-            .cloned()
-            .collect::<Vec<_>>();
-        py_resources(py, &values)
+        py_resources_by_kind(py, &self.inner.resources, core::RESOURCE_KIND_REFERENCE)
     }
 
     #[getter]
     fn assets(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
-        let values = self
-            .inner
-            .resources
-            .iter()
-            .filter(|value| value.kind == core::RESOURCE_KIND_ASSET)
-            .cloned()
-            .collect::<Vec<_>>();
-        py_resources(py, &values)
+        py_resources_by_kind(py, &self.inner.resources, core::RESOURCE_KIND_ASSET)
     }
 
     fn get_resource(
@@ -1378,11 +1402,11 @@ fn skillsmp_search_py(
 ) -> PyResult<Py<PyAny>> {
     let response = py
         .allow_threads(|| {
-            let client =
-                SkillsMpClient::new(client_config(base_url, api_key, github_token, proxy))?;
-            client.search(&skillsmp_search_query(
-                q, page, limit, sort_by, category, occupation,
-            ))
+            with_skillsmp_client(base_url, api_key, github_token, proxy, |client| {
+                client.search(&skillsmp_search_query(
+                    q, page, limit, sort_by, category, occupation,
+                ))
+            })
         })
         .map_err(py_err)?;
     to_py_serialized(py, &response)
@@ -1400,9 +1424,9 @@ fn skillsmp_ai_search_py(
 ) -> PyResult<Py<PyAny>> {
     let response = py
         .allow_threads(|| {
-            let client =
-                SkillsMpClient::new(client_config(base_url, api_key, github_token, proxy))?;
-            client.ai_search(&q)
+            with_skillsmp_client(base_url, api_key, github_token, proxy, |client| {
+                client.ai_search(&q)
+            })
         })
         .map_err(py_err)?;
     to_py_serialized(py, &response)
@@ -1421,10 +1445,14 @@ fn skillsmp_fetch_github_directory_py(
 ) -> PyResult<Py<PyAny>> {
     let entries = py
         .allow_threads(|| {
-            let client =
-                SkillsMpClient::new(client_config(base_url, api_key, github_token, proxy))?;
-            let location = rust_parse_github_skill_url(&github_url)?;
-            client.fetch_github_directory(&location, &current_path)
+            with_github_location(
+                github_url,
+                base_url,
+                api_key,
+                github_token,
+                proxy,
+                |client, location| client.fetch_github_directory(location, &current_path),
+            )
         })
         .map_err(py_err)?;
     to_py_serialized(py, &entries)
@@ -1443,10 +1471,14 @@ fn skillsmp_fetch_github_file_py(
 ) -> PyResult<Py<PyAny>> {
     let blob = py
         .allow_threads(|| {
-            let client =
-                SkillsMpClient::new(client_config(base_url, api_key, github_token, proxy))?;
-            let location = rust_parse_github_skill_url(&github_url)?;
-            client.fetch_github_file(&location, &path)
+            with_github_location(
+                github_url,
+                base_url,
+                api_key,
+                github_token,
+                proxy,
+                |client, location| client.fetch_github_file(location, &path),
+            )
         })
         .map_err(py_err)?;
     to_py_serialized(py, &blob)
@@ -1464,10 +1496,14 @@ fn skillsmp_fetch_github_snapshot_py(
 ) -> PyResult<Py<PyAny>> {
     let snapshot = py
         .allow_threads(|| {
-            let client =
-                SkillsMpClient::new(client_config(base_url, api_key, github_token, proxy))?;
-            let location = rust_parse_github_skill_url(&github_url)?;
-            client.fetch_github_snapshot(&location)
+            with_github_location(
+                github_url,
+                base_url,
+                api_key,
+                github_token,
+                proxy,
+                |client, location| client.fetch_github_snapshot(location),
+            )
         })
         .map_err(py_err)?;
     to_py_serialized(py, &snapshot)
@@ -1485,10 +1521,14 @@ fn skillsmp_resolve_github_ref_and_commit_sha_py(
 ) -> PyResult<Py<PyAny>> {
     let resolved = py
         .allow_threads(|| {
-            let client =
-                SkillsMpClient::new(client_config(base_url, api_key, github_token, proxy))?;
-            let location = rust_parse_github_skill_url(&github_url)?;
-            client.resolve_github_ref_and_commit_sha(&location)
+            with_github_location(
+                github_url,
+                base_url,
+                api_key,
+                github_token,
+                proxy,
+                |client, location| client.resolve_github_ref_and_commit_sha(location),
+            )
         })
         .map_err(py_err)?;
     to_py_serialized(py, &resolved)
