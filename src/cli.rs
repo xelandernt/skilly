@@ -8,7 +8,7 @@ use crate::core::{
 };
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -74,6 +74,14 @@ impl DownloadableSkillMatch {
 
 struct TerminalSession {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenuAction {
+    MoveUp,
+    MoveDown,
+    Select,
+    Cancel,
 }
 
 impl TerminalSession {
@@ -436,23 +444,37 @@ fn select_menu(menu: MenuUi) -> Result<Option<usize>> {
         })?;
 
         if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Up => {
+            match menu_action(key) {
+                Some(MenuAction::MoveUp) => {
                     selected = selected.saturating_sub(1);
                     state.select(Some(selected));
                 }
-                KeyCode::Down => {
+                Some(MenuAction::MoveDown) => {
                     selected = (selected + 1).min(menu.items.len().saturating_sub(1));
                     state.select(Some(selected));
                 }
-                KeyCode::Enter => return Ok(Some(selected)),
-                KeyCode::Esc => return Ok(None),
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    return Ok(None);
-                }
-                _ => {}
+                Some(MenuAction::Select) => return Ok(Some(selected)),
+                Some(MenuAction::Cancel) => return Ok(None),
+                None => {}
             }
         }
+    }
+}
+
+fn menu_action(key: KeyEvent) -> Option<MenuAction> {
+    if key.kind != KeyEventKind::Press {
+        return None;
+    }
+
+    match key.code {
+        KeyCode::Up => Some(MenuAction::MoveUp),
+        KeyCode::Down => Some(MenuAction::MoveDown),
+        KeyCode::Enter => Some(MenuAction::Select),
+        KeyCode::Esc => Some(MenuAction::Cancel),
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(MenuAction::Cancel)
+        }
+        _ => None,
     }
 }
 
@@ -1549,11 +1571,12 @@ fn installed_skillsmp_match(
 #[cfg(test)]
 mod tests {
     use super::{
-        installed_skillsmp_match, search_skill_label, skillsmp_search_preview_lines,
-        skillsmp_search_status,
+        MenuAction, installed_skillsmp_match, menu_action, search_skill_label,
+        skillsmp_search_preview_lines, skillsmp_search_status,
     };
     use crate::client::SkillsMpSkill;
     use crate::core::{SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP, SkillData};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use serde_json::Value as JsonValue;
     use std::collections::BTreeMap;
 
@@ -1630,6 +1653,70 @@ mod tests {
             preview
                 .iter()
                 .any(|line| line == "Installed Directory: python")
+        );
+    }
+
+    #[test]
+    fn menu_action_ignores_non_press_events() {
+        assert_eq!(
+            menu_action(KeyEvent::new_with_kind(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            )),
+            None
+        );
+        assert_eq!(
+            menu_action(KeyEvent::new_with_kind(
+                KeyCode::Down,
+                KeyModifiers::NONE,
+                KeyEventKind::Repeat,
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn menu_action_maps_press_events() {
+        assert_eq!(
+            menu_action(KeyEvent::new_with_kind(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+                KeyEventKind::Press,
+            )),
+            Some(MenuAction::Select)
+        );
+        assert_eq!(
+            menu_action(KeyEvent::new_with_kind(
+                KeyCode::Down,
+                KeyModifiers::NONE,
+                KeyEventKind::Press,
+            )),
+            Some(MenuAction::MoveDown)
+        );
+        assert_eq!(
+            menu_action(KeyEvent::new_with_kind(
+                KeyCode::Up,
+                KeyModifiers::NONE,
+                KeyEventKind::Press,
+            )),
+            Some(MenuAction::MoveUp)
+        );
+        assert_eq!(
+            menu_action(KeyEvent::new_with_kind(
+                KeyCode::Esc,
+                KeyModifiers::NONE,
+                KeyEventKind::Press,
+            )),
+            Some(MenuAction::Cancel)
+        );
+        assert_eq!(
+            menu_action(KeyEvent::new_with_kind(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+                KeyEventKind::Press,
+            )),
+            Some(MenuAction::Cancel)
         );
     }
 }

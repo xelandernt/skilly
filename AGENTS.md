@@ -15,7 +15,6 @@
 
 ## Python Typing
 
-- Use clean typing only.
 - Do not use `typing.cast()`.
 - Do not use `# type: ignore` or similar suppression comments.
 - If typing is awkward, fix the design or the annotations instead of hiding the problem.
