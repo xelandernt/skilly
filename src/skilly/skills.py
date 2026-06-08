@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from . import _bridge as bridge
 from ._core import Skill
@@ -141,6 +141,14 @@ def discover_installed_skills(
     file_system: FileSystem | None = None,
 ) -> list[Skill]:
     return bridge.discover_installed_skills(directory, file_system=file_system)
+
+
+def resolve_skills_directory(
+    agent: Literal["agents", "claude", "codex", "copilot"] = "agents",
+    *,
+    global_: bool = False,
+) -> Path:
+    return Path(bridge.resolve_skills_directory(agent, global_=global_))
 
 
 def discover_venv_skills(

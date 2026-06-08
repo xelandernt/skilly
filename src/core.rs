@@ -11,6 +11,10 @@ use url::Url;
 use walkdir::WalkDir;
 
 pub const DEFAULT_SKILLS_PATH: &str = ".agents/skills";
+pub const CLAUDE_SKILLS_PATH: &str = ".claude/skills";
+pub const CODEX_SKILLS_PATH: &str = ".codex/skills";
+pub const COPILOT_LOCAL_SKILLS_PATH: &str = ".github/skills";
+pub const COPILOT_GLOBAL_SKILLS_PATH: &str = ".copilot/skills";
 pub const RESOURCE_KIND_SCRIPT: &str = "script";
 pub const RESOURCE_KIND_REFERENCE: &str = "reference";
 pub const RESOURCE_KIND_ASSET: &str = "asset";
@@ -32,6 +36,33 @@ pub const SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY: &str = "skilly-package
 pub const STATUS_INSTALLED: &str = "installed";
 pub const STATUS_INSTALLABLE: &str = "installable";
 pub const STATUS_UPDATABLE: &str = "updatable";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SkillDirectoryFlavor {
+    #[default]
+    Agents,
+    Claude,
+    Codex,
+    Copilot,
+}
+
+pub fn skills_directory(flavor: SkillDirectoryFlavor, global: bool) -> Result<PathBuf> {
+    let relative = match (flavor, global) {
+        (SkillDirectoryFlavor::Agents, _) => DEFAULT_SKILLS_PATH,
+        (SkillDirectoryFlavor::Claude, _) => CLAUDE_SKILLS_PATH,
+        (SkillDirectoryFlavor::Codex, _) => CODEX_SKILLS_PATH,
+        (SkillDirectoryFlavor::Copilot, false) => COPILOT_LOCAL_SKILLS_PATH,
+        (SkillDirectoryFlavor::Copilot, true) => COPILOT_GLOBAL_SKILLS_PATH,
+    };
+    if !global {
+        return Ok(PathBuf::from(relative));
+    }
+    let home = env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("Could not determine the user home directory"))?;
+    Ok(home.join(relative))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillResourceData {

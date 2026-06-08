@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from os import PathLike
-from typing import TYPE_CHECKING, Protocol, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, TypedDict
 
 from . import _core
 
@@ -23,6 +23,7 @@ BridgeObject: TypeAlias = Mapping[str, "BridgeValue"]
 BridgeArray: TypeAlias = Sequence["BridgeValue"]
 BridgeValue: TypeAlias = BridgeScalar | BridgeObject | BridgeArray
 StrPath: TypeAlias = str | PathLike[str]
+AgentName: TypeAlias = Literal["agents", "claude", "codex", "copilot"]
 
 
 class ClientConfigSource(Protocol):
@@ -240,6 +241,14 @@ def skill_install_to(
         overwrite=overwrite,
         file_system=file_system,
     )
+
+
+def resolve_skills_directory(
+    agent: AgentName = "agents",
+    *,
+    global_: bool = False,
+) -> StrPath:
+    return _core.resolve_skills_directory(agent, global_=global_)
 
 
 def discover_installed_skills(

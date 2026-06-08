@@ -2,7 +2,7 @@ from pathlib import Path
 
 from skilly._cli import run_cli
 from skilly.repository import SkillRepository
-from skilly.skills import Skill
+from skilly.skills import Skill, resolve_skills_directory
 from helpers import make_venv, write_distribution, write_skill
 
 
@@ -34,6 +34,30 @@ def test_run_cli_skillsmp_search_help_describes_options(capfd) -> None:
     assert "Search SkillsMP and install a selected result" in output
     assert "Search query sent to SkillsMP" in output
     assert "Overwrite existing files when installing the selected skill" in output
+    assert "--global" in output
+    assert "--claude" in output
+
+
+def test_resolve_skills_directory_supports_local_agent_flavors() -> None:
+    assert resolve_skills_directory() == Path(".agents/skills")
+    assert resolve_skills_directory("claude") == Path(".claude/skills")
+    assert resolve_skills_directory("codex") == Path(".codex/skills")
+    assert resolve_skills_directory("copilot") == Path(".github/skills")
+
+
+def test_resolve_skills_directory_supports_global_agent_flavors() -> None:
+    assert resolve_skills_directory(global_=True) == Path.home() / ".agents/skills"
+    assert (
+        resolve_skills_directory("claude", global_=True)
+        == Path.home() / ".claude/skills"
+    )
+    assert (
+        resolve_skills_directory("codex", global_=True) == Path.home() / ".codex/skills"
+    )
+    assert (
+        resolve_skills_directory("copilot", global_=True)
+        == Path.home() / ".copilot/skills"
+    )
 
 
 def test_run_cli_update_force_updates_dependency_skill(

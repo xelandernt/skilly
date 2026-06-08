@@ -1,10 +1,10 @@
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery, SkillsMpSkill};
 use crate::core::{
-    DEFAULT_SKILLS_PATH, ProjectEnvironment, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP,
-    STATUS_INSTALLABLE, STATUS_INSTALLED, STATUS_UPDATABLE, SkillData, SkillMatchData,
+    ProjectEnvironment, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP, STATUS_INSTALLABLE,
+    STATUS_INSTALLED, STATUS_UPDATABLE, SkillData, SkillDirectoryFlavor, SkillMatchData,
     available_dependency_skill_in, dependency_updates_in, discover_github_skills,
     discover_installed_skills, github_versions_match, project_requirements, remove_skill,
-    scan_match_status, scan_project_in,
+    scan_match_status, scan_project_in, skills_directory,
 };
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
@@ -114,12 +114,8 @@ struct Cli {
 enum Commands {
     #[command(about = "Scan dependency-provided skills from pyproject.toml and .venv.")]
     Scan {
-        #[arg(
-            long,
-            default_value = DEFAULT_SKILLS_PATH,
-            help = "Directory where skilly installs managed skills."
-        )]
-        directory: PathBuf,
+        #[command(flatten)]
+        destination: DestinationArgs,
         #[arg(long, help = "Include development dependencies while scanning.")]
         dev: bool,
     },
@@ -127,12 +123,8 @@ enum Commands {
     Download {
         #[arg(help = "GitHub repository, tree, or skill URL to download from.")]
         github_url: String,
-        #[arg(
-            long,
-            default_value = DEFAULT_SKILLS_PATH,
-            help = "Directory where downloaded skills are installed."
-        )]
-        directory: PathBuf,
+        #[command(flatten)]
+        destination: DestinationArgs,
         #[arg(
             long,
             help = "Select a specific skill when the GitHub URL resolves to multiple skills."
@@ -150,12 +142,8 @@ enum Commands {
     },
     #[command(about = "Browse, update, or remove installed skills.")]
     List {
-        #[arg(
-            long,
-            default_value = DEFAULT_SKILLS_PATH,
-            help = "Directory containing installed skills."
-        )]
-        directory: PathBuf,
+        #[command(flatten)]
+        destination: DestinationArgs,
         #[arg(
             long,
             help = "GitHub token used when checking for updates to GitHub-backed skills."
@@ -166,12 +154,8 @@ enum Commands {
         about = "Show or apply dependency skill updates discovered from the current project."
     )]
     Update {
-        #[arg(
-            long,
-            default_value = DEFAULT_SKILLS_PATH,
-            help = "Directory containing installed skills."
-        )]
-        directory: PathBuf,
+        #[command(flatten)]
+        destination: DestinationArgs,
         #[arg(
             long,
             help = "Apply the discovered updates instead of only printing them."
@@ -182,12 +166,8 @@ enum Commands {
     Remove {
         #[arg(help = "Installed skill directory name to remove.")]
         name: String,
-        #[arg(
-            long,
-            default_value = DEFAULT_SKILLS_PATH,
-            help = "Directory containing installed skills."
-        )]
-        directory: PathBuf,
+        #[command(flatten)]
+        destination: DestinationArgs,
     },
     #[command(about = "Search and manage SkillsMP-backed skills.")]
     Skillsmp(SkillsMpCommands),
@@ -207,12 +187,8 @@ enum SkillsMpSubcommand {
     Search {
         #[arg(help = "Search query sent to SkillsMP.")]
         query: String,
-        #[arg(
-            long,
-            default_value = DEFAULT_SKILLS_PATH,
-            help = "Directory where installed skills are stored."
-        )]
-        directory: PathBuf,
+        #[command(flatten)]
+        destination: DestinationArgs,
         #[arg(
             long,
             help = "Overwrite existing files when installing the selected skill."
@@ -226,18 +202,57 @@ enum SkillsMpSubcommand {
     },
     #[command(about = "Browse installed SkillsMP skills and manage updates.")]
     List {
-        #[arg(
-            long,
-            default_value = DEFAULT_SKILLS_PATH,
-            help = "Directory containing installed skills."
-        )]
-        directory: PathBuf,
+        #[command(flatten)]
+        destination: DestinationArgs,
         #[arg(
             long,
             help = "GitHub token used when checking for updates to SkillsMP-installed skills."
         )]
         github_token: Option<String>,
     },
+}
+
+#[derive(Args, Debug, Default)]
+struct DestinationArgs {
+    #[arg(
+        long,
+        help = "Directory where skilly installs managed skills; ignores location and agent flags."
+    )]
+    directory: Option<PathBuf>,
+    #[arg(long, help = "Use the project-local skills directory.")]
+    local: bool,
+    #[arg(long, help = "Use the user-global skills directory.")]
+    global: bool,
+    #[arg(long, help = "Use the Claude skills directory.")]
+    claude: bool,
+    #[arg(long, help = "Use the Codex skills directory.")]
+    codex: bool,
+    #[arg(long, help = "Use the GitHub Copilot skills directory.")]
+    copilot: bool,
+}
+
+impl DestinationArgs {
+    fn resolve(&self) -> Result<PathBuf> {
+        if let Some(directory) = self.directory.as_ref() {
+            return Ok(directory.clone());
+        }
+        if usize::from(self.local) + usize::from(self.global) > 1 {
+            bail!("Use either --local or --global");
+        }
+        if usize::from(self.claude) + usize::from(self.codex) + usize::from(self.copilot) > 1 {
+            bail!("Use only one of --claude, --codex, or --copilot");
+        }
+        let flavor = if self.claude {
+            SkillDirectoryFlavor::Claude
+        } else if self.codex {
+            SkillDirectoryFlavor::Codex
+        } else if self.copilot {
+            SkillDirectoryFlavor::Copilot
+        } else {
+            SkillDirectoryFlavor::Agents
+        };
+        skills_directory(flavor, self.global)
+    }
 }
 
 #[derive(Args, Debug)]
@@ -288,47 +303,53 @@ pub fn run(args: Vec<String>) -> Result<i32> {
         };
 
     match cli.command {
-        Commands::Scan { directory, dev } => run_scan(&directory, dev)?,
+        Commands::Scan { destination, dev } => run_scan(&destination.resolve()?, dev)?,
         Commands::Download {
             github_url,
-            directory,
+            destination,
             skill_name,
             all,
             overwrite,
             github_token,
         } => run_download(
             &github_url,
-            &directory,
+            &destination.resolve()?,
             skill_name.as_deref(),
             all,
             overwrite,
             client_config(None, None, github_token, None),
         )?,
         Commands::List {
-            directory,
+            destination,
             github_token,
-        } => run_list(&directory, client_config(None, None, github_token, None))?,
-        Commands::Update { directory, force } => run_update(&directory, force)?,
-        Commands::Remove { name, directory } => {
-            let removed = remove_skill(&name, &directory)?;
+        } => run_list(
+            &destination.resolve()?,
+            client_config(None, None, github_token, None),
+        )?,
+        Commands::Update { destination, force } => run_update(&destination.resolve()?, force)?,
+        Commands::Remove { name, destination } => {
+            let removed = remove_skill(&name, &destination.resolve()?)?;
             println!("Removed {}", skill_directory_name(&removed));
         }
         Commands::Skillsmp(skillsmp) => match skillsmp.command {
             SkillsMpSubcommand::Search {
                 query,
-                directory,
+                destination,
                 overwrite,
                 github_token,
             } => run_skillsmp_search(
                 &query,
-                &directory,
+                &destination.resolve()?,
                 overwrite,
                 client_config(None, None, github_token, None),
             )?,
             SkillsMpSubcommand::List {
-                directory,
+                destination,
                 github_token,
-            } => run_skillsmp_list(&directory, client_config(None, None, github_token, None))?,
+            } => run_skillsmp_list(
+                &destination.resolve()?,
+                client_config(None, None, github_token, None),
+            )?,
         },
         Commands::Util(util) => match util.command {
             UtilSubcommand::Dependencies { file, dev, extras } => {
@@ -561,6 +582,7 @@ fn run_scan(directory: &Path, include_dev: bool) -> Result<()> {
 
     let mut messages = Vec::new();
     let mut status_message = None;
+    let mut selected_index = 0;
     while !actionable.is_empty() {
         let mut items = actionable
             .iter()
@@ -575,7 +597,7 @@ fn run_scan(directory: &Path, include_dev: bool) -> Result<()> {
         let Some(index) = select_menu(MenuUi {
             title: "Select dependency skill to install".to_string(),
             items,
-            default: 0,
+            default: selected_index,
             preview_title: "Dependency skill".to_string(),
             status: status_message.clone(),
             help_text: DEFAULT_HELP_TEXT.to_string(),
@@ -587,6 +609,7 @@ fn run_scan(directory: &Path, include_dev: bool) -> Result<()> {
         if index == actionable.len() {
             break;
         }
+        selected_index = index;
 
         let selected = actionable[index].clone();
         let actions = scan_skill_actions(&selected);
@@ -713,6 +736,7 @@ fn download_selected_skills(
 ) -> Result<()> {
     let mut messages = Vec::new();
     let mut status_message = None;
+    let mut selected_index = 0;
     loop {
         let matches = downloadable_skill_matches(skills, &discover_installed_skills(directory)?);
         let mut items = matches
@@ -727,7 +751,7 @@ fn download_selected_skills(
         let Some(index) = select_menu(MenuUi {
             title: "Select a skill to download".to_string(),
             items,
-            default: 0,
+            default: selected_index,
             preview_title: "Downloadable skill".to_string(),
             status: status_message.clone(),
             help_text: DEFAULT_HELP_TEXT.to_string(),
@@ -739,6 +763,7 @@ fn download_selected_skills(
         if index == matches.len() {
             break;
         }
+        selected_index = index;
         let selected = matches[index].clone();
         let actions = downloadable_skill_actions(&selected);
         let Some(action_index) = select_menu(MenuUi {
@@ -816,6 +841,7 @@ fn run_list(directory: &Path, config: ClientConfig) -> Result<()> {
     let client = SkillsMpClient::new(config)?;
     let mut messages = Vec::new();
     let mut status_message = None;
+    let mut selected_index = 0;
     loop {
         let skills = discover_installed_skills(directory)?;
         if skills.is_empty() {
@@ -836,7 +862,7 @@ fn run_list(directory: &Path, config: ClientConfig) -> Result<()> {
         let Some(index) = select_menu(MenuUi {
             title: "Select an installed skill".to_string(),
             items,
-            default: 0,
+            default: selected_index,
             preview_title: "Installed skill".to_string(),
             status: status_message.clone(),
             help_text: DEFAULT_HELP_TEXT.to_string(),
@@ -848,8 +874,11 @@ fn run_list(directory: &Path, config: ClientConfig) -> Result<()> {
         if index == skills.len() {
             break;
         }
+        selected_index = index;
         let selected = skills[index].clone();
-        let actions = installed_skill_actions(&selected, REMOVE_CHOICE);
+        let update_available =
+            update_available_or_remember_error(directory, &selected, &client, &mut status_message);
+        let actions = installed_skill_actions(update_available, REMOVE_CHOICE);
         let Some(action_index) = select_menu(MenuUi {
             title: format!("Choose an action for {}", skill_directory_name(&selected)),
             items: actions
@@ -960,6 +989,7 @@ fn run_skillsmp_search(
     let mut cache = std::collections::BTreeMap::<String, SkillData>::new();
     let mut messages = Vec::new();
     let mut status_message = None;
+    let mut selected_index = 0;
     loop {
         let installed_skills = discover_installed_skills(directory)?;
         let search_matches = response
@@ -983,7 +1013,7 @@ fn run_skillsmp_search(
         let Some(index) = select_menu(MenuUi {
             title: format!("Select a skill for \"{query}\""),
             items,
-            default: 0,
+            default: selected_index,
             preview_title: "SkillsMP result".to_string(),
             status: status_message.clone(),
             help_text: DEFAULT_HELP_TEXT.to_string(),
@@ -995,6 +1025,7 @@ fn run_skillsmp_search(
         if index == response.data.skills.len() {
             break;
         }
+        selected_index = index;
         let skill = search_matches[index].0;
         let matched_installed = search_matches[index].1.clone();
         let installable = if let Some(existing) = cache.get(&skill.id) {
@@ -1099,6 +1130,7 @@ fn run_skillsmp_list(directory: &Path, config: ClientConfig) -> Result<()> {
     let client = SkillsMpClient::new(config)?;
     let mut messages = Vec::new();
     let mut status_message = None;
+    let mut selected_index = 0;
     loop {
         let skills = discover_installed_skills(directory)?
             .into_iter()
@@ -1125,7 +1157,7 @@ fn run_skillsmp_list(directory: &Path, config: ClientConfig) -> Result<()> {
         let Some(index) = select_menu(MenuUi {
             title: "Select an installed SkillsMP skill".to_string(),
             items,
-            default: 0,
+            default: selected_index,
             preview_title: "Installed skill".to_string(),
             status: status_message.clone(),
             help_text: DEFAULT_HELP_TEXT.to_string(),
@@ -1137,8 +1169,11 @@ fn run_skillsmp_list(directory: &Path, config: ClientConfig) -> Result<()> {
         if index == skills.len() {
             break;
         }
+        selected_index = index;
         let selected = skills[index].clone();
-        let actions = installed_skill_actions(&selected, DELETE_CHOICE);
+        let update_available =
+            update_available_or_remember_error(directory, &selected, &client, &mut status_message);
+        let actions = installed_skill_actions(update_available, DELETE_CHOICE);
         let Some(action_index) = select_menu(MenuUi {
             title: format!("Choose an action for {}", skill_directory_name(&selected)),
             items: actions
@@ -1311,6 +1346,59 @@ fn update_skill(directory: &Path, skill: &SkillData, client: &SkillsMpClient) ->
     ))
 }
 
+fn skill_update_available(
+    directory: &Path,
+    skill: &SkillData,
+    client: &SkillsMpClient,
+) -> Result<bool> {
+    if skill.is_dependency() {
+        let environment = ProjectEnvironment::with_paths(
+            directory,
+            Path::new("pyproject.toml"),
+            Path::new(".venv"),
+            false,
+            &[],
+        );
+        return Ok(available_dependency_skill_in(skill, &environment)?
+            .is_some_and(|available| available.package_version != skill.package_version));
+    }
+    let Some(github_url) = skill.github_url.as_deref() else {
+        return Ok(false);
+    };
+    let refreshed = discover_github_skills(
+        client,
+        github_url,
+        if skill.is_skillsmp() {
+            SKILLY_SOURCE_SKILLSMP
+        } else {
+            SKILLY_SOURCE_GITHUB
+        },
+        skill.skillsmp_id.clone(),
+    )?
+    .into_iter()
+    .next()
+    .context("GitHub URL resolves to no skills")?;
+    Ok(!github_versions_match(skill, &refreshed))
+}
+
+fn update_available_or_remember_error(
+    directory: &Path,
+    skill: &SkillData,
+    client: &SkillsMpClient,
+    status_message: &mut Option<String>,
+) -> bool {
+    match skill_update_available(directory, skill, client) {
+        Ok(available) => available,
+        Err(error) => {
+            *status_message = Some(format!(
+                "Could not check updates for {}: {error}",
+                skill_directory_name(skill)
+            ));
+            false
+        }
+    }
+}
+
 fn skillsmp_search_status(installed: Option<&SkillData>) -> &'static str {
     if installed.is_some() {
         STATUS_INSTALLED
@@ -1378,9 +1466,9 @@ fn scan_skill_actions(item: &SkillMatchData) -> [&'static str; 3] {
     [scan_primary_action(item), BACK_CHOICE, EXIT_CHOICE]
 }
 
-fn installed_skill_actions<'a>(skill: &'a SkillData, remove_choice: &'a str) -> Vec<&'a str> {
+fn installed_skill_actions(update_available: bool, remove_choice: &str) -> Vec<&str> {
     let mut actions = vec![remove_choice, BACK_CHOICE, EXIT_CHOICE];
-    if skill.can_update() {
+    if update_available {
         actions.insert(0, UPDATE_CHOICE);
     }
     actions
@@ -1396,10 +1484,10 @@ fn downloadable_skill_label(item: &DownloadableSkillMatch) -> String {
 }
 
 fn downloadable_skill_actions(item: &DownloadableSkillMatch) -> Vec<&'static str> {
-    if item.status() == STATUS_INSTALLABLE {
-        vec![INSTALL_CHOICE, BACK_CHOICE, EXIT_CHOICE]
-    } else {
-        vec![UPDATE_CHOICE, REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE]
+    match item.status() {
+        STATUS_INSTALLABLE => vec![INSTALL_CHOICE, BACK_CHOICE, EXIT_CHOICE],
+        STATUS_UPDATABLE => vec![UPDATE_CHOICE, REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE],
+        _ => vec![REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE],
     }
 }
 
@@ -1571,11 +1659,14 @@ fn installed_skillsmp_match(
 #[cfg(test)]
 mod tests {
     use super::{
-        MenuAction, installed_skillsmp_match, menu_action, search_skill_label,
-        skillsmp_search_preview_lines, skillsmp_search_status,
+        BACK_CHOICE, Cli, Commands, DownloadableSkillMatch, EXIT_CHOICE, MenuAction, REMOVE_CHOICE,
+        UPDATE_CHOICE, downloadable_skill_actions, installed_skill_actions,
+        installed_skillsmp_match, menu_action, search_skill_label, skillsmp_search_preview_lines,
+        skillsmp_search_status,
     };
     use crate::client::SkillsMpSkill;
     use crate::core::{SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP, SkillData};
+    use clap::Parser;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use serde_json::Value as JsonValue;
     use std::collections::BTreeMap;
@@ -1717,6 +1808,78 @@ mod tests {
                 KeyEventKind::Press,
             )),
             Some(MenuAction::Cancel)
+        );
+    }
+
+    #[test]
+    fn destination_flags_resolve_for_directory_commands() {
+        let cli = Cli::try_parse_from([
+            "skilly",
+            "download",
+            "https://github.com/example/repo",
+            "--global",
+            "--copilot",
+        ])
+        .expect("download command should parse");
+        let Commands::Download { destination, .. } = cli.command else {
+            panic!("expected download command");
+        };
+
+        assert_eq!(
+            destination.resolve().expect("destination should resolve"),
+            std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME should be set"))
+                .join(".copilot/skills")
+        );
+    }
+
+    #[test]
+    fn explicit_directory_ignores_all_destination_flags() {
+        let cli = Cli::try_parse_from([
+            "skilly",
+            "list",
+            "--directory",
+            "custom",
+            "--local",
+            "--global",
+            "--claude",
+            "--codex",
+            "--copilot",
+        ])
+        .expect("list command should parse");
+        let Commands::List { destination, .. } = cli.command else {
+            panic!("expected list command");
+        };
+
+        assert_eq!(
+            destination.resolve().expect("destination should resolve"),
+            std::path::PathBuf::from("custom")
+        );
+    }
+
+    #[test]
+    fn installed_skill_actions_only_include_update_when_available() {
+        assert_eq!(
+            installed_skill_actions(false, REMOVE_CHOICE),
+            vec![REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE]
+        );
+        assert_eq!(
+            installed_skill_actions(true, REMOVE_CHOICE),
+            vec![UPDATE_CHOICE, REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE]
+        );
+    }
+
+    #[test]
+    fn downloadable_skill_actions_omit_update_when_versions_match() {
+        let installed = installed_skill(None, Some("https://github.com/example/repo"));
+        let available = installed.clone();
+        let matched = DownloadableSkillMatch {
+            available,
+            installed: Some(installed),
+        };
+
+        assert_eq!(
+            downloadable_skill_actions(&matched),
+            vec![REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE]
         );
     }
 }

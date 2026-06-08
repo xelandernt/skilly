@@ -4,7 +4,7 @@ mod core;
 
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery};
 use crate::core::{
-    FileSystem, SkillData, SkillResourceData, SkillSourceMetadata,
+    FileSystem, SkillData, SkillDirectoryFlavor, SkillResourceData, SkillSourceMetadata,
     discover_github_skills as rust_discover_github_skills,
     discover_installed_skills as rust_discover_installed_skills,
     discover_installed_skills_in as rust_discover_installed_skills_in,
@@ -14,7 +14,7 @@ use crate::core::{
     parse_github_skill_url as rust_parse_github_skill_url,
     project_requirements as rust_project_requirements,
     project_requirements_in as rust_project_requirements_in, remove_skill as rust_remove_skill,
-    remove_skill_in as rust_remove_skill_in,
+    remove_skill_in as rust_remove_skill_in, skills_directory as rust_skills_directory,
 };
 use pyo3::class::basic::CompareOp;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
@@ -1250,6 +1250,24 @@ fn skill_install_to_py(
 }
 
 #[pyfunction]
+#[pyo3(name = "resolve_skills_directory", signature = (agent="agents", global_=false))]
+fn resolve_skills_directory_py(py: Python<'_>, agent: &str, global_: bool) -> PyResult<Py<PyAny>> {
+    let flavor = match agent {
+        "agents" => SkillDirectoryFlavor::Agents,
+        "claude" => SkillDirectoryFlavor::Claude,
+        "codex" => SkillDirectoryFlavor::Codex,
+        "copilot" => SkillDirectoryFlavor::Copilot,
+        _ => {
+            return Err(PyValueError::new_err(
+                "agent must be one of: agents, claude, codex, copilot",
+            ));
+        }
+    };
+    let directory = rust_skills_directory(flavor, global_).map_err(py_err)?;
+    py_path(py, &directory.to_string_lossy())
+}
+
+#[pyfunction]
 #[pyo3(name = "discover_installed_skills", signature = (directory=None, file_system=None))]
 fn discover_installed_skills_py(
     py: Python<'_>,
@@ -1548,6 +1566,7 @@ fn python_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(skill_from_dir_py, m)?)?;
     m.add_function(wrap_pyfunction!(skill_render_py, m)?)?;
     m.add_function(wrap_pyfunction!(skill_install_to_py, m)?)?;
+    m.add_function(wrap_pyfunction!(resolve_skills_directory_py, m)?)?;
     m.add_function(wrap_pyfunction!(discover_installed_skills_py, m)?)?;
     m.add_function(wrap_pyfunction!(discover_venv_skills_py, m)?)?;
     m.add_function(wrap_pyfunction!(parse_github_skill_url_py, m)?)?;

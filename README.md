@@ -40,6 +40,13 @@ You can also pass `--github-token` to GitHub-fetching commands such as `skilly d
 
 When downloading from a repository URL that contains multiple skills, use `--skill-name <name>` to select one skill or `--all` to install every skill in that repository.
 
+Commands that manage installed skills accept destination flags. `--local` uses a project directory and `--global` uses the corresponding directory under your home directory. Select an agent-specific directory with `--claude`, `--codex`, or `--copilot`; without one of these flags, `.agents/skills` is used. An explicit `--directory` takes precedence over all destination flags.
+
+```shell
+skilly download https://github.com/example/project --global --codex
+skilly list --local --claude
+```
+
 
 ### python
 
@@ -52,6 +59,7 @@ from skilly import (
     Skill,
     SkillRepository,
     discover_venv_skills,
+    resolve_skills_directory,
 )
 from skilly.skillsmp import ClientSettings, SkillsMp, SkillsMpSearchQuery
 
@@ -61,6 +69,7 @@ generated = Skill(
     content="## Instructions\nDo the thing.\n",
 )
 saved = generated.install_to(Path("/tmp/skills"), skill_name="custom-folder-name")
+codex_global = resolve_skills_directory("codex", global_=True)
 
 installed = Skill.from_dir(Path(".agents/skills/my-skill"))
 github_skill = Skill.from_github(
