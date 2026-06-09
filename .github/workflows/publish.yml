@@ -48,7 +48,7 @@ jobs:
             --release --locked --out dist --compatibility pypi
             -i python3.10
       - name: Upload distribution
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.platform.artifact_name }}
           path: dist/*
@@ -85,7 +85,7 @@ jobs:
             --release --locked --out dist --compatibility pypi
             -i python
       - name: Upload distribution
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: dist/*
@@ -125,7 +125,7 @@ jobs:
             --release --locked --out dist --compatibility pypi
             -i python
       - name: Upload distribution
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: dist/*
@@ -142,7 +142,7 @@ jobs:
           command: sdist
           args: --out dist
       - name: Upload distribution
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-sdist
           path: dist/*
