@@ -12,9 +12,11 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "packaging>=26.2",
-    "typing-extensions>=4.15.0",
 ]
 dynamic = ["version"]
+
+[project.urls]
+repository = "https://github.com/xelandernt/skilly"
 
 [project.scripts]
 skilly = "skilly._cli:main"

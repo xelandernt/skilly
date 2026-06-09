@@ -327,7 +327,6 @@ name = "skilly"
 source = { editable = "." }
 dependencies = [
     { name = "packaging" },
-    { name = "typing-extensions" },
 ]
 
 [package.dev-dependencies]
@@ -342,10 +341,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "packaging", specifier = ">=26.2" },
-    { name = "typing-extensions", specifier = ">=4.15.0" },
-]
+requires-dist = [{ name = "packaging", specifier = ">=26.2" }]
 
 [package.metadata.requires-dev]
 dev = [

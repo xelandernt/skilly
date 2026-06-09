@@ -4,7 +4,10 @@ mod core;
 
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery};
 use crate::core::{
-    FileSystem, SkillData, SkillDirectoryFlavor, SkillResourceData, SkillSourceMetadata,
+    FileSystem, ProjectEnvironment, ScanDependencySelection, SkillData, SkillDirectoryFlavor,
+    SkillResourceData, SkillSourceMetadata,
+    available_dependency_skill_in as rust_available_dependency_skill,
+    available_dependency_skill_with_file_system as rust_available_dependency_skill_with_file_system,
     discover_github_skills as rust_discover_github_skills,
     discover_installed_skills as rust_discover_installed_skills,
     discover_installed_skills_in as rust_discover_installed_skills_in,
@@ -14,7 +17,9 @@ use crate::core::{
     parse_github_skill_url as rust_parse_github_skill_url,
     project_requirements as rust_project_requirements,
     project_requirements_in as rust_project_requirements_in, remove_skill as rust_remove_skill,
-    remove_skill_in as rust_remove_skill_in, skills_directory as rust_skills_directory,
+    remove_skill_in as rust_remove_skill_in, scan_project_in as rust_scan_project,
+    scan_project_with_file_system as rust_scan_project_with_file_system,
+    skills_directory as rust_skills_directory,
 };
 use pyo3::class::basic::CompareOp;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
@@ -492,6 +497,18 @@ impl FileSystem for PythonFileSystem {
         .map_err(|error: PyErr| anyhow::anyhow!(error.to_string()))
     }
 
+    fn replace_tree(&self, path: &Path, replacement: &Path) -> anyhow::Result<()> {
+        Python::with_gil(|py| {
+            let path_arg = py_bridge_path(py, &path.to_string_lossy())?;
+            let replacement_arg = py_bridge_path(py, &replacement.to_string_lossy())?;
+            self.inner
+                .bind(py)
+                .call_method1("replace_tree", (path_arg, replacement_arg))?;
+            Ok(())
+        })
+        .map_err(|error: PyErr| anyhow::anyhow!(error.to_string()))
+    }
+
     fn resolve(&self, path: &Path) -> anyhow::Result<PathBuf> {
         Python::with_gil(|py| {
             let file_system = self.inner.bind(py);
@@ -885,7 +902,7 @@ impl PySkill {
         skill_from_github_fetcher_impl(
             py,
             fetcher,
-            installable_skill.getattr("githubUrl")?.extract()?,
+            installable_skill.getattr("github_url")?.extract()?,
             Some(core::SKILLY_SOURCE_SKILLSMP.to_string()),
             Some(installable_skill.getattr("id")?.extract()?),
         )
@@ -1084,6 +1101,30 @@ impl PySkill {
             py.allow_threads(|| {
                 self.inner
                     .install_to(Path::new(&directory), skill_name.as_deref(), overwrite)
+            })
+            .map_err(py_err)?
+        };
+        Ok(Self::from_data(installed))
+    }
+
+    #[pyo3(signature = (directory=None, skill_name=None, file_system=None))]
+    fn replace_to(
+        &self,
+        py: Python<'_>,
+        directory: Option<&Bound<'_, PyAny>>,
+        skill_name: Option<String>,
+        file_system: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let directory = default_directory_arg(directory, core::DEFAULT_SKILLS_PATH)?;
+        let installed = if let Some(file_system) = file_system {
+            let file_system = PythonFileSystem::new(file_system);
+            self.inner
+                .replace_to_in(&file_system, Path::new(&directory), skill_name.as_deref())
+                .map_err(py_err)?
+        } else {
+            py.allow_threads(|| {
+                self.inner
+                    .replace_to(Path::new(&directory), skill_name.as_deref())
             })
             .map_err(py_err)?
         };
@@ -1301,6 +1342,96 @@ fn discover_venv_skills_py(
             .map_err(py_err)?
     };
     Ok(skills.into_iter().map(PySkill::from_data).collect())
+}
+
+#[pyfunction]
+#[pyo3(name = "scan_project", signature = (directory=None, pyproject_toml_path=None, venv_path=None, include_project_dependencies=true, include_dependency_groups=true, include_optional_dependencies=true, file_system=None))]
+fn scan_project_py(
+    py: Python<'_>,
+    directory: Option<&Bound<'_, PyAny>>,
+    pyproject_toml_path: Option<&Bound<'_, PyAny>>,
+    venv_path: Option<&Bound<'_, PyAny>>,
+    include_project_dependencies: bool,
+    include_dependency_groups: bool,
+    include_optional_dependencies: bool,
+    file_system: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Vec<(PySkill, Option<PySkill>)>> {
+    let environment = ProjectEnvironment::with_paths(
+        Path::new(&default_directory_arg(
+            directory,
+            core::DEFAULT_SKILLS_PATH,
+        )?),
+        Path::new(&default_directory_arg(
+            pyproject_toml_path,
+            "pyproject.toml",
+        )?),
+        Path::new(&default_directory_arg(venv_path, ".venv")?),
+        ScanDependencySelection {
+            include_project_dependencies,
+            include_dependency_groups,
+            include_optional_dependencies,
+        },
+    );
+    let matches = if let Some(file_system) = file_system {
+        let file_system = PythonFileSystem::new(file_system);
+        rust_scan_project_with_file_system(&file_system, &environment).map_err(py_err)?
+    } else {
+        py.allow_threads(|| rust_scan_project(&environment))
+            .map_err(py_err)?
+    };
+    Ok(matches
+        .into_iter()
+        .map(|item| {
+            (
+                PySkill::from_data(item.available),
+                item.installed.map(PySkill::from_data),
+            )
+        })
+        .collect())
+}
+
+#[pyfunction]
+#[pyo3(name = "available_dependency_skill", signature = (installed, directory=None, pyproject_toml_path=None, venv_path=None, include_project_dependencies=true, include_dependency_groups=true, include_optional_dependencies=true, file_system=None))]
+fn available_dependency_skill_py(
+    py: Python<'_>,
+    installed: &PySkill,
+    directory: Option<&Bound<'_, PyAny>>,
+    pyproject_toml_path: Option<&Bound<'_, PyAny>>,
+    venv_path: Option<&Bound<'_, PyAny>>,
+    include_project_dependencies: bool,
+    include_dependency_groups: bool,
+    include_optional_dependencies: bool,
+    file_system: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<PySkill>> {
+    let environment = ProjectEnvironment::with_paths(
+        Path::new(&default_directory_arg(
+            directory,
+            core::DEFAULT_SKILLS_PATH,
+        )?),
+        Path::new(&default_directory_arg(
+            pyproject_toml_path,
+            "pyproject.toml",
+        )?),
+        Path::new(&default_directory_arg(venv_path, ".venv")?),
+        ScanDependencySelection {
+            include_project_dependencies,
+            include_dependency_groups,
+            include_optional_dependencies,
+        },
+    );
+    let available = if let Some(file_system) = file_system {
+        let file_system = PythonFileSystem::new(file_system);
+        rust_available_dependency_skill_with_file_system(
+            &file_system,
+            &installed.inner,
+            &environment,
+        )
+        .map_err(py_err)?
+    } else {
+        py.allow_threads(|| rust_available_dependency_skill(&installed.inner, &environment))
+            .map_err(py_err)?
+    };
+    Ok(available.map(PySkill::from_data))
 }
 
 #[pyfunction]
@@ -1554,7 +1685,13 @@ fn skillsmp_resolve_github_ref_and_commit_sha_py(
 
 #[pyfunction]
 fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
-    py.allow_threads(|| cli::run(args)).map_err(py_err)
+    match py.allow_threads(|| cli::run(args)) {
+        Ok(exit_code) => Ok(exit_code),
+        Err(error) => {
+            eprintln!("{error}");
+            Ok(1)
+        }
+    }
 }
 
 #[pymodule]
@@ -1569,6 +1706,8 @@ fn python_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(resolve_skills_directory_py, m)?)?;
     m.add_function(wrap_pyfunction!(discover_installed_skills_py, m)?)?;
     m.add_function(wrap_pyfunction!(discover_venv_skills_py, m)?)?;
+    m.add_function(wrap_pyfunction!(scan_project_py, m)?)?;
+    m.add_function(wrap_pyfunction!(available_dependency_skill_py, m)?)?;
     m.add_function(wrap_pyfunction!(parse_github_skill_url_py, m)?)?;
     m.add_function(wrap_pyfunction!(discover_github_skills_py, m)?)?;
     m.add_function(wrap_pyfunction!(github_versions_match_py, m)?)?;

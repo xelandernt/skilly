@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::env;
 use std::io::Read;
+use std::time::Duration;
 use tar::Archive;
 
 const SKILLSMP_API_KEY_ENV_VAR: &str = "SKILLSMP_API_KEY";
@@ -20,7 +21,8 @@ const GITHUB_TOKEN_ENV_VARS: [&str; 3] = [SKILLY_GITHUB_TOKEN_ENV_VAR, "GITHUB_T
 const DEFAULT_SKILLSMP_API_BASE_URL: &str = "https://skillsmp.com/api/v1";
 const DEFAULT_GITHUB_API_BASE_URL: &str = "https://api.github.com";
 const GITHUB_API_BASE_URL_ENV_VAR: &str = "SKILLY_GITHUB_API_BASE_URL";
-const SKILLY_USER_AGENT: &str = "skilly/0.0.1";
+const SKILLY_USER_AGENT: &str = concat!("skilly/", env!("CARGO_PKG_VERSION"));
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClientConfig {
@@ -210,7 +212,9 @@ pub struct SkillsMpClient {
 
 impl SkillsMpClient {
     pub fn new(config: ClientConfig) -> Result<Self> {
-        let mut builder = Client::builder().user_agent(SKILLY_USER_AGENT);
+        let mut builder = Client::builder()
+            .user_agent(SKILLY_USER_AGENT)
+            .timeout(DEFAULT_REQUEST_TIMEOUT);
         if let Some(proxy) = config.proxy.as_ref() {
             builder = builder.proxy(reqwest::Proxy::all(proxy)?);
         }

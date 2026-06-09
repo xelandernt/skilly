@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from skilly.repository import ProjectSettings, SkillRepository
 from skilly.skills import Skill
 from helpers import make_venv, write_distribution, write_skill
@@ -67,6 +69,17 @@ Body
     assert matches[0].installed == installed
     assert matches[0].available.package_version == "1.2.4"
     assert matches[0].status.value == "updatable"
+
+    excluded = repository.scan_project(
+        directory=install_directory,
+        project=ProjectSettings(
+            pyproject_toml_path=pyproject_toml,
+            venv_path=venv_path,
+            include_project_dependencies=False,
+        ),
+    )
+
+    assert excluded == []
 
 
 def test_repository_updates_include_dependency_skill(
@@ -175,3 +188,21 @@ Updated body
     update = SkillRepository().available_update(installed, github_fetcher=FakeFetcher())
 
     assert update == refreshed
+
+
+def test_repository_uses_bound_directory(tmp_path: Path) -> None:
+    repository = SkillRepository(directory=tmp_path)
+    installed = repository.install(Skill("sample-skill", "Installed skill."))
+
+    assert repository.list() == [installed]
+
+
+def test_repository_reports_malformed_installed_skill(tmp_path: Path) -> None:
+    malformed = tmp_path / "malformed"
+    malformed.mkdir()
+    (malformed / "SKILL.md").write_text("not frontmatter\n", encoding="utf-8")
+
+    repository = SkillRepository(directory=tmp_path)
+
+    with pytest.raises(RuntimeError, match="Invalid installed skill.*malformed"):
+        repository.list()

@@ -29,7 +29,7 @@ class SkillsMpInstallableSkillLike(Protocol):
     @property
     def id(self) -> str: ...
     @property
-    def githubUrl(self) -> str: ...
+    def github_url(self) -> str: ...
 
 class GitHubSkillLocationData(TypedDict):
     owner: str
@@ -187,6 +187,12 @@ class Skill:
         overwrite: bool = ...,
         file_system: FileSystem | None = ...,
     ) -> Skill: ...
+    def replace_to(
+        self,
+        directory: StrPath | None = ...,
+        skill_name: str | None = ...,
+        file_system: FileSystem | None = ...,
+    ) -> Skill: ...
 
 class SkillsMpSkillData(TypedDict):
     id: str
@@ -302,6 +308,25 @@ def discover_installed_skills(
 def discover_venv_skills(
     path: StrPath | None = ..., file_system: FileSystem | None = ...
 ) -> list[Skill]: ...
+def scan_project(
+    directory: StrPath | None = ...,
+    pyproject_toml_path: StrPath | None = ...,
+    venv_path: StrPath | None = ...,
+    include_project_dependencies: bool = ...,
+    include_dependency_groups: bool = ...,
+    include_optional_dependencies: bool = ...,
+    file_system: FileSystem | None = ...,
+) -> list[tuple[Skill, Skill | None]]: ...
+def available_dependency_skill(
+    installed: Skill,
+    directory: StrPath | None = ...,
+    pyproject_toml_path: StrPath | None = ...,
+    venv_path: StrPath | None = ...,
+    include_project_dependencies: bool = ...,
+    include_dependency_groups: bool = ...,
+    include_optional_dependencies: bool = ...,
+    file_system: FileSystem | None = ...,
+) -> Skill | None: ...
 def parse_github_skill_url(github_url: str) -> GitHubSkillLocationData: ...
 def discover_github_skills(
     github_url: str,

@@ -4,10 +4,11 @@ from pathlib import Path, PurePosixPath
 
 from skilly import (
     FileSystem,
+    ProjectSettings,
     Skill,
     SkillRepository,
-    get_project_skills,
-    get_venv_skills,
+    SkillResource,
+    discover_venv_skills,
 )
 
 StrPath = str | PathLike[str]
@@ -93,6 +94,25 @@ class InMemoryFileSystem(FileSystem):
             for candidate in self._directories
             if not self._is_relative_to(candidate, resolved) or candidate == Path("/")
         }
+
+    def replace_tree(self, path: StrPath, replacement: StrPath) -> None:
+        resolved = self.resolve(path)
+        resolved_replacement = self.resolve(replacement)
+        replacement_files = {
+            resolved / candidate.relative_to(resolved_replacement): content
+            for candidate, content in self._files.items()
+            if self._is_relative_to(candidate, resolved_replacement)
+        }
+        replacement_directories = {
+            resolved / candidate.relative_to(resolved_replacement)
+            for candidate in self._directories
+            if self._is_relative_to(candidate, resolved_replacement)
+        }
+        if resolved in self._directories:
+            self.remove_tree(resolved)
+        self.remove_tree(resolved_replacement)
+        self._directories.update(replacement_directories)
+        self._files.update(replacement_files)
 
     def resolve(self, path: StrPath) -> Path:
         raw = fspath(path).replace("\\", "/")
@@ -195,6 +215,28 @@ class CrossHostPosixFileSystem(FileSystem):
             or (candidate != resolved and not candidate.startswith(prefix))
         }
 
+    def replace_tree(self, path: StrPath, replacement: StrPath) -> None:
+        resolved = self._lookup_path(path)
+        resolved_replacement = self._lookup_path(replacement)
+        replacement_prefix = f"{resolved_replacement}/"
+        replacement_files = {
+            resolved + candidate.removeprefix(resolved_replacement): content
+            for candidate, content in self._files.items()
+            if candidate == resolved_replacement
+            or candidate.startswith(replacement_prefix)
+        }
+        replacement_directories = {
+            resolved + candidate.removeprefix(resolved_replacement)
+            for candidate in self._directories
+            if candidate == resolved_replacement
+            or candidate.startswith(replacement_prefix)
+        }
+        if resolved in self._directories:
+            self.remove_tree(resolved)
+        self.remove_tree(resolved_replacement)
+        self._directories.update(replacement_directories)
+        self._files.update(replacement_files)
+
     def resolve(self, path: StrPath) -> StrPath:
         resolved = self._resolve_storage_path(path)
         return Path(resolved.replace("/", "\\"))
@@ -281,7 +323,7 @@ Body
         "sample_pkg/.agents/skills/sample-skill/SKILL.md,,\n",
     )
 
-    skills = get_venv_skills(file_system=file_system)
+    skills = discover_venv_skills(file_system=file_system)
 
     assert [skill.name for skill in skills] == ["sample-skill"]
     assert skills[0].package_reference() == "sample-pkg==1.2.3"
@@ -316,7 +358,7 @@ Body
         "sample_pkg/.agents/skills/sample-skill/SKILL.md,,\n",
     )
 
-    skills = get_venv_skills(file_system=file_system)
+    skills = discover_venv_skills(file_system=file_system)
 
     assert [skill.name for skill in skills] == ["sample-skill"]
     assert skills[0].path == Path(
@@ -356,7 +398,9 @@ Body
         "sample_pkg/.agents/skills/sample-skill/SKILL.md,,\n",
     )
 
-    skills = get_project_skills(file_system=file_system)
+    skills = SkillRepository(
+        project=ProjectSettings(), file_system=file_system
+    ).project_skills()
 
     assert [skill.name for skill in skills] == ["sample-skill"]
     assert skills[0].package_name == "sample-pkg"
@@ -386,3 +430,24 @@ Generated instructions.
 
     assert removed.name == "generated-skill"
     assert file_system.exists(Path(".agents/skills/generated-skill")) is False
+
+
+def test_repository_replace_removes_stale_resources_with_custom_file_system() -> None:
+    file_system = InMemoryFileSystem()
+    repository = SkillRepository(file_system=file_system)
+    original = Skill(
+        "sample-skill",
+        "Original skill.",
+        resources=[
+            SkillResource(PurePosixPath("references/stale.md"), "reference", "stale\n")
+        ],
+    )
+    replacement = Skill("sample-skill", "Replacement skill.")
+
+    repository.install(original)
+    repository.install(replacement, replace=True)
+
+    assert (
+        file_system.exists(Path(".agents/skills/sample-skill/references/stale.md"))
+        is False
+    )

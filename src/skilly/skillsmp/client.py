@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
@@ -11,14 +12,11 @@ from ..skills import (
     GitHubRepositorySnapshot,
     GitHubSkillLocation,
 )
-from .response import AsyncResponse, Response
 
 if TYPE_CHECKING:
     from .._core import (
         SkillsMpAiSearchApiResponseData,
         SkillsMpAiSearchData as SkillsMpAiSearchPayload,
-        SkillsMpErrorApiResponseData,
-        SkillsMpErrorData,
         SkillsMpFiltersData,
         SkillsMpMetaData,
         SkillsMpPaginationData,
@@ -34,10 +32,10 @@ class SkillsMpSkill:
     name: str
     author: str
     description: str
-    githubUrl: str
-    skillUrl: str
+    github_url: str
+    skill_url: str
     stars: int | None = None
-    updatedAt: str | int | None = None
+    updated_at: str | int | None = None
 
     @classmethod
     def from_data(cls, data: SkillsMpSkillData) -> "SkillsMpSkill":
@@ -52,10 +50,10 @@ class SkillsMpSkill:
             name=data["name"],
             author=data["author"],
             description=data["description"],
-            githubUrl=data["githubUrl"],
-            skillUrl=data["skillUrl"],
+            github_url=data["githubUrl"],
+            skill_url=data["skillUrl"],
             stars=stars,
-            updatedAt=updated_at,
+            updated_at=updated_at,
         )
 
 
@@ -64,10 +62,10 @@ class SkillsMpPagination:
     page: int
     limit: int
     total: int
-    totalPages: int
-    hasNext: bool
-    hasPrev: bool
-    totalIsExact: bool | None = None
+    total_pages: int
+    has_next: bool
+    has_prev: bool
+    total_is_exact: bool | None = None
 
     @classmethod
     def from_data(cls, data: SkillsMpPaginationData) -> "SkillsMpPagination":
@@ -78,17 +76,17 @@ class SkillsMpPagination:
             page=data["page"],
             limit=data["limit"],
             total=data["total"],
-            totalPages=data["totalPages"],
-            hasNext=data["hasNext"],
-            hasPrev=data["hasPrev"],
-            totalIsExact=total_is_exact,
+            total_pages=data["totalPages"],
+            has_next=data["hasNext"],
+            has_prev=data["hasPrev"],
+            total_is_exact=total_is_exact,
         )
 
 
 @dataclass(frozen=True)
 class SkillsMpFilters:
     search: str | None = None
-    sortBy: str | None = None
+    sort_by: str | None = None
     category: str | None = None
     occupation: str | None = None
 
@@ -96,7 +94,7 @@ class SkillsMpFilters:
     def from_data(cls, data: SkillsMpFiltersData) -> "SkillsMpFilters":
         return cls(
             search=data.get("search"),
-            sortBy=data.get("sortBy"),
+            sort_by=data.get("sortBy"),
             category=data.get("category"),
             occupation=data.get("occupation"),
         )
@@ -131,8 +129,8 @@ class SkillsMpAiSearchData:
 
 @dataclass(frozen=True)
 class SkillsMpMeta:
-    requestId: str | None = None
-    responseTimeMs: int | None = None
+    request_id: str | None = None
+    response_time_ms: int | None = None
 
     @classmethod
     def from_data(cls, data: SkillsMpMetaData) -> "SkillsMpMeta":
@@ -140,34 +138,19 @@ class SkillsMpMeta:
         if response_time is not None and not isinstance(response_time, int):
             raise TypeError(f"Expected int, got {type(response_time)!r}")
         return cls(
-            requestId=data.get("requestId"),
-            responseTimeMs=response_time,
+            request_id=data.get("requestId"),
+            response_time_ms=response_time,
         )
 
 
 @dataclass(frozen=True)
-class SkillsMpError:
-    code: str
-    message: str
-
-    @classmethod
-    def from_data(cls, data: SkillsMpErrorData) -> "SkillsMpError":
-        return cls(
-            code=data["code"],
-            message=data["message"],
-        )
-
-
-@dataclass(frozen=True)
-class SkillsMpSearchApiResponse:
+class SkillsMpSearchResult:
     success: bool
     data: SkillsMpSearchData
     meta: SkillsMpMeta | None = None
 
     @classmethod
-    def from_data(
-        cls, data: SkillsMpSearchApiResponseData
-    ) -> "SkillsMpSearchApiResponse":
+    def from_data(cls, data: SkillsMpSearchApiResponseData) -> "SkillsMpSearchResult":
         meta = data.get("meta")
         return cls(
             success=data["success"],
@@ -177,7 +160,7 @@ class SkillsMpSearchApiResponse:
 
 
 @dataclass(frozen=True)
-class SkillsMpAiSearchApiResponse:
+class SkillsMpAiSearchResult:
     success: bool
     data: SkillsMpAiSearchData
     meta: SkillsMpMeta | None = None
@@ -185,29 +168,11 @@ class SkillsMpAiSearchApiResponse:
     @classmethod
     def from_data(
         cls, data: SkillsMpAiSearchApiResponseData
-    ) -> "SkillsMpAiSearchApiResponse":
+    ) -> "SkillsMpAiSearchResult":
         meta = data.get("meta")
         return cls(
             success=data["success"],
             data=SkillsMpAiSearchData.from_data(data["data"]),
-            meta=None if meta is None else SkillsMpMeta.from_data(meta),
-        )
-
-
-@dataclass(frozen=True)
-class SkillsMpErrorApiResponse:
-    success: bool
-    error: SkillsMpError
-    meta: SkillsMpMeta | None = None
-
-    @classmethod
-    def from_data(
-        cls, data: SkillsMpErrorApiResponseData
-    ) -> "SkillsMpErrorApiResponse":
-        meta = data.get("meta")
-        return cls(
-            success=data["success"],
-            error=SkillsMpError.from_data(data["error"]),
             meta=None if meta is None else SkillsMpMeta.from_data(meta),
         )
 
@@ -244,17 +209,8 @@ class _SkillsMpBase:
         self,
         *,
         settings: ClientSettings | None = None,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        github_token: str | None = None,
-        proxy: str | None = None,
     ) -> None:
-        self._settings = settings or ClientSettings(
-            base_url=base_url,
-            api_key=api_key,
-            github_token=github_token,
-            proxy=proxy,
-        )
+        self._settings = settings or ClientSettings()
 
     def _client_kwargs(self) -> bridge.ClientConfigKwargs:
         return self._settings.as_bridge_kwargs()
@@ -285,7 +241,7 @@ class SkillsMp(_SkillsMpBase):
     def search(
         self,
         query: str | SkillsMpSearchQuery,
-    ) -> Response[SkillsMpSearchApiResponse]:
+    ) -> SkillsMpSearchResult:
         search_query = self._search_query(query)
         payload = bridge.skillsmp_search(
             search_query.text,
@@ -296,11 +252,11 @@ class SkillsMp(_SkillsMpBase):
             occupation=search_query.occupation,
             **self._client_kwargs(),
         )
-        return Response(payload, SkillsMpSearchApiResponse.from_data(payload))
+        return SkillsMpSearchResult.from_data(payload)
 
-    def ai_search(self, q: str) -> Response[SkillsMpAiSearchApiResponse]:
+    def ai_search(self, q: str) -> SkillsMpAiSearchResult:
         payload = bridge.skillsmp_ai_search(q, **self._client_kwargs())
-        return Response(payload, SkillsMpAiSearchApiResponse.from_data(payload))
+        return SkillsMpAiSearchResult.from_data(payload)
 
     def fetch_github_directory(
         self,
@@ -356,36 +312,38 @@ class AsyncSkillsMp(_SkillsMpBase):
     async def search(
         self,
         query: str | SkillsMpSearchQuery,
-    ) -> AsyncResponse[SkillsMpSearchApiResponse]:
-        response = self._sync().search(query)
-        return AsyncResponse(response.raw_response, response.parsed_data)
+    ) -> SkillsMpSearchResult:
+        return await asyncio.to_thread(self._sync().search, query)
 
-    async def ai_search(self, q: str) -> AsyncResponse[SkillsMpAiSearchApiResponse]:
-        response = self._sync().ai_search(q)
-        return AsyncResponse(response.raw_response, response.parsed_data)
+    async def ai_search(self, q: str) -> SkillsMpAiSearchResult:
+        return await asyncio.to_thread(self._sync().ai_search, q)
 
     async def fetch_github_directory(
         self,
         location: GitHubSkillLocation,
         current_path: PurePosixPath,
     ) -> list[GitHubContentItem]:
-        return self._sync().fetch_github_directory(location, current_path)
+        return await asyncio.to_thread(
+            self._sync().fetch_github_directory, location, current_path
+        )
 
     async def fetch_github_file(
         self,
         location: GitHubSkillLocation,
         path: PurePosixPath,
     ) -> GitHubFileBlob:
-        return self._sync().fetch_github_file(location, path)
+        return await asyncio.to_thread(self._sync().fetch_github_file, location, path)
 
     async def fetch_github_snapshot(
         self,
         location: GitHubSkillLocation,
     ) -> GitHubRepositorySnapshot:
-        return self._sync().fetch_github_snapshot(location)
+        return await asyncio.to_thread(self._sync().fetch_github_snapshot, location)
 
     async def resolve_github_ref_and_commit_sha(
         self,
         location: GitHubSkillLocation,
     ) -> tuple[str, str]:
-        return self._sync().resolve_github_ref_and_commit_sha(location)
+        return await asyncio.to_thread(
+            self._sync().resolve_github_ref_and_commit_sha, location
+        )

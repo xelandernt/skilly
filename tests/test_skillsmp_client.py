@@ -1,4 +1,5 @@
 import io
+import asyncio
 import json
 import tarfile
 import threading
@@ -11,7 +12,12 @@ from pathlib import Path
 import pytest
 
 from skilly.skills import Skill, parse_github_skill_url
-from skilly.skillsmp.client import ClientSettings, SkillsMp, SkillsMpSearchQuery
+from skilly.skillsmp.client import (
+    AsyncSkillsMp,
+    ClientSettings,
+    SkillsMp,
+    SkillsMpSearchQuery,
+)
 
 
 COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -123,20 +129,39 @@ def test_skillsmp_client_search_and_github_download(
 
         response = client.search(SkillsMpSearchQuery(text="python", limit=10))
 
-        assert response.parsed_data.data.skills[0].name == "python-production"
-        location = parse_github_skill_url(response.parsed_data.data.skills[0].githubUrl)
+        assert response.data.skills[0].name == "python-production"
+        assert response.data.skills[0].github_url.endswith("/skills/python")
+        assert response.data.pagination.total_pages == 1
+        location = parse_github_skill_url(response.data.skills[0].github_url)
         assert client.resolve_github_ref_and_commit_sha(location) == (
             "main",
             COMMIT_SHA,
         )
 
-        skill = Skill.from_github(client, response.parsed_data.data.skills[0].githubUrl)
+        skill = Skill.from_github(client, response.data.skills[0].github_url)
 
         assert skill.name == "python"
         assert skill.github_commit_sha == COMMIT_SHA
         assert [resource.relative_path.as_posix() for resource in skill.resources] == [
             "scripts/extract.py"
         ]
+
+
+def test_async_skillsmp_client_does_not_block_event_loop(monkeypatch) -> None:
+    def slow_search(self, query):
+        del self, query
+        time.sleep(0.05)
+        return "result"
+
+    monkeypatch.setattr(SkillsMp, "search", slow_search)
+
+    async def run() -> None:
+        task = asyncio.create_task(AsyncSkillsMp().search("python"))
+        await asyncio.sleep(0.01)
+        assert not task.done()
+        assert await task == "result"
+
+    asyncio.run(run())
 
 
 def test_parse_github_skill_url_supports_hidden_skill_directories() -> None:

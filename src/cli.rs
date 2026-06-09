@@ -1,10 +1,11 @@
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery, SkillsMpSkill};
 use crate::core::{
     ProjectDependencyOrigin, ProjectEnvironment, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP,
-    STATUS_INSTALLABLE, STATUS_INSTALLED, STATUS_UPDATABLE, ScanDependencySelection, SkillData,
-    SkillDirectoryFlavor, SkillMatchData, available_dependency_skill_in, dependency_updates_in,
-    discover_github_skills, discover_installed_skills, github_versions_match, project_requirements,
-    remove_skill, scan_match_status, scan_project_in, skills_directory,
+    SKILLY_UNKNOWN_SOURCE, STATUS_INSTALLABLE, STATUS_INSTALLED, STATUS_UPDATABLE,
+    ScanDependencySelection, SkillData, SkillDirectoryFlavor, SkillMatchData,
+    available_dependency_skill_in, dependency_updates_in, discover_github_skills,
+    discover_installed_skills, github_versions_match, project_requirements, remove_skill,
+    scan_match_status, scan_project_in, skills_directory,
 };
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
@@ -15,10 +16,11 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, IsTerminal, Stdout, Write};
 use std::path::{Path, PathBuf};
@@ -34,6 +36,9 @@ const REMOVE_CHOICE: &str = "remove";
 const UPDATE_CHOICE: &str = "update";
 const DEFAULT_HELP_TEXT: &str = "Up/Down move | Enter select | Esc cancel";
 const DEFAULT_EMPTY_PREVIEW: &str = "No details available.";
+const DEFAULT_CREATE_INSTRUCTIONS: &str =
+    "# Instructions\n\nDescribe the procedure this skill should follow.";
+const CREATE_HELP_TEXT: &str = "^S create | F2 create | ^X cancel | F10 cancel | Tab next field";
 const LOADING_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
 #[derive(Debug, Clone)]
@@ -112,6 +117,35 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    #[command(about = "Create a specification-compliant skill.")]
+    Create {
+        #[arg(help = "Skill name. Required outside an interactive terminal.")]
+        name: Option<String>,
+        #[arg(long, help = "Describe what the skill does and when to use it.")]
+        description: Option<String>,
+        #[arg(long, help = "Markdown instructions for the SKILL.md body.")]
+        instructions: Option<String>,
+        #[arg(long, help = "License name or bundled license reference.")]
+        license: Option<String>,
+        #[arg(long, help = "Environment requirements for the skill.")]
+        compatibility: Option<String>,
+        #[arg(long, value_name = "KEY=VALUE", help = "Add frontmatter metadata.")]
+        metadata: Vec<String>,
+        #[arg(long, help = "Space-separated pre-approved tools.")]
+        allowed_tools: Option<String>,
+        #[arg(long, help = "Create an empty scripts directory.")]
+        with_scripts: bool,
+        #[arg(long, help = "Create an empty references directory.")]
+        with_references: bool,
+        #[arg(long, help = "Create an empty assets directory.")]
+        with_assets: bool,
+        #[arg(long, help = "Replace an existing skill atomically.")]
+        overwrite: bool,
+        #[arg(long, short = 'y', help = "Create without confirmation.")]
+        yes: bool,
+        #[command(flatten)]
+        destination: DestinationArgs,
+    },
     #[command(about = "Scan dependency-provided skills from pyproject.toml and .venv.")]
     Scan {
         #[command(flatten)]
@@ -329,6 +363,36 @@ pub fn run(args: Vec<String>) -> Result<i32> {
         };
 
     match cli.command {
+        Commands::Create {
+            name,
+            description,
+            instructions,
+            license,
+            compatibility,
+            metadata,
+            allowed_tools,
+            with_scripts,
+            with_references,
+            with_assets,
+            overwrite,
+            yes: _yes,
+            destination,
+        } => run_create(
+            &destination.resolve()?,
+            CreateOptions {
+                name,
+                description,
+                instructions,
+                license,
+                compatibility,
+                metadata,
+                allowed_tools,
+                with_scripts,
+                with_references,
+                with_assets,
+                overwrite,
+            },
+        )?,
         Commands::Scan {
             destination,
             dependencies,
@@ -417,9 +481,773 @@ fn client_config(
     }
 }
 
+#[derive(Debug)]
+struct CreateOptions {
+    name: Option<String>,
+    description: Option<String>,
+    instructions: Option<String>,
+    license: Option<String>,
+    compatibility: Option<String>,
+    metadata: Vec<String>,
+    allowed_tools: Option<String>,
+    with_scripts: bool,
+    with_references: bool,
+    with_assets: bool,
+    overwrite: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CreateField {
+    Name,
+    Description,
+    Instructions,
+    License,
+    Compatibility,
+    Metadata,
+    AllowedTools,
+    WithScripts,
+    WithReferences,
+    WithAssets,
+    Overwrite,
+}
+
+const CREATE_FIELDS: [CreateField; 11] = [
+    CreateField::Name,
+    CreateField::Description,
+    CreateField::Instructions,
+    CreateField::License,
+    CreateField::Compatibility,
+    CreateField::Metadata,
+    CreateField::AllowedTools,
+    CreateField::WithScripts,
+    CreateField::WithReferences,
+    CreateField::WithAssets,
+    CreateField::Overwrite,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CreateAction {
+    NextField,
+    PreviousField,
+    Save,
+    Cancel,
+    Insert(char),
+    Backspace,
+    Delete,
+    MoveLeft,
+    MoveRight,
+    MoveUp,
+    MoveDown,
+    MoveHome,
+    MoveEnd,
+    NewLine,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TextBuffer {
+    lines: Vec<String>,
+    cursor_row: usize,
+    cursor_col: usize,
+}
+
+impl TextBuffer {
+    fn from_text(value: &str) -> Self {
+        let mut lines = value.split('\n').map(str::to_string).collect::<Vec<_>>();
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        let cursor_row = lines.len().saturating_sub(1);
+        let cursor_col = line_len(&lines[cursor_row]);
+        Self {
+            lines,
+            cursor_row,
+            cursor_col,
+        }
+    }
+
+    fn text(&self) -> String {
+        self.lines.join("\n")
+    }
+
+    fn current_line_len(&self) -> usize {
+        line_len(&self.lines[self.cursor_row])
+    }
+
+    fn clamp_cursor(&mut self) {
+        self.cursor_row = self.cursor_row.min(self.lines.len().saturating_sub(1));
+        self.cursor_col = self.cursor_col.min(self.current_line_len());
+    }
+
+    fn insert_char(&mut self, value: char) {
+        let line = &mut self.lines[self.cursor_row];
+        let byte_index = char_to_byte_index(line, self.cursor_col);
+        line.insert(byte_index, value);
+        self.cursor_col += 1;
+    }
+
+    fn insert_newline(&mut self) {
+        let current = self.lines[self.cursor_row].clone();
+        let byte_index = char_to_byte_index(&current, self.cursor_col);
+        let (prefix, suffix) = current.split_at(byte_index);
+        self.lines[self.cursor_row] = prefix.to_string();
+        self.lines.insert(self.cursor_row + 1, suffix.to_string());
+        self.cursor_row += 1;
+        self.cursor_col = 0;
+    }
+
+    fn backspace(&mut self) {
+        if self.cursor_col > 0 {
+            let line = &mut self.lines[self.cursor_row];
+            let end = char_to_byte_index(line, self.cursor_col);
+            let start = char_to_byte_index(line, self.cursor_col - 1);
+            line.replace_range(start..end, "");
+            self.cursor_col -= 1;
+            return;
+        }
+        if self.cursor_row == 0 {
+            return;
+        }
+        let removed = self.lines.remove(self.cursor_row);
+        self.cursor_row -= 1;
+        self.cursor_col = self.current_line_len();
+        self.lines[self.cursor_row].push_str(&removed);
+    }
+
+    fn delete(&mut self) {
+        let line_len = self.current_line_len();
+        if self.cursor_col < line_len {
+            let line = &mut self.lines[self.cursor_row];
+            let start = char_to_byte_index(line, self.cursor_col);
+            let end = char_to_byte_index(line, self.cursor_col + 1);
+            line.replace_range(start..end, "");
+            return;
+        }
+        if self.cursor_row + 1 >= self.lines.len() {
+            return;
+        }
+        let next = self.lines.remove(self.cursor_row + 1);
+        self.lines[self.cursor_row].push_str(&next);
+    }
+
+    fn move_left(&mut self) {
+        if self.cursor_col > 0 {
+            self.cursor_col -= 1;
+            return;
+        }
+        if self.cursor_row > 0 {
+            self.cursor_row -= 1;
+            self.cursor_col = self.current_line_len();
+        }
+    }
+
+    fn move_right(&mut self) {
+        if self.cursor_col < self.current_line_len() {
+            self.cursor_col += 1;
+            return;
+        }
+        if self.cursor_row + 1 < self.lines.len() {
+            self.cursor_row += 1;
+            self.cursor_col = 0;
+        }
+    }
+
+    fn move_up(&mut self) {
+        if self.cursor_row > 0 {
+            self.cursor_row -= 1;
+            self.clamp_cursor();
+        }
+    }
+
+    fn move_down(&mut self) {
+        if self.cursor_row + 1 < self.lines.len() {
+            self.cursor_row += 1;
+            self.clamp_cursor();
+        }
+    }
+
+    fn move_home(&mut self) {
+        self.cursor_col = 0;
+    }
+
+    fn move_end(&mut self) {
+        self.cursor_col = self.current_line_len();
+    }
+
+    fn render_lines(&self, area: Rect) -> (Vec<Line<'static>>, Option<(u16, u16)>) {
+        if area.width == 0 || area.height == 0 {
+            return (Vec::new(), None);
+        }
+        let visible_height = usize::from(area.height);
+        let start_row = self
+            .cursor_row
+            .saturating_sub(visible_height.saturating_sub(1));
+        let width = usize::from(area.width);
+        let lines = self
+            .lines
+            .iter()
+            .skip(start_row)
+            .take(visible_height)
+            .map(|line| crop_text(line, width))
+            .map(Line::from)
+            .collect::<Vec<_>>();
+        let cursor_row = self.cursor_row.saturating_sub(start_row);
+        let cursor_col = self.cursor_col.min(width.saturating_sub(1));
+        (
+            lines,
+            Some((area.x + cursor_col as u16, area.y + cursor_row as u16)),
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CreateFormState {
+    active_index: usize,
+    name: TextBuffer,
+    description: TextBuffer,
+    instructions: TextBuffer,
+    license: TextBuffer,
+    compatibility: TextBuffer,
+    metadata: TextBuffer,
+    allowed_tools: TextBuffer,
+    with_scripts: bool,
+    with_references: bool,
+    with_assets: bool,
+    overwrite: bool,
+    status_message: Option<String>,
+}
+
+impl CreateFormState {
+    fn new(options: CreateOptions) -> Self {
+        Self {
+            active_index: 0,
+            name: TextBuffer::from_text(options.name.as_deref().unwrap_or("")),
+            description: TextBuffer::from_text(options.description.as_deref().unwrap_or("")),
+            instructions: TextBuffer::from_text(
+                options
+                    .instructions
+                    .as_deref()
+                    .unwrap_or(DEFAULT_CREATE_INSTRUCTIONS),
+            ),
+            license: TextBuffer::from_text(options.license.as_deref().unwrap_or("")),
+            compatibility: TextBuffer::from_text(options.compatibility.as_deref().unwrap_or("")),
+            metadata: TextBuffer::from_text(&options.metadata.join("\n")),
+            allowed_tools: TextBuffer::from_text(options.allowed_tools.as_deref().unwrap_or("")),
+            with_scripts: options.with_scripts,
+            with_references: options.with_references,
+            with_assets: options.with_assets,
+            overwrite: options.overwrite,
+            status_message: None,
+        }
+    }
+
+    fn active_field(&self) -> CreateField {
+        CREATE_FIELDS[self.active_index]
+    }
+
+    fn next_field(&mut self) {
+        self.active_index = (self.active_index + 1) % CREATE_FIELDS.len();
+    }
+
+    fn previous_field(&mut self) {
+        self.active_index = if self.active_index == 0 {
+            CREATE_FIELDS.len().saturating_sub(1)
+        } else {
+            self.active_index - 1
+        };
+    }
+
+    fn active_buffer(&self) -> Option<&TextBuffer> {
+        match self.active_field() {
+            CreateField::Name => Some(&self.name),
+            CreateField::Description => Some(&self.description),
+            CreateField::Instructions => Some(&self.instructions),
+            CreateField::License => Some(&self.license),
+            CreateField::Compatibility => Some(&self.compatibility),
+            CreateField::Metadata => Some(&self.metadata),
+            CreateField::AllowedTools => Some(&self.allowed_tools),
+            _ => None,
+        }
+    }
+
+    fn active_buffer_mut(&mut self) -> Option<&mut TextBuffer> {
+        match self.active_field() {
+            CreateField::Name => Some(&mut self.name),
+            CreateField::Description => Some(&mut self.description),
+            CreateField::Instructions => Some(&mut self.instructions),
+            CreateField::License => Some(&mut self.license),
+            CreateField::Compatibility => Some(&mut self.compatibility),
+            CreateField::Metadata => Some(&mut self.metadata),
+            CreateField::AllowedTools => Some(&mut self.allowed_tools),
+            _ => None,
+        }
+    }
+
+    fn active_field_is_multiline(&self) -> bool {
+        matches!(
+            self.active_field(),
+            CreateField::Instructions | CreateField::Metadata
+        )
+    }
+
+    fn active_field_is_toggle(&self) -> bool {
+        matches!(
+            self.active_field(),
+            CreateField::WithScripts
+                | CreateField::WithReferences
+                | CreateField::WithAssets
+                | CreateField::Overwrite
+        )
+    }
+
+    fn toggle_active(&mut self) {
+        match self.active_field() {
+            CreateField::WithScripts => self.with_scripts = !self.with_scripts,
+            CreateField::WithReferences => self.with_references = !self.with_references,
+            CreateField::WithAssets => self.with_assets = !self.with_assets,
+            CreateField::Overwrite => self.overwrite = !self.overwrite,
+            _ => {}
+        }
+    }
+
+    fn apply(&mut self, action: CreateAction) {
+        self.status_message = None;
+        match action {
+            CreateAction::NextField => self.next_field(),
+            CreateAction::PreviousField => self.previous_field(),
+            CreateAction::Insert(value) if self.active_field_is_toggle() => {
+                if value == ' ' {
+                    self.toggle_active();
+                }
+            }
+            CreateAction::NewLine if self.active_field_is_toggle() => self.toggle_active(),
+            CreateAction::Insert(value) => {
+                if let Some(buffer) = self.active_buffer_mut() {
+                    buffer.insert_char(value);
+                }
+            }
+            CreateAction::Backspace => {
+                if let Some(buffer) = self.active_buffer_mut() {
+                    buffer.backspace();
+                }
+            }
+            CreateAction::Delete => {
+                if let Some(buffer) = self.active_buffer_mut() {
+                    buffer.delete();
+                }
+            }
+            CreateAction::MoveLeft => {
+                if let Some(buffer) = self.active_buffer_mut() {
+                    buffer.move_left();
+                }
+            }
+            CreateAction::MoveRight => {
+                if let Some(buffer) = self.active_buffer_mut() {
+                    buffer.move_right();
+                }
+            }
+            CreateAction::MoveUp => {
+                if let Some(buffer) = self.active_buffer_mut() {
+                    buffer.move_up();
+                }
+            }
+            CreateAction::MoveDown => {
+                if let Some(buffer) = self.active_buffer_mut() {
+                    buffer.move_down();
+                }
+            }
+            CreateAction::MoveHome => {
+                if let Some(buffer) = self.active_buffer_mut() {
+                    buffer.move_home();
+                }
+            }
+            CreateAction::MoveEnd => {
+                if let Some(buffer) = self.active_buffer_mut() {
+                    buffer.move_end();
+                }
+            }
+            CreateAction::NewLine if self.active_field_is_multiline() => {
+                if let Some(buffer) = self.active_buffer_mut() {
+                    buffer.insert_newline();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn target_path(&self, directory: &Path) -> PathBuf {
+        let name = self.name.text();
+        let trimmed = name.trim();
+        directory.join(if trimmed.is_empty() {
+            "<name>"
+        } else {
+            trimmed
+        })
+    }
+
+    fn metadata_lines(&self) -> Vec<String> {
+        self.metadata
+            .text()
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn build_skill(&self, directory: &Path) -> Result<SkillData> {
+        let skill = SkillData {
+            name: self.name.text().trim().to_string(),
+            description: self.description.text().trim().to_string(),
+            path: None,
+            content: self.instructions.text(),
+            license: empty_to_none(self.license.text()),
+            compatibility: empty_to_none(self.compatibility.text()),
+            metadata: parse_metadata(&self.metadata_lines())?,
+            allowed_tools: empty_to_none(self.allowed_tools.text()),
+            resources: Vec::new(),
+            resource_warnings: Vec::new(),
+            source: SKILLY_UNKNOWN_SOURCE.to_string(),
+            package_name: None,
+            package_version: None,
+            github_url: None,
+            github_commit_sha: None,
+            skillsmp_id: None,
+        };
+        skill.validate()?;
+        if !self.overwrite && self.target_path(directory).exists() {
+            bail!("Skill directory already exists; enable overwrite to replace it");
+        }
+        Ok(skill)
+    }
+
+    fn preview_lines(&self, directory: &Path) -> Vec<String> {
+        let mut lines = vec![format!("Target: {}", self.target_path(directory).display())];
+        let requested_directories = requested_directories(self);
+        if requested_directories.is_empty() {
+            lines.push("Directories: none".to_string());
+        } else {
+            lines.push(format!("Directories: {}", requested_directories.join(", ")));
+        }
+        lines.push(String::new());
+
+        match self.preview_skill() {
+            Ok(skill) => lines.extend(skill.render(None).lines().map(str::to_string)),
+            Err(error) => lines.push(format!("Preview unavailable: {error}")),
+        }
+        lines
+    }
+
+    fn preview_skill(&self) -> Result<SkillData> {
+        Ok(SkillData {
+            name: placeholder_if_empty(self.name.text(), "skill-name"),
+            description: placeholder_if_empty(self.description.text(), "Skill description."),
+            path: None,
+            content: self.instructions.text(),
+            license: empty_to_none(self.license.text()),
+            compatibility: empty_to_none(self.compatibility.text()),
+            metadata: parse_metadata(&self.metadata_lines())?,
+            allowed_tools: empty_to_none(self.allowed_tools.text()),
+            resources: Vec::new(),
+            resource_warnings: Vec::new(),
+            source: SKILLY_UNKNOWN_SOURCE.to_string(),
+            package_name: None,
+            package_version: None,
+            github_url: None,
+            github_commit_sha: None,
+            skillsmp_id: None,
+        })
+    }
+
+    fn field_summary(&self, field: CreateField) -> String {
+        match field {
+            CreateField::Name => summarize_text(&self.name.text()),
+            CreateField::Description => summarize_text(&self.description.text()),
+            CreateField::Instructions => summarize_multiline(&self.instructions.text()),
+            CreateField::License => summarize_text(&self.license.text()),
+            CreateField::Compatibility => summarize_text(&self.compatibility.text()),
+            CreateField::Metadata => summarize_multiline(&self.metadata.text()),
+            CreateField::AllowedTools => summarize_text(&self.allowed_tools.text()),
+            CreateField::WithScripts => on_off(self.with_scripts).to_string(),
+            CreateField::WithReferences => on_off(self.with_references).to_string(),
+            CreateField::WithAssets => on_off(self.with_assets).to_string(),
+            CreateField::Overwrite => on_off(self.overwrite).to_string(),
+        }
+    }
+
+    fn active_title(&self) -> &'static str {
+        match self.active_field() {
+            CreateField::Name => "Name",
+            CreateField::Description => "Description",
+            CreateField::Instructions => "Instructions",
+            CreateField::License => "License",
+            CreateField::Compatibility => "Compatibility",
+            CreateField::Metadata => "Metadata",
+            CreateField::AllowedTools => "Allowed Tools",
+            CreateField::WithScripts => "Create scripts/",
+            CreateField::WithReferences => "Create references/",
+            CreateField::WithAssets => "Create assets/",
+            CreateField::Overwrite => "Overwrite existing skill",
+        }
+    }
+
+    fn active_help(&self) -> &'static str {
+        match self.active_field() {
+            CreateField::Name => "Required. 1-64 lowercase letters, numbers, and single hyphens.",
+            CreateField::Description => {
+                "Required. Describe what the skill does and when to use it."
+            }
+            CreateField::Instructions => "Markdown body. Enter inserts line breaks here.",
+            CreateField::License => "Optional bundled license reference or plain license name.",
+            CreateField::Compatibility => "Optional compatibility note for environments or models.",
+            CreateField::Metadata => "Optional frontmatter. One KEY=VALUE entry per line.",
+            CreateField::AllowedTools => "Optional space-separated tools string.",
+            CreateField::WithScripts => "Space toggles creation of an empty scripts/ directory.",
+            CreateField::WithReferences => {
+                "Space toggles creation of an empty references/ directory."
+            }
+            CreateField::WithAssets => "Space toggles creation of an empty assets/ directory.",
+            CreateField::Overwrite => "Space toggles atomic replacement of an existing skill.",
+        }
+    }
+}
+
+fn interactive_terminal() -> bool {
+    io::stdin().is_terminal() && io::stdout().is_terminal()
+}
+
+fn parse_metadata(values: &[String]) -> Result<BTreeMap<String, String>> {
+    values
+        .iter()
+        .map(|value| {
+            let (key, value) = value
+                .split_once('=')
+                .filter(|(key, _)| !key.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("Metadata must use KEY=VALUE: {value}"))?;
+            Ok((key.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn run_create(directory: &Path, mut options: CreateOptions) -> Result<()> {
+    let interactive = interactive_terminal();
+    if interactive {
+        let Some(submission) = run_create_tui(directory, options)? else {
+            println!("Cancelled without creating skill");
+            return Ok(());
+        };
+        options = submission;
+    }
+
+    let name = options
+        .name
+        .context("Skill name is required outside an interactive terminal")?;
+    let description = options
+        .description
+        .context("Skill description is required outside an interactive terminal")?;
+    let skill = SkillData {
+        name: name.clone(),
+        description,
+        path: None,
+        content: options
+            .instructions
+            .unwrap_or_else(|| DEFAULT_CREATE_INSTRUCTIONS.to_string()),
+        license: options.license,
+        compatibility: options.compatibility,
+        metadata: parse_metadata(&options.metadata)?,
+        allowed_tools: options.allowed_tools,
+        resources: Vec::new(),
+        resource_warnings: Vec::new(),
+        source: SKILLY_UNKNOWN_SOURCE.to_string(),
+        package_name: None,
+        package_version: None,
+        github_url: None,
+        github_commit_sha: None,
+        skillsmp_id: None,
+    };
+    skill.validate()?;
+
+    let installed = if options.overwrite {
+        skill.replace_to(directory, None)?
+    } else {
+        skill.install_to(directory, None, false)?
+    };
+    let root = installed
+        .path
+        .as_deref()
+        .map(Path::new)
+        .context("Created skill has no directory")?;
+    for (requested, child) in [
+        (options.with_scripts, "scripts"),
+        (options.with_references, "references"),
+        (options.with_assets, "assets"),
+    ] {
+        if requested {
+            fs::create_dir_all(root.join(child))?;
+        }
+    }
+    println!("Created {} at {}", installed.name, root.display());
+    Ok(())
+}
+
+fn run_create_tui(directory: &Path, options: CreateOptions) -> Result<Option<CreateOptions>> {
+    let mut session = TerminalSession::new()?;
+    let mut form = CreateFormState::new(options);
+    loop {
+        let mut cursor = None;
+        session.terminal.draw(|frame| {
+            cursor = render_create_form(frame, &form, directory);
+        })?;
+
+        if let Some((x, y)) = cursor {
+            session.terminal.show_cursor()?;
+            session.terminal.set_cursor_position((x, y))?;
+        } else {
+            session.terminal.hide_cursor()?;
+        }
+
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        let Some(action) = create_action(key) else {
+            continue;
+        };
+        match action {
+            CreateAction::Cancel => return Ok(None),
+            CreateAction::Save => match form.build_skill(directory) {
+                Ok(_) => {
+                    return Ok(Some(CreateOptions {
+                        name: Some(form.name.text().trim().to_string()),
+                        description: Some(form.description.text().trim().to_string()),
+                        instructions: Some(form.instructions.text()),
+                        license: empty_to_none(form.license.text()),
+                        compatibility: empty_to_none(form.compatibility.text()),
+                        metadata: form.metadata_lines(),
+                        allowed_tools: empty_to_none(form.allowed_tools.text()),
+                        with_scripts: form.with_scripts,
+                        with_references: form.with_references,
+                        with_assets: form.with_assets,
+                        overwrite: form.overwrite,
+                    }));
+                }
+                Err(error) => form.status_message = Some(error.to_string()),
+            },
+            action => form.apply(action),
+        }
+    }
+}
+
+fn render_create_form(
+    frame: &mut ratatui::Frame<'_>,
+    form: &CreateFormState,
+    directory: &Path,
+) -> Option<(u16, u16)> {
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(12),
+            Constraint::Length(2),
+        ])
+        .split(frame.area());
+    frame.render_widget(
+        Paragraph::new(format!("Create skill in {}", directory.display()))
+            .style(Style::default().add_modifier(Modifier::BOLD)),
+        layout[0],
+    );
+
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(34), Constraint::Min(40)])
+        .split(layout[1]);
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(panes[1]);
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(form.active_index));
+    let items = CREATE_FIELDS
+        .iter()
+        .map(|field| {
+            ListItem::new(format!(
+                "{}: {}",
+                create_field_label(*field),
+                form.field_summary(*field)
+            ))
+        })
+        .collect::<Vec<_>>();
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title("Fields"))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("❯ ");
+    frame.render_stateful_widget(list, panes[0], &mut list_state);
+
+    let editor_block = Block::default()
+        .borders(Borders::ALL)
+        .title(form.active_title());
+    let editor_inner = editor_block.inner(right[0]);
+    frame.render_widget(editor_block, right[0]);
+
+    let mut cursor = None;
+    if let Some(buffer) = form.active_buffer() {
+        let (lines, position) = buffer.render_lines(editor_inner);
+        frame.render_widget(Paragraph::new(lines), editor_inner);
+        cursor = position;
+    } else {
+        frame.render_widget(
+            Paragraph::new(format!(
+                "Current value: {}\n\n{}",
+                form.field_summary(form.active_field()),
+                form.active_help()
+            ))
+            .wrap(Wrap { trim: false }),
+            editor_inner,
+        );
+    }
+
+    let preview = Paragraph::new(
+        form.preview_lines(directory)
+            .into_iter()
+            .map(Line::from)
+            .collect::<Vec<_>>(),
+    )
+    .block(Block::default().borders(Borders::ALL).title("Preview"))
+    .wrap(Wrap { trim: false });
+    frame.render_widget(preview, right[1]);
+
+    let status = form
+        .status_message
+        .clone()
+        .unwrap_or_else(|| form.active_help().to_string());
+    frame.render_widget(
+        Paragraph::new(CREATE_HELP_TEXT).style(Style::default().fg(Color::Gray)),
+        layout[2],
+    );
+    let status_style = if form.status_message.is_some() {
+        Style::default().fg(Color::Red)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+    let status_area = Rect {
+        x: layout[2].x,
+        y: layout[2].y.saturating_add(1),
+        width: layout[2].width,
+        height: 1,
+    };
+    frame.render_widget(Paragraph::new(status).style(status_style), status_area);
+    cursor
+}
+
 fn select_menu(menu: MenuUi) -> Result<Option<usize>> {
     if menu.items.is_empty() {
         return Ok(None);
+    }
+    if !interactive_terminal() {
+        bail!("This command requires an interactive terminal");
     }
 
     let mut session = TerminalSession::new()?;
@@ -536,11 +1364,151 @@ fn menu_action(key: KeyEvent) -> Option<MenuAction> {
     }
 }
 
+fn create_action(key: KeyEvent) -> Option<CreateAction> {
+    if key.kind != KeyEventKind::Press {
+        return None;
+    }
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Char('s') | KeyCode::Char('S') => Some(CreateAction::Save),
+            KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Char('c') => {
+                Some(CreateAction::Cancel)
+            }
+            _ => None,
+        };
+    }
+
+    match key.code {
+        KeyCode::Tab => Some(CreateAction::NextField),
+        KeyCode::BackTab => Some(CreateAction::PreviousField),
+        KeyCode::F(2) => Some(CreateAction::Save),
+        KeyCode::F(10) => Some(CreateAction::Cancel),
+        KeyCode::Backspace => Some(CreateAction::Backspace),
+        KeyCode::Delete => Some(CreateAction::Delete),
+        KeyCode::Left => Some(CreateAction::MoveLeft),
+        KeyCode::Right => Some(CreateAction::MoveRight),
+        KeyCode::Up => Some(CreateAction::MoveUp),
+        KeyCode::Down => Some(CreateAction::MoveDown),
+        KeyCode::Home => Some(CreateAction::MoveHome),
+        KeyCode::End => Some(CreateAction::MoveEnd),
+        KeyCode::Enter => Some(CreateAction::NewLine),
+        KeyCode::Esc => Some(CreateAction::Cancel),
+        KeyCode::Char(value)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::ALT | KeyModifiers::SUPER) =>
+        {
+            Some(CreateAction::Insert(value))
+        }
+        _ => None,
+    }
+}
+
+fn create_field_label(field: CreateField) -> &'static str {
+    match field {
+        CreateField::Name => "Name",
+        CreateField::Description => "Description",
+        CreateField::Instructions => "Instructions",
+        CreateField::License => "License",
+        CreateField::Compatibility => "Compatibility",
+        CreateField::Metadata => "Metadata",
+        CreateField::AllowedTools => "Allowed Tools",
+        CreateField::WithScripts => "scripts/",
+        CreateField::WithReferences => "references/",
+        CreateField::WithAssets => "assets/",
+        CreateField::Overwrite => "Overwrite",
+    }
+}
+
+fn requested_directories(form: &CreateFormState) -> Vec<&'static str> {
+    let mut directories = Vec::new();
+    if form.with_scripts {
+        directories.push("scripts/");
+    }
+    if form.with_references {
+        directories.push("references/");
+    }
+    if form.with_assets {
+        directories.push("assets/");
+    }
+    directories
+}
+
+fn char_to_byte_index(value: &str, offset: usize) -> usize {
+    value
+        .char_indices()
+        .nth(offset)
+        .map(|(index, _)| index)
+        .unwrap_or(value.len())
+}
+
+fn line_len(value: &str) -> usize {
+    value.chars().count()
+}
+
+fn crop_text(value: &str, width: usize) -> String {
+    value.chars().take(width).collect()
+}
+
+fn summarize_text(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "<empty>".to_string();
+    }
+    truncate_summary(trimmed)
+}
+
+fn summarize_multiline(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "<empty>".to_string();
+    }
+    if trimmed.contains('\n') {
+        return format!("{} lines", trimmed.lines().count());
+    }
+    truncate_summary(trimmed)
+}
+
+fn on_off(value: bool) -> &'static str {
+    if value { "on" } else { "off" }
+}
+
+fn truncate_summary(value: &str) -> String {
+    let max_len = 24usize;
+    let mut chars = value.chars().collect::<Vec<_>>();
+    if chars.len() <= max_len {
+        return value.to_string();
+    }
+    chars.truncate(max_len.saturating_sub(1));
+    format!("{}…", chars.into_iter().collect::<String>())
+}
+
+fn empty_to_none(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn placeholder_if_empty(value: String, placeholder: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        placeholder.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 fn show_loading_message<T, F>(title: &str, message: &str, work: F) -> Result<T>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
 {
+    if !interactive_terminal() {
+        return work();
+    }
     let mut session = TerminalSession::new()?;
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -613,6 +1581,13 @@ fn run_scan(directory: &Path, dependency_selection: ScanDependencySelection) -> 
         .collect::<Vec<_>>();
     if actionable.is_empty() {
         println!("All discovered dependency skills are already installed");
+        return Ok(());
+    }
+    if !interactive_terminal() {
+        println!("Dependency skills requiring action:");
+        for item in actionable {
+            println!("{}", scan_choice_label(&item));
+        }
         return Ok(());
     }
 
@@ -723,6 +1698,9 @@ fn run_download(
         bail!("Use either --skill-name or --all when downloading multiple skills");
     }
     if skills.len() > 1 && !all && skill_name.is_none() {
+        if !interactive_terminal() {
+            bail!("Multiple skills found; use --skill-name <name> or --all");
+        }
         return download_selected_skills(&client, directory, overwrite, &skills);
     }
     if let Some(skill_name) = skill_name {
@@ -874,6 +1852,17 @@ fn download_selected_skills(
 }
 
 fn run_list(directory: &Path, config: ClientConfig) -> Result<()> {
+    if !interactive_terminal() {
+        let skills = discover_installed_skills(directory)?;
+        if skills.is_empty() {
+            println!("No installed skills found in {}", directory.display());
+        } else {
+            for skill in skills {
+                println!("{}", installed_skill_label(&skill));
+            }
+        }
+        return Ok(());
+    }
     let client = SkillsMpClient::new(config)?;
     let mut messages = Vec::new();
     let mut status_message = None;
@@ -1163,6 +2152,12 @@ fn run_skillsmp_search(
         println!("No SkillsMP skills found for {query}");
         return Ok(());
     }
+    if !interactive_terminal() {
+        for skill in response.data.skills {
+            println!("{} [{}] ({})", skill.name, skill.author, skill.id);
+        }
+        return Ok(());
+    }
 
     let mut cache = std::collections::BTreeMap::<String, SkillData>::new();
     let mut messages = Vec::new();
@@ -1305,6 +2300,23 @@ fn run_skillsmp_search(
 }
 
 fn run_skillsmp_list(directory: &Path, config: ClientConfig) -> Result<()> {
+    if !interactive_terminal() {
+        let skills = discover_installed_skills(directory)?
+            .into_iter()
+            .filter(|skill| skill.is_skillsmp())
+            .collect::<Vec<_>>();
+        if skills.is_empty() {
+            println!(
+                "No SkillsMP-installed skills found in {}",
+                directory.display()
+            );
+        } else {
+            for skill in skills {
+                println!("{}", installed_skill_label(&skill));
+            }
+        }
+        return Ok(());
+    }
     let client = SkillsMpClient::new(config)?;
     let mut messages = Vec::new();
     let mut status_message = None;
@@ -1440,11 +2452,7 @@ fn install_available_skill(
     replace: bool,
 ) -> Result<SkillData> {
     if replace {
-        let remove_name = skill_name.unwrap_or(&skill.name);
-        let remove_path = directory.join(remove_name);
-        if remove_path.exists() {
-            fs::remove_dir_all(remove_path)?;
-        }
+        return skill.replace_to(directory, skill_name);
     }
     skill.install_to(directory, skill_name, true)
 }
@@ -1854,9 +2862,9 @@ fn installed_skillsmp_match(
 #[cfg(test)]
 mod tests {
     use super::{
-        BACK_CHOICE, Cli, Commands, DownloadableSkillMatch, EXIT_CHOICE, MenuAction,
-        PendingSkillUpdate, REMOVE_CHOICE, ScanDependencyArgs, UPDATE_CHOICE,
-        downloadable_skill_actions, format_pending_update, installed_skill_actions,
+        BACK_CHOICE, Cli, Commands, CreateAction, DownloadableSkillMatch, EXIT_CHOICE, MenuAction,
+        PendingSkillUpdate, REMOVE_CHOICE, ScanDependencyArgs, TextBuffer, UPDATE_CHOICE,
+        create_action, downloadable_skill_actions, format_pending_update, installed_skill_actions,
         installed_skillsmp_match, menu_action, scan_choice_label, scan_match_preview_lines,
         search_skill_label, skillsmp_search_preview_lines, skillsmp_search_status,
     };
@@ -2033,6 +3041,61 @@ mod tests {
             )),
             Some(MenuAction::Cancel)
         );
+    }
+
+    #[test]
+    fn create_action_maps_create_and_cancel_shortcuts() {
+        assert_eq!(
+            create_action(KeyEvent::new_with_kind(
+                KeyCode::Char('s'),
+                KeyModifiers::CONTROL,
+                KeyEventKind::Press,
+            )),
+            Some(CreateAction::Save)
+        );
+        assert_eq!(
+            create_action(KeyEvent::new_with_kind(
+                KeyCode::F(2),
+                KeyModifiers::NONE,
+                KeyEventKind::Press,
+            )),
+            Some(CreateAction::Save)
+        );
+        assert_eq!(
+            create_action(KeyEvent::new_with_kind(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+                KeyEventKind::Press,
+            )),
+            Some(CreateAction::Cancel)
+        );
+        assert_eq!(
+            create_action(KeyEvent::new_with_kind(
+                KeyCode::F(10),
+                KeyModifiers::NONE,
+                KeyEventKind::Press,
+            )),
+            Some(CreateAction::Cancel)
+        );
+    }
+
+    #[test]
+    fn text_buffer_supports_multiline_editing() {
+        let mut buffer = TextBuffer::from_text("line 1");
+
+        buffer.move_end();
+        buffer.insert_newline();
+        buffer.insert_char('l');
+        buffer.insert_char('i');
+        buffer.insert_char('n');
+        buffer.insert_char('e');
+        buffer.insert_char(' ');
+        buffer.insert_char('2');
+        buffer.move_up();
+        buffer.move_end();
+        buffer.insert_char('!');
+
+        assert_eq!(buffer.text(), "line 1!\nline 2");
     }
 
     #[test]

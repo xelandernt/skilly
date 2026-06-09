@@ -1,6 +1,9 @@
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from skilly.skills import Skill, discover_venv_skills
+import pytest
+
+from skilly.repository import SkillRepository
+from skilly.skills import Skill, SkillResource, discover_venv_skills
 from helpers import make_venv, write_distribution, write_skill
 
 
@@ -364,3 +367,34 @@ Body
     )
     assert skill.github_commit_sha == "0123456789abcdef0123456789abcdef01234567"
     assert skill.skillsmp_id == "skill-1"
+
+
+def test_install_rejects_paths_outside_skill_directory(tmp_path: Path) -> None:
+    skill = Skill(
+        "safe-skill",
+        "Safe skill.",
+        resources=[SkillResource(PurePosixPath("../escaped.txt"), "other", "escaped")],
+    )
+
+    with pytest.raises(RuntimeError, match="relative resource path"):
+        skill.install_to(tmp_path)
+
+    assert not (tmp_path / "escaped.txt").exists()
+    assert not (tmp_path / "safe-skill").exists()
+
+
+def test_repository_replace_removes_stale_resources(tmp_path: Path) -> None:
+    repository = SkillRepository()
+    original = Skill(
+        "sample-skill",
+        "Original skill.",
+        resources=[
+            SkillResource(PurePosixPath("references/stale.md"), "reference", "stale\n")
+        ],
+    )
+    replacement = Skill("sample-skill", "Replacement skill.")
+
+    repository.install(original, directory=tmp_path)
+    repository.install(replacement, directory=tmp_path, replace=True)
+
+    assert not (tmp_path / "sample-skill/references/stale.md").exists()

@@ -54,6 +54,75 @@ def test_run_cli_update_help_describes_options(capfd) -> None:
     )
 
 
+def test_run_cli_create_help_describes_options(capfd) -> None:
+    exit_code = run_cli(["create", "--help"])
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "Create a specification-compliant skill" in output
+    assert "--description" in output
+    assert "--instructions" in output
+    assert "--with-references" in output
+
+
+def test_run_cli_create_non_interactive_creates_skill(tmp_path: Path, capfd) -> None:
+    exit_code = run_cli(
+        [
+            "create",
+            "sample-skill",
+            "--description",
+            "Use when a sample skill is needed.",
+            "--instructions",
+            "# Instructions\n\nFollow the sample procedure.",
+            "--metadata",
+            "author=example",
+            "--with-references",
+            "--directory",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    skill = Skill.from_dir(tmp_path / "sample-skill")
+    assert skill.description == "Use when a sample skill is needed."
+    assert skill.metadata["author"] == "example"
+    assert (tmp_path / "sample-skill/references").is_dir()
+    assert "Created sample-skill" in capfd.readouterr().out
+
+
+def test_run_cli_create_rejects_invalid_name_without_writing(
+    tmp_path: Path, capfd
+) -> None:
+    exit_code = run_cli(
+        [
+            "create",
+            "../unsafe",
+            "--description",
+            "Use when testing invalid input.",
+            "--directory",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 1
+    assert not (tmp_path.parent / "unsafe").exists()
+    assert "Invalid skill name" in capfd.readouterr().err
+
+
+def test_run_cli_list_prints_plain_output_without_terminal(
+    tmp_path: Path, capfd
+) -> None:
+    SkillRepository().install(
+        Skill("sample-skill", "Installed skill."),
+        directory=tmp_path,
+    )
+
+    exit_code = run_cli(["list", "--directory", str(tmp_path)])
+
+    assert exit_code == 0
+    assert "sample-skill" in capfd.readouterr().out
+
+
 def test_resolve_skills_directory_supports_local_agent_flavors() -> None:
     assert resolve_skills_directory() == Path(".agents/skills")
     assert resolve_skills_directory("claude") == Path(".claude/skills")

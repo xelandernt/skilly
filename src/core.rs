@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use csv::ReaderBuilder;
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use url::Url;
-use walkdir::WalkDir;
 
 pub const DEFAULT_SKILLS_PATH: &str = ".agents/skills";
 pub const CLAUDE_SKILLS_PATH: &str = ".claude/skills";
@@ -36,6 +36,8 @@ pub const SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY: &str = "skilly-package
 pub const STATUS_INSTALLED: &str = "installed";
 pub const STATUS_INSTALLABLE: &str = "installable";
 pub const STATUS_UPDATABLE: &str = "updatable";
+
+static TEMPORARY_DIRECTORY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SkillDirectoryFlavor {
@@ -353,12 +355,15 @@ pub trait FileSystem {
     fn is_dir(&self, path: &Path) -> Result<bool>;
     fn make_dir(&self, path: &Path, parents: bool, exist_ok: bool) -> Result<()>;
     fn remove_tree(&self, path: &Path) -> Result<()>;
+    fn replace_tree(&self, path: &Path, replacement: &Path) -> Result<()>;
     fn resolve(&self, path: &Path) -> Result<PathBuf>;
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeFileSystem;
+
+const NATIVE_FILE_SYSTEM: NativeFileSystem = NativeFileSystem;
 
 impl FileSystem for NativeFileSystem {
     fn read_file(&self, path: &Path) -> Result<String> {
@@ -410,6 +415,10 @@ impl FileSystem for NativeFileSystem {
         Ok(())
     }
 
+    fn replace_tree(&self, path: &Path, replacement: &Path) -> Result<()> {
+        replace_tree(path, replacement)
+    }
+
     fn resolve(&self, path: &Path) -> Result<PathBuf> {
         if path.is_absolute() {
             return Ok(path.to_path_buf());
@@ -422,13 +431,6 @@ fn default_unknown_source() -> String {
     SKILLY_UNKNOWN_SOURCE.to_string()
 }
 
-fn resolve_path(path: &Path) -> Result<PathBuf> {
-    if path.is_absolute() {
-        return Ok(path.to_path_buf());
-    }
-    Ok(env::current_dir()?.join(path))
-}
-
 fn skill_directory_from_resolved_path(resolved: PathBuf) -> Option<PathBuf> {
     let Some(name) = resolved.file_name().and_then(|value| value.to_str()) else {
         return Some(resolved);
@@ -437,13 +439,6 @@ fn skill_directory_from_resolved_path(resolved: PathBuf) -> Option<PathBuf> {
         return resolved.parent().map(Path::to_path_buf);
     }
     Some(resolved)
-}
-
-fn normalize_skill_directory(path: Option<&Path>) -> Result<Option<PathBuf>> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-    Ok(skill_directory_from_resolved_path(resolve_path(path)?))
 }
 
 fn resolve_path_in(file_system: &dyn FileSystem, path: &Path) -> Result<PathBuf> {
@@ -602,49 +597,6 @@ pub fn classify_resource_kind(relative_path: &str) -> String {
     }
 }
 
-fn load_resource_files(skill_directory: &Path) -> (Vec<SkillResourceData>, Vec<String>) {
-    if !skill_directory.is_dir() {
-        return (Vec::new(), Vec::new());
-    }
-
-    let mut resources = Vec::new();
-    let mut warnings = Vec::new();
-    for entry in WalkDir::new(skill_directory)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let Ok(relative_path) = entry.path().strip_prefix(skill_directory) else {
-            continue;
-        };
-        let relative_path = relative_path
-            .iter()
-            .map(|part| part.to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/");
-        if relative_path.eq_ignore_ascii_case("SKILL.md") {
-            continue;
-        }
-        match fs::read_to_string(entry.path()) {
-            Ok(content) => resources.push(SkillResourceData {
-                relative_path: relative_path.clone(),
-                kind: classify_resource_kind(&relative_path),
-                content,
-            }),
-            Err(error) => warnings.push(format!(
-                "{}: could not read bundled resource ({error})",
-                entry.path().display()
-            )),
-        }
-    }
-    resources.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    warnings.sort();
-    (resources, warnings)
-}
-
 fn collect_resource_files_in(
     file_system: &dyn FileSystem,
     skill_directory: &Path,
@@ -734,17 +686,6 @@ fn format_scalar(value: &str) -> String {
     }
 }
 
-fn write_text_file(path: &Path, content: &str, overwrite: bool) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    if path.exists() && !overwrite {
-        bail!("Refusing to overwrite existing file: {}", path.display());
-    }
-    fs::write(path, content)?;
-    Ok(())
-}
-
 fn write_text_file_in(
     file_system: &dyn FileSystem,
     path: &Path,
@@ -761,28 +702,79 @@ fn write_text_file_in(
     Ok(())
 }
 
-fn find_skill_markdown_path(path: &Path) -> Result<PathBuf> {
-    let directory = resolve_path(path)?;
-    if !directory.is_dir() {
-        return Err(std::io::Error::from(std::io::ErrorKind::NotFound).into());
+fn validate_skill_name(name: &str) -> Result<()> {
+    let valid = !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && !name.contains("--")
+        && name
+            .bytes()
+            .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == b'-');
+    if valid {
+        Ok(())
+    } else {
+        bail!(
+            "Invalid skill name {name:?}: use 1-64 lowercase letters, numbers, and single hyphens"
+        )
     }
-    let mut children = fs::read_dir(&directory)?
-        .filter_map(Result::ok)
-        .collect::<Vec<_>>();
-    children.sort_by_key(|entry| entry.file_name());
-    for child in children {
-        let child_path = child.path();
-        if child_path.is_file()
-            && child_path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .map(|value| value.eq_ignore_ascii_case("SKILL.md"))
-                .unwrap_or(false)
-        {
-            return Ok(child_path);
+}
+
+fn validate_resource_path(path: &str) -> Result<()> {
+    let valid = !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.contains(':')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+        && !path.eq_ignore_ascii_case("SKILL.md");
+    if valid {
+        Ok(())
+    } else {
+        bail!("Invalid relative resource path: {path}")
+    }
+}
+
+fn validate_install_paths(skill: &SkillData, skill_name: Option<&str>) -> Result<()> {
+    skill.validate()?;
+    validate_skill_name(skill_name.unwrap_or(&skill.name))?;
+    let mut seen = BTreeSet::new();
+    for resource in &skill.resources {
+        validate_resource_path(&resource.relative_path)?;
+        if !seen.insert(resource.relative_path.to_ascii_lowercase()) {
+            bail!("Duplicate resource path: {}", resource.relative_path);
         }
     }
-    Err(std::io::Error::from(std::io::ErrorKind::NotFound).into())
+    Ok(())
+}
+
+fn temporary_sibling(path: &Path) -> Result<PathBuf> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("Skill destination has no parent: {}", path.display()))?;
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| anyhow!("Skill destination has no valid name: {}", path.display()))?;
+    let id = TEMPORARY_DIRECTORY_COUNTER.fetch_add(1, Ordering::Relaxed);
+    Ok(parent.join(format!(".{name}.skilly-tmp-{}-{id}", std::process::id())))
+}
+
+fn replace_tree(path: &Path, replacement: &Path) -> Result<()> {
+    if !path.exists() {
+        fs::rename(replacement, path)?;
+        return Ok(());
+    }
+
+    let backup = temporary_sibling(path)?;
+    fs::rename(path, &backup)?;
+    if let Err(error) = fs::rename(replacement, path) {
+        let _ = fs::rename(&backup, path);
+        return Err(error.into());
+    }
+    fs::remove_dir_all(backup)?;
+    Ok(())
 }
 
 fn find_skill_markdown_path_in(file_system: &dyn FileSystem, path: &Path) -> Result<PathBuf> {
@@ -805,6 +797,41 @@ fn find_skill_markdown_path_in(file_system: &dyn FileSystem, path: &Path) -> Res
 }
 
 impl SkillData {
+    pub fn validate(&self) -> Result<()> {
+        validate_skill_name(&self.name)?;
+        if self.description.is_empty() || self.description.len() > 1024 {
+            bail!("Skill description must contain 1-1024 characters");
+        }
+        if self
+            .compatibility
+            .as_ref()
+            .is_some_and(|value| value.is_empty() || value.len() > 500)
+        {
+            bail!("Skill compatibility must contain 1-500 characters when provided");
+        }
+        Ok(())
+    }
+
+    fn write_to_root_in(
+        &self,
+        file_system: &dyn FileSystem,
+        root: &Path,
+        overwrite: bool,
+    ) -> Result<Self> {
+        file_system.make_dir(root, true, true)?;
+        write_text_file_in(
+            file_system,
+            &root.join("SKILL.md"),
+            &self.render(Some(&self.managed_metadata())),
+            overwrite,
+        )?;
+        for resource in &self.resources {
+            let destination = root.join(PathBuf::from(&resource.relative_path));
+            write_text_file_in(file_system, &destination, &resource.content, overwrite)?;
+        }
+        Self::from_dir_with_source_metadata_in(file_system, root, &SkillSourceMetadata::default())
+    }
+
     fn from_text_parts(
         text: &str,
         skill_directory: Option<PathBuf>,
@@ -862,24 +889,14 @@ impl SkillData {
         path: Option<&Path>,
         source_metadata: &SkillSourceMetadata,
     ) -> Result<Self> {
-        let skill_directory = normalize_skill_directory(path)?;
-        let mut skill = Self::from_text_parts(text, skill_directory.clone(), source_metadata)?;
-
-        if let Some(directory) = skill_directory.as_ref() {
-            let (resources, warnings) = load_resource_files(directory);
-            skill.resources = resources;
-            skill.resource_warnings = warnings;
-        }
-
-        Ok(skill)
+        Self::from_text_in(&NATIVE_FILE_SYSTEM, text, path, source_metadata)
     }
 
     pub fn from_file_with_source_metadata(
         path: &Path,
         source_metadata: &SkillSourceMetadata,
     ) -> Result<Self> {
-        let text = fs::read_to_string(path)?;
-        Self::from_text(&text, Some(path), source_metadata)
+        Self::from_file_with_source_metadata_in(&NATIVE_FILE_SYSTEM, path, source_metadata)
     }
 
     pub fn from_file_with_source_metadata_in(
@@ -895,8 +912,7 @@ impl SkillData {
         path: &Path,
         source_metadata: &SkillSourceMetadata,
     ) -> Result<Self> {
-        let skill_path = find_skill_markdown_path(path)?;
-        Self::from_file_with_source_metadata(&skill_path, source_metadata)
+        Self::from_dir_with_source_metadata_in(&NATIVE_FILE_SYSTEM, path, source_metadata)
     }
 
     pub fn from_dir_with_source_metadata_in(
@@ -906,29 +922,6 @@ impl SkillData {
     ) -> Result<Self> {
         let skill_path = find_skill_markdown_path_in(file_system, path)?;
         Self::from_file_with_source_metadata_in(file_system, &skill_path, source_metadata)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_dir(
-        path: &Path,
-        source: Option<&str>,
-        package_name: Option<&str>,
-        package_version: Option<&str>,
-        github_url: Option<&str>,
-        github_commit_sha: Option<&str>,
-        skillsmp_id: Option<&str>,
-    ) -> Result<Self> {
-        Self::from_dir_with_source_metadata(
-            path,
-            &SkillSourceMetadata::new(
-                source,
-                package_name,
-                package_version,
-                github_url,
-                github_commit_sha,
-                skillsmp_id,
-            ),
-        )
     }
 
     pub fn render(&self, metadata_override: Option<&BTreeMap<String, String>>) -> String {
@@ -977,18 +970,11 @@ impl SkillData {
         skill_name: Option<&str>,
         overwrite: bool,
     ) -> Result<Self> {
-        let root = resolve_path(&directory.join(skill_name.unwrap_or(&self.name)))?;
-        fs::create_dir_all(&root)?;
-        write_text_file(
-            &root.join("SKILL.md"),
-            &self.render(Some(&self.managed_metadata())),
-            overwrite,
-        )?;
-        for resource in &self.resources {
-            let destination = root.join(PathBuf::from(&resource.relative_path));
-            write_text_file(&destination, &resource.content, overwrite)?;
-        }
-        Self::from_dir(&root, None, None, None, None, None, None)
+        self.install_to_in(&NATIVE_FILE_SYSTEM, directory, skill_name, overwrite)
+    }
+
+    pub fn replace_to(&self, directory: &Path, skill_name: Option<&str>) -> Result<Self> {
+        self.replace_to_in(&NATIVE_FILE_SYSTEM, directory, skill_name)
     }
 
     pub fn install_to_in(
@@ -998,21 +984,33 @@ impl SkillData {
         skill_name: Option<&str>,
         overwrite: bool,
     ) -> Result<Self> {
+        validate_install_paths(self, skill_name)?;
         let root = resolve_path_in(
             file_system,
             &directory.join(skill_name.unwrap_or(&self.name)),
         )?;
-        file_system.make_dir(&root, true, true)?;
-        write_text_file_in(
+        self.write_to_root_in(file_system, &root, overwrite)
+    }
+
+    pub fn replace_to_in(
+        &self,
+        file_system: &dyn FileSystem,
+        directory: &Path,
+        skill_name: Option<&str>,
+    ) -> Result<Self> {
+        validate_install_paths(self, skill_name)?;
+        let root = resolve_path_in(
             file_system,
-            &root.join("SKILL.md"),
-            &self.render(Some(&self.managed_metadata())),
-            overwrite,
+            &directory.join(skill_name.unwrap_or(&self.name)),
         )?;
-        for resource in &self.resources {
-            let destination = root.join(PathBuf::from(&resource.relative_path));
-            write_text_file_in(file_system, &destination, &resource.content, overwrite)?;
+        let replacement = temporary_sibling(&root)?;
+        if let Err(error) = self.write_to_root_in(file_system, &replacement, false) {
+            if matches!(file_system.exists(&replacement), Ok(true)) {
+                let _ = file_system.remove_tree(&replacement);
+            }
+            return Err(error);
         }
+        file_system.replace_tree(&root, &replacement)?;
         Self::from_dir_with_source_metadata_in(file_system, &root, &SkillSourceMetadata::default())
     }
 
@@ -1100,30 +1098,7 @@ pub fn scan_match_status(available: &SkillData, installed: Option<&SkillData>) -
 }
 
 pub fn discover_installed_skills(directory: &Path) -> Result<Vec<SkillData>> {
-    let root = resolve_path(directory)?;
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-    if !root.is_dir() {
-        bail!("{}", root.display());
-    }
-    let mut skills = Vec::new();
-    let mut children = fs::read_dir(&root)?
-        .filter_map(Result::ok)
-        .collect::<Vec<_>>();
-    children.sort_by_key(|entry| entry.file_name());
-    for child in children {
-        let child_path = child.path();
-        if !child_path.is_dir() {
-            continue;
-        }
-        if let Ok(skill) =
-            SkillData::from_dir_with_source_metadata(&child_path, &SkillSourceMetadata::default())
-        {
-            skills.push(skill);
-        }
-    }
-    Ok(skills)
+    discover_installed_skills_in(&NATIVE_FILE_SYSTEM, directory)
 }
 
 pub fn discover_installed_skills_in(
@@ -1145,26 +1120,19 @@ pub fn discover_installed_skills_in(
         if !file_system.is_dir(&child_path)? {
             continue;
         }
-        if let Ok(skill) = SkillData::from_dir_with_source_metadata_in(
+        let skill = SkillData::from_dir_with_source_metadata_in(
             file_system,
             &child_path,
             &SkillSourceMetadata::default(),
-        ) {
-            skills.push(skill);
-        }
+        )
+        .with_context(|| format!("Invalid installed skill: {}", child_path.display()))?;
+        skills.push(skill);
     }
     Ok(skills)
 }
 
 pub fn remove_skill(name: &str, directory: &Path) -> Result<SkillData> {
-    let skill = require_installed_skill(name, directory)?;
-    let skill_directory = skill
-        .path
-        .as_ref()
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("Installed skill has no directory: {name}"))?;
-    fs::remove_dir_all(skill_directory)?;
-    Ok(skill)
+    remove_skill_in(&NATIVE_FILE_SYSTEM, name, directory)
 }
 
 pub fn remove_skill_in(
@@ -1180,24 +1148,6 @@ pub fn remove_skill_in(
         .ok_or_else(|| anyhow!("Installed skill has no directory: {name}"))?;
     file_system.remove_tree(&skill_directory)?;
     Ok(skill)
-}
-
-pub fn require_installed_skill(name: &str, directory: &Path) -> Result<SkillData> {
-    let skills = discover_installed_skills(directory)?;
-    for skill in &skills {
-        if skill.directory_name() == name {
-            return Ok(skill.clone());
-        }
-    }
-    let matches = skills
-        .into_iter()
-        .filter(|skill| skill.name == name)
-        .collect::<Vec<_>>();
-    match matches.len() {
-        0 => bail!("Installed skill not found: {name}"),
-        1 => Ok(matches[0].clone()),
-        _ => bail!("Multiple installed skills match name: {name}"),
-    }
 }
 
 pub fn require_installed_skill_in(
@@ -1220,40 +1170,6 @@ pub fn require_installed_skill_in(
         1 => Ok(matches[0].clone()),
         _ => bail!("Multiple installed skills match name: {name}"),
     }
-}
-
-pub fn find_site_packages_dir(venv_path: &Path) -> Option<PathBuf> {
-    let windows_path = venv_path.join("Lib").join("site-packages");
-    if windows_path.is_dir() {
-        return Some(windows_path);
-    }
-    for lib_name in ["lib", "lib64"] {
-        let lib_dir = venv_path.join(lib_name);
-        if !lib_dir.is_dir() {
-            continue;
-        }
-        let Ok(entries) = fs::read_dir(&lib_dir) else {
-            continue;
-        };
-        let mut children = entries.filter_map(Result::ok).collect::<Vec<_>>();
-        children.sort_by_key(|entry| entry.file_name());
-        children.reverse();
-        for child in children {
-            let child_path = child.path();
-            let site_packages = child_path.join("site-packages");
-            if child_path.is_dir()
-                && child
-                    .file_name()
-                    .to_str()
-                    .map(|name| name.starts_with("python"))
-                    .unwrap_or(false)
-                && site_packages.is_dir()
-            {
-                return Some(site_packages);
-            }
-        }
-    }
-    None
 }
 
 pub fn find_site_packages_dir_in(
@@ -1286,26 +1202,6 @@ pub fn find_site_packages_dir_in(
     Ok(None)
 }
 
-pub fn list_dist_info_dirs(site_packages: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(site_packages) else {
-        return Vec::new();
-    };
-    let mut dirs = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_dir()
-                && path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .map(|value| value.ends_with(".dist-info"))
-                    .unwrap_or(false)
-        })
-        .collect::<Vec<_>>();
-    dirs.sort();
-    dirs
-}
-
 pub fn list_dist_info_dirs_in(
     file_system: &dyn FileSystem,
     site_packages: &Path,
@@ -1322,23 +1218,6 @@ pub fn list_dist_info_dirs_in(
         .collect::<Vec<_>>();
     dirs.sort();
     Ok(dirs)
-}
-
-pub fn read_distribution_info(dist_info: &Path) -> Option<DistributionInfo> {
-    let text = fs::read_to_string(dist_info.join("METADATA")).ok()?;
-    let mut name = None;
-    let mut version = None;
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("Name:") {
-            name = Some(rest.trim().to_string());
-        } else if let Some(rest) = line.strip_prefix("Version:") {
-            version = Some(rest.trim().to_string());
-        }
-    }
-    Some(DistributionInfo {
-        name: name?,
-        version,
-    })
 }
 
 pub fn read_distribution_info_in(
@@ -1358,10 +1237,7 @@ pub fn read_distribution_info_in(
             version = Some(rest.trim().to_string());
         }
     }
-    Ok(Some(DistributionInfo {
-        name: name.ok_or_else(|| anyhow!("Missing distribution name"))?,
-        version,
-    }))
+    Ok(name.map(|name| DistributionInfo { name, version }))
 }
 
 pub fn is_skill_record(installed_path: &str) -> bool {
@@ -1398,55 +1274,7 @@ fn sort_dependency_skills(skills: &mut [SkillData]) {
 }
 
 pub fn discover_venv_skills(path: &Path) -> Result<Vec<SkillData>> {
-    let venv_path = resolve_path(path)?;
-    let Some(site_packages) = find_site_packages_dir(&venv_path) else {
-        return Ok(Vec::new());
-    };
-
-    let mut skills = Vec::new();
-    let mut seen_directories = BTreeSet::new();
-    for dist_info in list_dist_info_dirs(&site_packages) {
-        let Some(distribution) = read_distribution_info(&dist_info) else {
-            continue;
-        };
-        let Ok(record_text) = fs::read_to_string(dist_info.join("RECORD")) else {
-            continue;
-        };
-        let mut reader = ReaderBuilder::new()
-            .has_headers(false)
-            .from_reader(record_text.as_bytes());
-        for row in reader.records().flatten() {
-            let Some(installed_path) = row.get(0) else {
-                continue;
-            };
-            if !is_skill_record(installed_path) {
-                continue;
-            }
-            let skill_path = resolve_record_path(&site_packages, installed_path);
-            let Some(directory) = skill_path.parent() else {
-                continue;
-            };
-            if !seen_directories.insert(directory.to_path_buf()) {
-                continue;
-            }
-            if let Ok(skill) = SkillData::from_file_with_source_metadata(
-                &skill_path,
-                &SkillSourceMetadata::new(
-                    Some(SKILLY_SOURCE_DEPENDENCY),
-                    Some(&distribution.name),
-                    distribution.version.as_deref(),
-                    None,
-                    None,
-                    None,
-                ),
-            ) {
-                skills.push(skill);
-            }
-        }
-    }
-
-    sort_dependency_skills(&mut skills);
-    Ok(skills)
+    discover_venv_skills_in(&NATIVE_FILE_SYSTEM, path)
 }
 
 pub fn discover_venv_skills_in(
@@ -1631,11 +1459,12 @@ fn parse_project_requirements(
     .collect())
 }
 
-fn scan_project_requirements(
+fn scan_project_requirements_in(
+    file_system: &dyn FileSystem,
     pyproject_toml_path: &Path,
     selection: &ScanDependencySelection,
 ) -> Result<Vec<ProjectRequirementData>> {
-    let text = fs::read_to_string(pyproject_toml_path)?;
+    let text = file_system.read_file(pyproject_toml_path)?;
     Ok(filter_scan_requirement_entries(
         parse_project_requirement_entries(&text)?,
         selection,
@@ -1647,8 +1476,12 @@ pub fn project_requirements(
     include_dev: bool,
     include_extras: &[String],
 ) -> Result<Vec<String>> {
-    let text = fs::read_to_string(pyproject_toml_path)?;
-    parse_project_requirements(&text, include_dev, include_extras)
+    project_requirements_in(
+        &NATIVE_FILE_SYSTEM,
+        pyproject_toml_path,
+        include_dev,
+        include_extras,
+    )
 }
 
 pub fn project_requirements_in(
@@ -1674,26 +1507,32 @@ pub fn requirement_name(spec: &str) -> Option<String> {
     if name.is_empty() { None } else { Some(name) }
 }
 
-fn project_skill_matches(environment: &ProjectEnvironment) -> Result<Vec<SkillMatchData>> {
-    let installed = discover_installed_skills(&environment.directory)?;
-    let requirements = scan_project_requirements(
+fn project_skill_matches_in(
+    file_system: &dyn FileSystem,
+    environment: &ProjectEnvironment,
+) -> Result<Vec<SkillMatchData>> {
+    let installed = discover_installed_skills_in(file_system, &environment.directory)?;
+    let requirements = scan_project_requirements_in(
+        file_system,
         &environment.pyproject_toml_path,
         &environment.dependency_selection,
     )?;
     let origins_by_package = package_dependency_origins(&requirements);
 
-    Ok(discover_venv_skills(&environment.venv_path)?
-        .into_iter()
-        .filter_map(|skill| {
-            let package_name = skill.package_name.as_ref()?;
-            let dependency_origins = origins_by_package.get(package_name)?.clone();
-            Some(SkillMatchData {
-                installed: match_installed(&installed, &skill),
-                available: skill,
-                dependency_origins,
+    Ok(
+        discover_venv_skills_in(file_system, &environment.venv_path)?
+            .into_iter()
+            .filter_map(|skill| {
+                let package_name = skill.package_name.as_ref()?;
+                let dependency_origins = origins_by_package.get(package_name)?.clone();
+                Some(SkillMatchData {
+                    installed: match_installed(&installed, &skill),
+                    available: skill,
+                    dependency_origins,
+                })
             })
-        })
-        .collect())
+            .collect(),
+    )
 }
 
 pub fn match_installed(
@@ -1707,7 +1546,14 @@ pub fn match_installed(
 }
 
 pub fn scan_project_in(environment: &ProjectEnvironment) -> Result<Vec<SkillMatchData>> {
-    let mut matches = project_skill_matches(environment)?;
+    scan_project_with_file_system(&NATIVE_FILE_SYSTEM, environment)
+}
+
+pub fn scan_project_with_file_system(
+    file_system: &dyn FileSystem,
+    environment: &ProjectEnvironment,
+) -> Result<Vec<SkillMatchData>> {
+    let mut matches = project_skill_matches_in(file_system, environment)?;
     matches.sort_by(|left, right| {
         (
             left.available.package_name.as_deref().unwrap_or(""),
@@ -1724,7 +1570,14 @@ pub fn scan_project_in(environment: &ProjectEnvironment) -> Result<Vec<SkillMatc
 }
 
 pub fn dependency_updates_in(environment: &ProjectEnvironment) -> Result<Vec<SkillMatchData>> {
-    Ok(scan_project_in(environment)?
+    dependency_updates_with_file_system(&NATIVE_FILE_SYSTEM, environment)
+}
+
+pub fn dependency_updates_with_file_system(
+    file_system: &dyn FileSystem,
+    environment: &ProjectEnvironment,
+) -> Result<Vec<SkillMatchData>> {
+    Ok(scan_project_with_file_system(file_system, environment)?
         .into_iter()
         .filter(|item| {
             scan_match_status(&item.available, item.installed.as_ref()) == STATUS_UPDATABLE
@@ -1736,7 +1589,15 @@ pub fn available_dependency_skill_in(
     installed_skill: &SkillData,
     environment: &ProjectEnvironment,
 ) -> Result<Option<SkillData>> {
-    Ok(project_skill_matches(environment)?
+    available_dependency_skill_with_file_system(&NATIVE_FILE_SYSTEM, installed_skill, environment)
+}
+
+pub fn available_dependency_skill_with_file_system(
+    file_system: &dyn FileSystem,
+    installed_skill: &SkillData,
+    environment: &ProjectEnvironment,
+) -> Result<Option<SkillData>> {
+    Ok(project_skill_matches_in(file_system, environment)?
         .into_iter()
         .map(|item| item.available)
         .find(|skill| skill.matches(installed_skill)))

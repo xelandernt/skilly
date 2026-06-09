@@ -31,5 +31,8 @@ class FileSystem(Protocol):
     def remove_tree(self, path: StrPath) -> None:
         """Remove a directory tree."""
 
+    def replace_tree(self, path: StrPath, replacement: StrPath) -> None:
+        """Atomically replace a directory tree with a prepared replacement."""
+
     def resolve(self, path: StrPath) -> StrPath:
         """Return a normalized absolute path using the filesystem's native flavor."""

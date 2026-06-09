@@ -1,6 +1,6 @@
 [package]
 name = "skilly"
-version = "0.0.20"
+version = "0.0.21"
 edition = "2024"
 
 [lib]
@@ -24,7 +24,6 @@ serde_yaml = "0.9"
 tar = "0.4"
 toml = "0.8"
 url = "2.5"
-walkdir = "2.5"
 
 [features]
 extension-module = ["pyo3/extension-module"]

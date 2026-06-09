@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias
 
 from . import _bridge as bridge
 from ._core import Skill
@@ -16,6 +16,9 @@ if TYPE_CHECKING:
         GitHubSkillLocationData,
     )
     from .filesystem import FileSystem
+
+
+ResourceKind: TypeAlias = Literal["script", "reference", "asset", "other"]
 
 
 class GitHubSkillFetcher(Protocol):
@@ -37,7 +40,7 @@ class SkillsMpInstallableSkill(Protocol):
     def id(self) -> str: ...
 
     @property
-    def githubUrl(self) -> str: ...
+    def github_url(self) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -53,7 +56,7 @@ class SkillOrigin:
 @dataclass(frozen=True)
 class SkillResource:
     relative_path: PurePosixPath
-    kind: str
+    kind: ResourceKind
     content: str = ""
 
 

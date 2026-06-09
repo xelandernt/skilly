@@ -265,6 +265,48 @@ def discover_venv_skills(
     return _core.discover_venv_skills(path, file_system=file_system)
 
 
+def scan_project(
+    directory: StrPath | None = None,
+    pyproject_toml_path: StrPath | None = None,
+    venv_path: StrPath | None = None,
+    include_project_dependencies: bool = True,
+    include_dependency_groups: bool = True,
+    include_optional_dependencies: bool = True,
+    file_system: FileSystem | None = None,
+) -> list[tuple[Skill, Skill | None]]:
+    return _core.scan_project(
+        directory=directory,
+        pyproject_toml_path=pyproject_toml_path,
+        venv_path=venv_path,
+        include_project_dependencies=include_project_dependencies,
+        include_dependency_groups=include_dependency_groups,
+        include_optional_dependencies=include_optional_dependencies,
+        file_system=file_system,
+    )
+
+
+def available_dependency_skill(
+    installed: Skill,
+    directory: StrPath | None = None,
+    pyproject_toml_path: StrPath | None = None,
+    venv_path: StrPath | None = None,
+    include_project_dependencies: bool = True,
+    include_dependency_groups: bool = True,
+    include_optional_dependencies: bool = True,
+    file_system: FileSystem | None = None,
+) -> Skill | None:
+    return _core.available_dependency_skill(
+        installed,
+        directory=directory,
+        pyproject_toml_path=pyproject_toml_path,
+        venv_path=venv_path,
+        include_project_dependencies=include_project_dependencies,
+        include_dependency_groups=include_dependency_groups,
+        include_optional_dependencies=include_optional_dependencies,
+        file_system=file_system,
+    )
+
+
 def parse_github_skill_url(github_url: str) -> GitHubSkillLocationData:
     return _core.parse_github_skill_url(github_url)
 

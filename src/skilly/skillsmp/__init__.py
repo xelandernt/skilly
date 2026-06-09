@@ -2,23 +2,18 @@ from .client import (
     AsyncSkillsMp,
     ClientSettings,
     SkillsMp,
-    SkillsMpAiSearchApiResponse,
-    SkillsMpErrorApiResponse,
+    SkillsMpAiSearchResult,
     SkillsMpSearchQuery,
+    SkillsMpSearchResult,
     SkillsMpSkill,
-    SkillsMpSearchApiResponse,
 )
-from .response import AsyncResponse, Response
 
 __all__ = [
-    "AsyncResponse",
     "AsyncSkillsMp",
     "ClientSettings",
-    "Response",
     "SkillsMp",
-    "SkillsMpAiSearchApiResponse",
-    "SkillsMpErrorApiResponse",
+    "SkillsMpAiSearchResult",
     "SkillsMpSearchQuery",
+    "SkillsMpSearchResult",
     "SkillsMpSkill",
-    "SkillsMpSearchApiResponse",
 ]
