@@ -99,9 +99,6 @@ To see a list of useful commands run:
 just
 ```
 
-For TUI styling notes, see [docs/tui-styling.md](docs/tui-styling.md).
-
-
 ## License
 
 [MIT](LICENSE)
