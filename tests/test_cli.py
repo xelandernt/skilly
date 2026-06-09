@@ -23,7 +23,9 @@ def test_run_cli_scan_help_describes_options(capfd) -> None:
     output = capfd.readouterr().out
     assert "Scan dependency-provided skills from pyproject.toml and .venv" in output
     assert "Directory where skilly installs managed skills" in output
-    assert "Include development dependencies while scanning" in output
+    assert "Ignore [project].dependencies while scanning" in output
+    assert "Ignore [dependency-groups] while scanning" in output
+    assert "Ignore [project.optional-dependencies] while scanning" in output
 
 
 def test_run_cli_skillsmp_search_help_describes_options(capfd) -> None:

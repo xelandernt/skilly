@@ -134,6 +134,8 @@ pub struct SkillData {
 pub struct SkillMatchData {
     pub available: SkillData,
     pub installed: Option<SkillData>,
+    #[serde(default)]
+    pub dependency_origins: Vec<ProjectDependencyOrigin>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -144,6 +146,66 @@ pub struct SkillSourceMetadata {
     pub github_url: Option<String>,
     pub github_commit_sha: Option<String>,
     pub skillsmp_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ProjectDependencyOrigin {
+    Project,
+    DependencyGroup { group: String },
+    OptionalDependency { extra: String },
+}
+
+impl ProjectDependencyOrigin {
+    pub fn scan_label(&self) -> String {
+        match self {
+            Self::Project => "project".to_string(),
+            Self::DependencyGroup { group } => format!("group:{group}"),
+            Self::OptionalDependency { extra } => format!("extra:{extra}"),
+        }
+    }
+
+    pub fn detail_label(&self) -> String {
+        match self {
+            Self::Project => "project dependency".to_string(),
+            Self::DependencyGroup { group } => format!("dependency group: {group}"),
+            Self::OptionalDependency { extra } => format!("optional dependency: {extra}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRequirementData {
+    pub spec: String,
+    pub origin: ProjectDependencyOrigin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanDependencySelection {
+    pub include_project_dependencies: bool,
+    pub include_dependency_groups: bool,
+    pub include_optional_dependencies: bool,
+}
+
+impl Default for ScanDependencySelection {
+    fn default() -> Self {
+        Self {
+            include_project_dependencies: true,
+            include_dependency_groups: true,
+            include_optional_dependencies: true,
+        }
+    }
+}
+
+impl ScanDependencySelection {
+    fn includes(&self, origin: &ProjectDependencyOrigin) -> bool {
+        match origin {
+            ProjectDependencyOrigin::Project => self.include_project_dependencies,
+            ProjectDependencyOrigin::DependencyGroup { .. } => self.include_dependency_groups,
+            ProjectDependencyOrigin::OptionalDependency { .. } => {
+                self.include_optional_dependencies
+            }
+        }
+    }
 }
 
 impl SkillSourceMetadata {
@@ -240,8 +302,7 @@ pub struct ProjectEnvironment {
     pub directory: PathBuf,
     pub pyproject_toml_path: PathBuf,
     pub venv_path: PathBuf,
-    pub include_dev: bool,
-    pub include_extras: Vec<String>,
+    pub dependency_selection: ScanDependencySelection,
 }
 
 impl Default for ProjectEnvironment {
@@ -250,8 +311,7 @@ impl Default for ProjectEnvironment {
             directory: PathBuf::from(DEFAULT_SKILLS_PATH),
             pyproject_toml_path: PathBuf::from("pyproject.toml"),
             venv_path: PathBuf::from(".venv"),
-            include_dev: false,
-            include_extras: Vec::new(),
+            dependency_selection: ScanDependencySelection::default(),
         }
     }
 }
@@ -261,15 +321,13 @@ impl ProjectEnvironment {
         directory: &Path,
         pyproject_toml_path: &Path,
         venv_path: &Path,
-        include_dev: bool,
-        include_extras: &[String],
+        dependency_selection: ScanDependencySelection,
     ) -> Self {
         Self {
             directory: directory.to_path_buf(),
             pyproject_toml_path: pyproject_toml_path.to_path_buf(),
             venv_path: venv_path.to_path_buf(),
-            include_dev,
-            include_extras: include_extras.to_vec(),
+            dependency_selection,
         }
     }
 }
@@ -1447,46 +1505,141 @@ pub fn discover_venv_skills_in(
     Ok(skills)
 }
 
-fn parse_project_requirements(
-    text: &str,
-    include_dev: bool,
-    include_extras: &[String],
-) -> Result<Vec<String>> {
-    let parsed: toml::Value = text.parse()?;
-    let mut dependencies = parsed
-        .get("project")
-        .and_then(|value| value.get("dependencies"))
+fn collect_project_requirement_values(
+    values: Option<&toml::Value>,
+    origin: ProjectDependencyOrigin,
+) -> Vec<ProjectRequirementData> {
+    values
         .and_then(|value| value.as_array())
         .map(|values| {
             values
                 .iter()
-                .filter_map(|value| value.as_str().map(str::to_string))
-                .collect::<Vec<_>>()
+                .filter_map(|value| {
+                    value.as_str().map(|spec| ProjectRequirementData {
+                        spec: spec.to_string(),
+                        origin: origin.clone(),
+                    })
+                })
+                .collect()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
 
-    let mut extras = include_extras.iter().cloned().collect::<BTreeSet<_>>();
-    if include_dev {
-        extras.insert("dev".to_string());
-    }
+fn parse_project_requirement_entries(text: &str) -> Result<Vec<ProjectRequirementData>> {
+    let parsed: toml::Value = text.parse()?;
+    let mut dependencies = collect_project_requirement_values(
+        parsed
+            .get("project")
+            .and_then(|value| value.get("dependencies")),
+        ProjectDependencyOrigin::Project,
+    );
+
     if let Some(groups) = parsed
         .get("dependency-groups")
         .and_then(|value| value.as_table())
     {
         for (group_name, values) in groups {
-            if !extras.contains(group_name) {
-                continue;
-            }
-            if let Some(values) = values.as_array() {
-                dependencies.extend(
-                    values
-                        .iter()
-                        .filter_map(|value| value.as_str().map(str::to_string)),
-                );
-            }
+            dependencies.extend(collect_project_requirement_values(
+                Some(values),
+                ProjectDependencyOrigin::DependencyGroup {
+                    group: group_name.clone(),
+                },
+            ));
         }
     }
+
+    if let Some(extras) = parsed
+        .get("project")
+        .and_then(|value| value.get("optional-dependencies"))
+        .and_then(|value| value.as_table())
+    {
+        for (extra_name, values) in extras {
+            dependencies.extend(collect_project_requirement_values(
+                Some(values),
+                ProjectDependencyOrigin::OptionalDependency {
+                    extra: extra_name.clone(),
+                },
+            ));
+        }
+    }
+
     Ok(dependencies)
+}
+
+fn select_project_requirement_entries(
+    requirements: Vec<ProjectRequirementData>,
+    include_dev: bool,
+    include_extras: &[String],
+) -> Vec<ProjectRequirementData> {
+    let mut selected = include_extras.iter().cloned().collect::<BTreeSet<_>>();
+    if include_dev {
+        selected.insert("dev".to_string());
+    }
+
+    requirements
+        .into_iter()
+        .filter(|requirement| match &requirement.origin {
+            ProjectDependencyOrigin::Project => true,
+            ProjectDependencyOrigin::DependencyGroup { group } => selected.contains(group),
+            ProjectDependencyOrigin::OptionalDependency { extra } => selected.contains(extra),
+        })
+        .collect()
+}
+
+fn filter_scan_requirement_entries(
+    requirements: Vec<ProjectRequirementData>,
+    selection: &ScanDependencySelection,
+) -> Vec<ProjectRequirementData> {
+    requirements
+        .into_iter()
+        .filter(|requirement| selection.includes(&requirement.origin))
+        .collect()
+}
+
+fn package_dependency_origins(
+    requirements: &[ProjectRequirementData],
+) -> BTreeMap<String, Vec<ProjectDependencyOrigin>> {
+    let mut origins_by_package = BTreeMap::<String, BTreeSet<ProjectDependencyOrigin>>::new();
+    for requirement in requirements {
+        let Some(package_name) = requirement_name(&requirement.spec) else {
+            continue;
+        };
+        origins_by_package
+            .entry(package_name)
+            .or_default()
+            .insert(requirement.origin.clone());
+    }
+
+    origins_by_package
+        .into_iter()
+        .map(|(package_name, origins)| (package_name, origins.into_iter().collect()))
+        .collect()
+}
+
+fn parse_project_requirements(
+    text: &str,
+    include_dev: bool,
+    include_extras: &[String],
+) -> Result<Vec<String>> {
+    Ok(select_project_requirement_entries(
+        parse_project_requirement_entries(text)?,
+        include_dev,
+        include_extras,
+    )
+    .into_iter()
+    .map(|requirement| requirement.spec)
+    .collect())
+}
+
+fn scan_project_requirements(
+    pyproject_toml_path: &Path,
+    selection: &ScanDependencySelection,
+) -> Result<Vec<ProjectRequirementData>> {
+    let text = fs::read_to_string(pyproject_toml_path)?;
+    Ok(filter_scan_requirement_entries(
+        parse_project_requirement_entries(&text)?,
+        selection,
+    ))
 }
 
 pub fn project_requirements(
@@ -1521,24 +1674,24 @@ pub fn requirement_name(spec: &str) -> Option<String> {
     if name.is_empty() { None } else { Some(name) }
 }
 
-pub fn project_skills(
-    pyproject_toml_path: &Path,
-    venv_path: &Path,
-    include_dev: bool,
-    include_extras: &[String],
-) -> Result<Vec<SkillData>> {
-    let package_names = project_requirements(pyproject_toml_path, include_dev, include_extras)?
+fn project_skill_matches(environment: &ProjectEnvironment) -> Result<Vec<SkillMatchData>> {
+    let installed = discover_installed_skills(&environment.directory)?;
+    let requirements = scan_project_requirements(
+        &environment.pyproject_toml_path,
+        &environment.dependency_selection,
+    )?;
+    let origins_by_package = package_dependency_origins(&requirements);
+
+    Ok(discover_venv_skills(&environment.venv_path)?
         .into_iter()
-        .filter_map(|requirement| requirement_name(&requirement))
-        .collect::<BTreeSet<_>>();
-    Ok(discover_venv_skills(venv_path)?
-        .into_iter()
-        .filter(|skill| {
-            skill
-                .package_name
-                .as_ref()
-                .map(|package_name| package_names.contains(package_name))
-                .unwrap_or(false)
+        .filter_map(|skill| {
+            let package_name = skill.package_name.as_ref()?;
+            let dependency_origins = origins_by_package.get(package_name)?.clone();
+            Some(SkillMatchData {
+                installed: match_installed(&installed, &skill),
+                available: skill,
+                dependency_origins,
+            })
         })
         .collect())
 }
@@ -1554,19 +1707,7 @@ pub fn match_installed(
 }
 
 pub fn scan_project_in(environment: &ProjectEnvironment) -> Result<Vec<SkillMatchData>> {
-    let installed = discover_installed_skills(&environment.directory)?;
-    let mut matches = project_skills(
-        &environment.pyproject_toml_path,
-        &environment.venv_path,
-        environment.include_dev,
-        &environment.include_extras,
-    )?
-    .into_iter()
-    .map(|skill| SkillMatchData {
-        installed: match_installed(&installed, &skill),
-        available: skill,
-    })
-    .collect::<Vec<_>>();
+    let mut matches = project_skill_matches(environment)?;
     matches.sort_by(|left, right| {
         (
             left.available.package_name.as_deref().unwrap_or(""),
@@ -1595,14 +1736,10 @@ pub fn available_dependency_skill_in(
     installed_skill: &SkillData,
     environment: &ProjectEnvironment,
 ) -> Result<Option<SkillData>> {
-    Ok(project_skills(
-        &environment.pyproject_toml_path,
-        &environment.venv_path,
-        environment.include_dev,
-        &environment.include_extras,
-    )?
-    .into_iter()
-    .find(|skill| skill.matches(installed_skill)))
+    Ok(project_skill_matches(environment)?
+        .into_iter()
+        .map(|item| item.available)
+        .find(|skill| skill.matches(installed_skill)))
 }
 
 pub fn parse_github_skill_url(github_url: &str) -> Result<GitHubSkillLocationData> {
@@ -1813,4 +1950,73 @@ fn skill_dirs_len_eq_location(location_path: &str, skill_dir: &str) -> bool {
 pub fn github_versions_match(installed: &SkillData, available: &SkillData) -> bool {
     installed.github_commit_sha.is_some()
         && installed.github_commit_sha == available.github_commit_sha
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ProjectDependencyOrigin, ScanDependencySelection, parse_project_requirement_entries,
+        parse_project_requirements,
+    };
+
+    const PYPROJECT: &str = r#"
+[project]
+name = "demo"
+version = "0.1.0"
+dependencies = ["base-pkg>=1", "shared-pkg>=1"]
+
+[project.optional-dependencies]
+docs = ["docs-pkg>=1", "shared-pkg>=1"]
+
+[dependency-groups]
+dev = ["dev-pkg>=1", "shared-pkg>=1"]
+"#;
+
+    #[test]
+    fn project_requirements_include_selected_groups_and_optional_dependencies() {
+        let requirements = parse_project_requirements(
+            PYPROJECT,
+            true,
+            &["docs".to_string(), "missing".to_string()],
+        )
+        .expect("requirements should parse");
+
+        assert_eq!(
+            requirements,
+            vec![
+                "base-pkg>=1".to_string(),
+                "shared-pkg>=1".to_string(),
+                "dev-pkg>=1".to_string(),
+                "shared-pkg>=1".to_string(),
+                "docs-pkg>=1".to_string(),
+                "shared-pkg>=1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn scan_dependency_selection_filters_categories() {
+        let requirements =
+            parse_project_requirement_entries(PYPROJECT).expect("requirements should parse");
+
+        let selected = requirements
+            .into_iter()
+            .filter(|requirement| {
+                ScanDependencySelection {
+                    include_project_dependencies: false,
+                    include_dependency_groups: true,
+                    include_optional_dependencies: false,
+                }
+                .includes(&requirement.origin)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(selected.len(), 2);
+        assert!(selected.iter().all(|requirement| {
+            requirement.origin
+                == ProjectDependencyOrigin::DependencyGroup {
+                    group: "dev".to_string(),
+                }
+        }));
+    }
 }

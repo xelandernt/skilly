@@ -1,10 +1,10 @@
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery, SkillsMpSkill};
 use crate::core::{
-    ProjectEnvironment, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP, STATUS_INSTALLABLE,
-    STATUS_INSTALLED, STATUS_UPDATABLE, SkillData, SkillDirectoryFlavor, SkillMatchData,
-    available_dependency_skill_in, dependency_updates_in, discover_github_skills,
-    discover_installed_skills, github_versions_match, project_requirements, remove_skill,
-    scan_match_status, scan_project_in, skills_directory,
+    ProjectDependencyOrigin, ProjectEnvironment, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP,
+    STATUS_INSTALLABLE, STATUS_INSTALLED, STATUS_UPDATABLE, ScanDependencySelection, SkillData,
+    SkillDirectoryFlavor, SkillMatchData, available_dependency_skill_in, dependency_updates_in,
+    discover_github_skills, discover_installed_skills, github_versions_match, project_requirements,
+    remove_skill, scan_match_status, scan_project_in, skills_directory,
 };
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
@@ -116,8 +116,8 @@ enum Commands {
     Scan {
         #[command(flatten)]
         destination: DestinationArgs,
-        #[arg(long, help = "Include development dependencies while scanning.")]
-        dev: bool,
+        #[command(flatten)]
+        dependencies: ScanDependencyArgs,
     },
     #[command(about = "Download one or more skills from a GitHub repository URL.")]
     Download {
@@ -179,6 +179,26 @@ enum Commands {
 struct SkillsMpCommands {
     #[command(subcommand)]
     command: SkillsMpSubcommand,
+}
+
+#[derive(Args, Debug, Clone, Copy, Default)]
+struct ScanDependencyArgs {
+    #[arg(long, help = "Ignore [project].dependencies while scanning.")]
+    no_project_dependencies: bool,
+    #[arg(long, help = "Ignore [dependency-groups] while scanning.")]
+    no_dependency_groups: bool,
+    #[arg(long, help = "Ignore [project.optional-dependencies] while scanning.")]
+    no_optional_dependencies: bool,
+}
+
+impl ScanDependencyArgs {
+    fn selection(self) -> ScanDependencySelection {
+        ScanDependencySelection {
+            include_project_dependencies: !self.no_project_dependencies,
+            include_dependency_groups: !self.no_dependency_groups,
+            include_optional_dependencies: !self.no_optional_dependencies,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -303,7 +323,10 @@ pub fn run(args: Vec<String>) -> Result<i32> {
         };
 
     match cli.command {
-        Commands::Scan { destination, dev } => run_scan(&destination.resolve()?, dev)?,
+        Commands::Scan {
+            destination,
+            dependencies,
+        } => run_scan(&destination.resolve()?, dependencies.selection())?,
         Commands::Download {
             github_url,
             destination,
@@ -555,13 +578,12 @@ where
     }
 }
 
-fn run_scan(directory: &Path, include_dev: bool) -> Result<()> {
+fn run_scan(directory: &Path, dependency_selection: ScanDependencySelection) -> Result<()> {
     let environment = ProjectEnvironment::with_paths(
         directory,
         Path::new("pyproject.toml"),
         Path::new(".venv"),
-        include_dev,
-        &[],
+        dependency_selection,
     );
     let matches = scan_project_in(&environment)?;
     if matches.is_empty() {
@@ -931,8 +953,7 @@ fn run_update(directory: &Path, force: bool) -> Result<()> {
         directory,
         Path::new("pyproject.toml"),
         Path::new(".venv"),
-        false,
-        &[],
+        ScanDependencySelection::default(),
     );
     let matches = dependency_updates_in(&environment)?;
     if matches.is_empty() {
@@ -1277,8 +1298,7 @@ fn update_skill(directory: &Path, skill: &SkillData, client: &SkillsMpClient) ->
             directory,
             Path::new("pyproject.toml"),
             Path::new(".venv"),
-            false,
-            &[],
+            ScanDependencySelection::default(),
         );
         let Some(available) = available_dependency_skill_in(skill, &environment)? else {
             return Ok(format!(
@@ -1356,8 +1376,7 @@ fn skill_update_available(
             directory,
             Path::new("pyproject.toml"),
             Path::new(".venv"),
-            false,
-            &[],
+            ScanDependencySelection::default(),
         );
         return Ok(available_dependency_skill_in(skill, &environment)?
             .is_some_and(|available| available.package_version != skill.package_version));
@@ -1445,13 +1464,25 @@ fn installed_skill_label(skill: &SkillData) -> String {
 
 fn scan_choice_label(item: &SkillMatchData) -> String {
     format!(
-        "{} [{}] [{}]",
+        "{} [{}] [{}] [{}]",
         item.available.name,
         item.available
             .package_reference()
             .unwrap_or_else(|| "unknown".to_string()),
+        scan_dependency_label(&item.dependency_origins),
         scan_match_status(&item.available, item.installed.as_ref())
     )
+}
+
+fn scan_dependency_label(origins: &[ProjectDependencyOrigin]) -> String {
+    if origins.is_empty() {
+        return "unknown".to_string();
+    }
+    origins
+        .iter()
+        .map(ProjectDependencyOrigin::scan_label)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn scan_primary_action(item: &SkillMatchData) -> &'static str {
@@ -1591,6 +1622,13 @@ fn scan_match_preview_lines(item: &SkillMatchData) -> Vec<String> {
         "Status: {}",
         scan_match_status(&item.available, item.installed.as_ref())
     )];
+    extra.push(format!(
+        "Dependency Sources: {}",
+        scan_dependency_label(&item.dependency_origins)
+    ));
+    for origin in &item.dependency_origins {
+        extra.push(format!("  - {}", origin.detail_label()));
+    }
     if let Some(installed) = item.installed.as_ref() {
         extra.push(format!(
             "Installed Directory: {}",
@@ -1660,12 +1698,15 @@ fn installed_skillsmp_match(
 mod tests {
     use super::{
         BACK_CHOICE, Cli, Commands, DownloadableSkillMatch, EXIT_CHOICE, MenuAction, REMOVE_CHOICE,
-        UPDATE_CHOICE, downloadable_skill_actions, installed_skill_actions,
-        installed_skillsmp_match, menu_action, search_skill_label, skillsmp_search_preview_lines,
-        skillsmp_search_status,
+        ScanDependencyArgs, UPDATE_CHOICE, downloadable_skill_actions, installed_skill_actions,
+        installed_skillsmp_match, menu_action, scan_choice_label, scan_match_preview_lines,
+        search_skill_label, skillsmp_search_preview_lines, skillsmp_search_status,
     };
     use crate::client::SkillsMpSkill;
-    use crate::core::{SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP, SkillData};
+    use crate::core::{
+        ProjectDependencyOrigin, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP, SkillData,
+        SkillMatchData,
+    };
     use clap::Parser;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use serde_json::Value as JsonValue;
@@ -1693,6 +1734,31 @@ mod tests {
             github_url: github_url.map(str::to_string),
             github_commit_sha: Some("0123456789abcdef0123456789abcdef01234567".to_string()),
             skillsmp_id: skillsmp_id.map(str::to_string),
+        }
+    }
+
+    fn dependency_match(origins: Vec<ProjectDependencyOrigin>) -> SkillMatchData {
+        SkillMatchData {
+            available: SkillData {
+                name: "python".to_string(),
+                description: "Dependency skill".to_string(),
+                path: None,
+                content: "Body".to_string(),
+                license: None,
+                compatibility: None,
+                metadata: BTreeMap::new(),
+                allowed_tools: None,
+                resources: Vec::new(),
+                resource_warnings: Vec::new(),
+                source: "dependency".to_string(),
+                package_name: Some("sample-pkg".to_string()),
+                package_version: Some("1.2.4".to_string()),
+                github_url: None,
+                github_commit_sha: None,
+                skillsmp_id: None,
+            },
+            installed: None,
+            dependency_origins: origins,
         }
     }
 
@@ -1880,6 +1946,51 @@ mod tests {
         assert_eq!(
             downloadable_skill_actions(&matched),
             vec![REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE]
+        );
+    }
+
+    #[test]
+    fn scan_dependency_args_default_to_including_all_dependency_sources() {
+        let selection = ScanDependencyArgs::default().selection();
+
+        assert!(selection.include_project_dependencies);
+        assert!(selection.include_dependency_groups);
+        assert!(selection.include_optional_dependencies);
+    }
+
+    #[test]
+    fn scan_choice_label_and_preview_include_dependency_origins() {
+        let item = dependency_match(vec![
+            ProjectDependencyOrigin::Project,
+            ProjectDependencyOrigin::DependencyGroup {
+                group: "dev".to_string(),
+            },
+            ProjectDependencyOrigin::OptionalDependency {
+                extra: "docs".to_string(),
+            },
+        ]);
+
+        let label = scan_choice_label(&item);
+        let preview = scan_match_preview_lines(&item);
+
+        assert_eq!(
+            label,
+            "python [sample-pkg==1.2.4] [project, group:dev, extra:docs] [installable]"
+        );
+        assert!(
+            preview
+                .iter()
+                .any(|line| line == "Dependency Sources: project, group:dev, extra:docs")
+        );
+        assert!(
+            preview
+                .iter()
+                .any(|line| line == "  - dependency group: dev")
+        );
+        assert!(
+            preview
+                .iter()
+                .any(|line| line == "  - optional dependency: docs")
         );
     }
 }
