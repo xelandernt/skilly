@@ -10,10 +10,18 @@ from packaging.requirements import Requirement
 
 from . import _bridge as bridge
 from .constants import DEFAULT_SKILLS_PATH, SkillInstallStatus
-from .skills import Skill, discover_installed_skills, discover_venv_skills
+from .skills import (
+    Skill,
+    SkillOrigin,
+    discover_github_skills,
+    discover_installed_skills,
+    discover_venv_skills,
+    github_versions_match,
+)
 
 if TYPE_CHECKING:
     from .filesystem import FileSystem
+    from .skills import GitHubSkillFetcher
 
 
 @dataclass(frozen=True)
@@ -28,6 +36,12 @@ class SkillMatch:
         if self.available.package_version == self.installed.package_version:
             return SkillInstallStatus.INSTALLED
         return SkillInstallStatus.UPDATABLE
+
+
+@dataclass(frozen=True)
+class InstalledSkillUpdate:
+    installed: Skill
+    available: Skill
 
 
 @dataclass(frozen=True)
@@ -263,6 +277,88 @@ class SkillRepository:
             )
             if item.status is SkillInstallStatus.UPDATABLE
         ]
+
+    def available_update(
+        self,
+        installed_skill: Skill,
+        *,
+        project: ProjectSettings | None = None,
+        pyproject_toml_path: Path = Path("pyproject.toml"),
+        venv_path: Path = Path(".venv"),
+        include_dev: bool = False,
+        include_extras: Sequence[str] = (),
+        github_fetcher: GitHubSkillFetcher | None = None,
+        file_system: FileSystem | None = None,
+    ) -> Skill | None:
+        if installed_skill.is_dependency():
+            return self.available_dependency_skill(
+                installed_skill,
+                project=project,
+                pyproject_toml_path=pyproject_toml_path,
+                venv_path=venv_path,
+                include_dev=include_dev,
+                include_extras=include_extras,
+                file_system=file_system,
+            )
+
+        if installed_skill.github_url is None or github_fetcher is None:
+            return None
+
+        discovered = discover_github_skills(
+            github_fetcher,
+            installed_skill.github_url,
+            origin=SkillOrigin(
+                source="skillsmp"
+                if installed_skill.is_skillsmp()
+                else installed_skill.source,
+                skillsmp_id=installed_skill.skillsmp_id,
+            ),
+        )
+        if not discovered:
+            raise ValueError(
+                f"GitHub URL resolves to no skills: {installed_skill.github_url}"
+            )
+
+        refreshed = discovered[0]
+        if github_versions_match(installed_skill, refreshed):
+            return None
+        return refreshed
+
+    def updates(
+        self,
+        *,
+        directory: Path = DEFAULT_SKILLS_PATH,
+        project: ProjectSettings | None = None,
+        pyproject_toml_path: Path = Path("pyproject.toml"),
+        venv_path: Path = Path(".venv"),
+        include_dev: bool = False,
+        include_extras: Sequence[str] = (),
+        github_fetcher: GitHubSkillFetcher | None = None,
+        file_system: FileSystem | None = None,
+    ) -> Sequence[InstalledSkillUpdate]:
+        settings = self._project_settings(
+            project=project,
+            pyproject_toml_path=pyproject_toml_path,
+            venv_path=venv_path,
+            include_dev=include_dev,
+            include_extras=include_extras,
+        )
+        updates: list[InstalledSkillUpdate] = []
+        for installed in self.list(directory, file_system=file_system):
+            if not installed.can_update():
+                continue
+            available = self.available_update(
+                installed,
+                project=settings,
+                github_fetcher=github_fetcher,
+                file_system=file_system,
+            )
+            if available is None:
+                continue
+            updates.append(
+                InstalledSkillUpdate(installed=installed, available=available)
+            )
+        return sorted(updates, key=lambda item: item.installed.directory_name)
 
     def available_dependency_skill(
         self,

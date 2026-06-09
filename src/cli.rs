@@ -20,7 +20,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use std::fs;
-use std::io::{self, Stdout};
+use std::io::{self, IsTerminal, Stdout, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
@@ -151,16 +151,22 @@ enum Commands {
         github_token: Option<String>,
     },
     #[command(
-        about = "Show or apply dependency skill updates discovered from the current project."
+        about = "Check installed skill updates in bulk and optionally apply them; use `skilly list` to review or update one skill at a time."
     )]
     Update {
         #[command(flatten)]
         destination: DestinationArgs,
         #[arg(
             long,
-            help = "Apply the discovered updates instead of only printing them."
+            short = 'y',
+            help = "Apply every discovered update without asking for confirmation."
         )]
-        force: bool,
+        yes: bool,
+        #[arg(
+            long,
+            help = "GitHub token used when checking for updates to GitHub-backed skills."
+        )]
+        github_token: Option<String>,
     },
     #[command(about = "Remove one installed skill by directory name.")]
     Remove {
@@ -349,7 +355,15 @@ pub fn run(args: Vec<String>) -> Result<i32> {
             &destination.resolve()?,
             client_config(None, None, github_token, None),
         )?,
-        Commands::Update { destination, force } => run_update(&destination.resolve()?, force)?,
+        Commands::Update {
+            destination,
+            yes,
+            github_token,
+        } => run_update(
+            &destination.resolve()?,
+            client_config(None, None, github_token, None),
+            yes,
+        )?,
         Commands::Remove { name, destination } => {
             let removed = remove_skill(&name, &destination.resolve()?)?;
             println!("Removed {}", skill_directory_name(&removed));
@@ -948,50 +962,193 @@ fn run_list(directory: &Path, config: ClientConfig) -> Result<()> {
     Ok(())
 }
 
-fn run_update(directory: &Path, force: bool) -> Result<()> {
+#[derive(Debug, Clone)]
+struct PendingSkillUpdate {
+    installed: SkillData,
+    available: SkillData,
+}
+
+fn run_update(directory: &Path, config: ClientConfig, yes: bool) -> Result<()> {
+    let client = SkillsMpClient::new(config)?;
+    let installed_skills = discover_installed_skills(directory)?;
     let environment = ProjectEnvironment::with_paths(
         directory,
         Path::new("pyproject.toml"),
         Path::new(".venv"),
         ScanDependencySelection::default(),
     );
-    let matches = dependency_updates_in(&environment)?;
-    if matches.is_empty() {
-        println!("No dependency skill updates available");
+
+    let mut updates = Vec::new();
+    for item in dependency_updates_in(&environment)? {
+        let installed = item.installed.context("Missing installed skill")?;
+        updates.push(PendingSkillUpdate {
+            installed,
+            available: item.available,
+        });
+    }
+
+    let dependency_names = updates
+        .iter()
+        .map(|item| skill_directory_name(&item.installed))
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut errors = Vec::new();
+    for installed in installed_skills
+        .into_iter()
+        .filter(|skill| skill.github_url.is_some() && !skill.is_dependency())
+    {
+        if dependency_names.contains(&skill_directory_name(&installed)) {
+            continue;
+        }
+        match available_github_update(&installed, &client) {
+            Ok(Some(available)) => updates.push(PendingSkillUpdate {
+                installed,
+                available,
+            }),
+            Ok(None) => {}
+            Err(error) => errors.push(format!(
+                "Could not check updates for {}: {error}",
+                skill_directory_name(&installed)
+            )),
+        }
+    }
+
+    updates.sort_by(|left, right| {
+        skill_directory_name(&left.installed).cmp(&skill_directory_name(&right.installed))
+    });
+
+    if updates.is_empty() {
+        for error in errors {
+            println!("{error}");
+        }
+        println!("No installed skill updates available");
         return Ok(());
     }
-    for item in &matches {
-        let installed = item.installed.as_ref().context("Missing installed skill")?;
-        println!(
-            "{}: {} {} -> {}",
-            skill_directory_name(installed),
-            item.available.package_name.as_deref().unwrap_or("unknown"),
-            installed.package_version.as_deref().unwrap_or("unknown"),
-            item.available
+
+    println!("Available skill updates:");
+    for update in &updates {
+        println!("{}", format_pending_update(update));
+    }
+    for error in &errors {
+        println!("{error}");
+    }
+    println!("Use `skilly list` to review or apply updates one skill at a time.");
+
+    let apply_updates = if yes {
+        true
+    } else if io::stdin().is_terminal() {
+        confirm_apply_updates()?
+    } else {
+        println!("Re-run with --yes to apply these updates");
+        return Ok(());
+    };
+
+    if !apply_updates {
+        println!("Cancelled without applying updates");
+        return Ok(());
+    }
+
+    for update in &updates {
+        let updated = install_available_skill(
+            directory,
+            &update.available,
+            Some(&skill_directory_name(&update.installed)),
+            true,
+        )?;
+        println!("{}", format_applied_update(&update.installed, &updated));
+    }
+    Ok(())
+}
+
+fn available_github_update(
+    skill: &SkillData,
+    client: &SkillsMpClient,
+) -> Result<Option<SkillData>> {
+    let Some(github_url) = skill.github_url.as_deref() else {
+        return Ok(None);
+    };
+    let refreshed = discover_github_skills(
+        client,
+        github_url,
+        if skill.is_skillsmp() {
+            SKILLY_SOURCE_SKILLSMP
+        } else {
+            SKILLY_SOURCE_GITHUB
+        },
+        skill.skillsmp_id.clone(),
+    )?
+    .into_iter()
+    .next()
+    .context("GitHub URL resolves to no skills")?;
+    if github_versions_match(skill, &refreshed) {
+        return Ok(None);
+    }
+    Ok(Some(refreshed))
+}
+
+fn confirm_apply_updates() -> Result<bool> {
+    print!("Apply these updates? [y/N] ");
+    io::stdout().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    let normalized = answer.trim().to_ascii_lowercase();
+    Ok(normalized == "y" || normalized == "yes")
+}
+
+fn format_pending_update(update: &PendingSkillUpdate) -> String {
+    if update.installed.is_dependency() {
+        return format!(
+            "{} [dependency]: {} {} -> {}",
+            skill_directory_name(&update.installed),
+            update
+                .available
+                .package_name
+                .as_deref()
+                .unwrap_or("unknown"),
+            update
+                .installed
+                .package_version
+                .as_deref()
+                .unwrap_or("unknown"),
+            update
+                .available
                 .package_version
                 .as_deref()
                 .unwrap_or("unknown")
         );
     }
-    if !force {
-        println!("Run with --force to apply these updates");
-        return Ok(());
-    }
-    for item in &matches {
-        let installed = item.installed.as_ref().context("Missing installed skill")?;
-        let updated = install_available_skill(
-            directory,
-            &item.available,
-            Some(&skill_directory_name(installed)),
-            true,
-        )?;
-        println!(
+
+    format!(
+        "{} [{}]: {} -> {}",
+        skill_directory_name(&update.installed),
+        if update.installed.is_skillsmp() {
+            "skillsmp/github"
+        } else {
+            "github"
+        },
+        short_revision(update.installed.github_commit_sha.as_deref()),
+        short_revision(update.available.github_commit_sha.as_deref())
+    )
+}
+
+fn format_applied_update(previous: &SkillData, updated: &SkillData) -> String {
+    if previous.is_dependency() {
+        return format!(
             "Updated {} to {}",
-            skill_directory_name(&updated),
+            skill_directory_name(updated),
             updated.package_version.as_deref().unwrap_or("unknown")
         );
     }
-    Ok(())
+
+    format!(
+        "Updated {} to commit {}",
+        skill_directory_name(updated),
+        short_revision(updated.github_commit_sha.as_deref())
+    )
+}
+
+fn short_revision(revision: Option<&str>) -> String {
+    let value = revision.unwrap_or("unknown");
+    value.chars().take(7).collect()
 }
 
 fn run_skillsmp_search(
@@ -1697,8 +1854,9 @@ fn installed_skillsmp_match(
 #[cfg(test)]
 mod tests {
     use super::{
-        BACK_CHOICE, Cli, Commands, DownloadableSkillMatch, EXIT_CHOICE, MenuAction, REMOVE_CHOICE,
-        ScanDependencyArgs, UPDATE_CHOICE, downloadable_skill_actions, installed_skill_actions,
+        BACK_CHOICE, Cli, Commands, DownloadableSkillMatch, EXIT_CHOICE, MenuAction,
+        PendingSkillUpdate, REMOVE_CHOICE, ScanDependencyArgs, UPDATE_CHOICE,
+        downloadable_skill_actions, format_pending_update, installed_skill_actions,
         installed_skillsmp_match, menu_action, scan_choice_label, scan_match_preview_lines,
         search_skill_label, skillsmp_search_preview_lines, skillsmp_search_status,
     };
@@ -1923,6 +2081,21 @@ mod tests {
     }
 
     #[test]
+    fn update_command_accepts_yes_and_github_token() {
+        let cli = Cli::try_parse_from(["skilly", "update", "--yes", "--github-token", "token"])
+            .expect("update command should parse");
+        let Commands::Update {
+            yes, github_token, ..
+        } = cli.command
+        else {
+            panic!("expected update command");
+        };
+
+        assert!(yes);
+        assert_eq!(github_token.as_deref(), Some("token"));
+    }
+
+    #[test]
     fn installed_skill_actions_only_include_update_when_available() {
         assert_eq!(
             installed_skill_actions(false, REMOVE_CHOICE),
@@ -1946,6 +2119,28 @@ mod tests {
         assert_eq!(
             downloadable_skill_actions(&matched),
             vec![REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE]
+        );
+    }
+
+    #[test]
+    fn pending_github_update_preview_uses_short_commits() {
+        let update = PendingSkillUpdate {
+            installed: installed_skill(
+                None,
+                Some("https://github.com/example/project/tree/main/skills/python"),
+            ),
+            available: SkillData {
+                github_commit_sha: Some("fedcba98765432100123456789abcdef01234567".to_string()),
+                ..installed_skill(
+                    None,
+                    Some("https://github.com/example/project/tree/main/skills/python"),
+                )
+            },
+        };
+
+        assert_eq!(
+            format_pending_update(&update),
+            "python [github]: 0123456 -> fedcba9"
         );
     }
 
