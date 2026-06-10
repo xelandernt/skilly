@@ -27,6 +27,11 @@ target
 .venv
 .agents
 .env
+ts/dist/
+ts/vendor/
+ts/*.tgz
+ts/*.tar.gz
+ts/node_modules/
 **/**.so
 **/**.pyd
 **/**.dylib

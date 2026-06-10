@@ -1,0 +1,98 @@
+name: Publish npm
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    name: CLI binary (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            binary_name: skilly
+          - name: macos-x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            binary_name: skilly
+          - name: macos-arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            binary_name: skilly
+          - name: windows-x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: skilly.exe
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build CLI
+        run: cargo build --locked --release --bin skilly --target ${{ matrix.target }}
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    name: Publish to npm
+    environment: publish
+    runs-on: ubuntu-22.04
+    needs: [cli]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ts/package-lock.json
+          registry-url: "https://registry.npmjs.org"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: dist/cli-artifacts
+      - name: Sync npm package version from Cargo
+        shell: bash
+        run: |
+          VERSION="$(awk '
+            $0 == "[package]" { in_package = 1; next }
+            /^\[/ { in_package = 0 }
+            in_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' Cargo.toml)"
+          npm --prefix ts version --no-git-tag-version "$VERSION"
+      - name: Install TypeScript launcher dependencies
+        run: npm --prefix ts ci
+      - name: Stage published binaries into ts/vendor
+        shell: bash
+        run: |
+          rm -rf ts/vendor
+          mkdir -p ts/vendor
+          for artifact_dir in dist/cli-artifacts/cli-*; do
+            triple="${artifact_dir##*/cli-}"
+            mkdir -p "ts/vendor/${triple}"
+            cp "$artifact_dir"/* "ts/vendor/${triple}/"
+          done
+          find ts/vendor -type f ! -name '*.exe' -exec chmod +x {} +
+      - name: Verify npm package
+        shell: bash
+        run: |
+          npm --prefix ts test
+          npm publish --access public --dry-run ./ts
+      - name: Publish npm package
+        run: npm publish --access public ./ts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

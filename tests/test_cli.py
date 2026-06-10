@@ -1,9 +1,24 @@
 from pathlib import Path
+import subprocess
 
 from skilly._cli import run_cli
 from skilly.repository import SkillRepository
 from skilly.skills import Skill, resolve_skills_directory
 from helpers import make_venv, write_distribution, write_skill
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def run_native_cli(
+    *args: str, cwd: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["cargo", "run", "--quiet", "--", *args],
+        cwd=cwd or REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def test_run_cli_root_help_describes_commands(capfd) -> None:
@@ -121,6 +136,29 @@ def test_run_cli_list_prints_plain_output_without_terminal(
 
     assert exit_code == 0
     assert "sample-skill" in capfd.readouterr().out
+
+
+def test_native_cli_root_help_describes_commands() -> None:
+    result = run_native_cli("--help")
+
+    assert result.returncode == 0
+    assert (
+        "Scan dependency-provided skills from pyproject.toml and .venv" in result.stdout
+    )
+    assert "Download one or more skills from a GitHub repository URL" in result.stdout
+    assert "Browse, update, or remove installed skills" in result.stdout
+
+
+def test_native_cli_list_prints_plain_output_without_terminal(tmp_path: Path) -> None:
+    SkillRepository().install(
+        Skill("sample-skill", "Installed skill."),
+        directory=tmp_path,
+    )
+
+    result = run_native_cli("list", "--directory", str(tmp_path))
+
+    assert result.returncode == 0
+    assert "sample-skill" in result.stdout
 
 
 def test_resolve_skills_directory_supports_local_agent_flavors() -> None:

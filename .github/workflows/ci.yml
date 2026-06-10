@@ -60,3 +60,25 @@ jobs:
       - run: uv python install ${{ matrix.python-version }}
       - run: just install
       - run: uv run pytest . --cov=.
+
+  test-npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ts/package-lock.json
+      - name: Install TypeScript launcher dependencies
+        run: npm --prefix ts ci
+      - name: Test launcher logic
+        run: npm --prefix ts test
+      - name: Smoke test packaged CLI
+        run: |
+          cargo build --release --bin skilly
+          npm --prefix ts run stage-local-binary
+          TARBALL=$(npm pack --silent ./ts)
+          npm exec --yes --package "./${TARBALL}" -- skilly --help
+          rm -f "$TARBALL"
+          rm -rf ts/vendor

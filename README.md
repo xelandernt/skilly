@@ -12,6 +12,7 @@ Run the CLI without installing it:
 
 ```shell
 uvx skilly --help
+npx @xelandernt/skilly --help
 ```
 
 Or install the CLI and Python package:
@@ -19,6 +20,10 @@ Or install the CLI and Python package:
 ```shell
 pip install skilly
 ```
+
+The npm package ships the same native Rust CLI behind the executable name
+`skilly`. The current npm support matrix is macOS arm64/x64, Linux x64
+(glibc), and Windows x64.
 
 ## Quick Start
 
@@ -197,6 +202,16 @@ Run the required quality gates:
 just lint
 just test
 just typecheck
+```
+
+The TypeScript launcher package also has dedicated helpers:
+
+```shell
+just ts::build
+just ts::test
+just ts::typecheck
+just ts::smoke
+just ts::publish-dry-run
 ```
 
 ## License

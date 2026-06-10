@@ -373,7 +373,17 @@ enum UtilSubcommand {
     },
 }
 
-pub fn run(args: Vec<String>) -> Result<i32> {
+pub fn run(args: Vec<String>) -> i32 {
+    match try_run(args) {
+        Ok(exit_code) => exit_code,
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
+fn try_run(args: Vec<String>) -> Result<i32> {
     let cli =
         match Cli::try_parse_from(std::iter::once("skilly".to_string()).chain(args.into_iter())) {
             Ok(cli) => cli,

@@ -1,0 +1,33 @@
+{
+  "name": "@xelandernt/skilly",
+  "version": "0.0.22",
+  "description": "Native npm launcher for the skilly CLI.",
+  "license": "MIT",
+  "bin": {
+    "skilly": "dist/bin/skilly.js"
+  },
+  "type": "commonjs",
+  "files": [
+    "README.md",
+    "dist/bin",
+    "dist/lib",
+    "vendor"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "stage-local-binary": "npm run build && node ./dist/scripts/stage-local-binary.js",
+    "test": "npm run build && node --test ./dist/test/targets.test.js ./dist/test/launcher.test.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.16.5",
+    "typescript": "^5.8.3"
+  }
+}

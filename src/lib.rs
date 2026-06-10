@@ -1685,13 +1685,11 @@ fn skillsmp_resolve_github_ref_and_commit_sha_py(
 
 #[pyfunction]
 fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
-    match py.allow_threads(|| cli::run(args)) {
-        Ok(exit_code) => Ok(exit_code),
-        Err(error) => {
-            eprintln!("{error}");
-            Ok(1)
-        }
-    }
+    Ok(py.allow_threads(|| cli::run(args)))
+}
+
+pub fn run_cli_entry(args: Vec<String>) -> i32 {
+    cli::run(args)
 }
 
 #[pymodule]

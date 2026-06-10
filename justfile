@@ -1,12 +1,14 @@
-[private]
+mod ts
+
 default:
-    @just --list
+    @just --list --list-submodules
 
 # install dependencies
 install:
     uv lock --upgrade
     uv sync --all-extras --frozen
     uv run --no-sync maturin develop
+    @just ts::install
     @just hook
 
 # lint project
@@ -18,10 +20,12 @@ test *args:
     uv run --no-sync cargo test --profile release
     uv run --no-sync maturin develop
     uv run --no-sync pytest {{ args }}
+    @just ts::test
 
 # type check project
 typecheck:
     uv run pyrefly check
+    @just ts::typecheck
 
 # install pre-commit hooks
 hook:

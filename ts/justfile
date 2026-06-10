@@ -1,0 +1,50 @@
+[private]
+default:
+    @just --list ts
+
+# install TypeScript package dependencies
+install:
+    npm ci
+
+# build the TypeScript launcher package
+build:
+    npm run build
+
+# test the TypeScript launcher package
+test:
+    npm test
+
+# type check the TypeScript launcher package
+typecheck:
+    npm run typecheck
+
+# stage the local release binary into the TypeScript package
+stage-local-binary:
+    uv run --no-sync cargo build --release --bin skilly
+    npm run stage-local-binary
+
+# pack the TypeScript launcher package
+pack:
+    npm pack .
+
+# publish the TypeScript launcher package locally
+publish: install test stage-local-binary
+    #!/usr/bin/env bash
+    set -euo pipefail
+    trap 'rm -rf vendor' EXIT
+    npm publish .
+
+# dry-run the local TypeScript launcher publish flow
+publish-dry-run: install test stage-local-binary
+    #!/usr/bin/env bash
+    set -euo pipefail
+    trap 'rm -rf vendor' EXIT
+    npm publish . --dry-run
+
+# smoke test the packaged TypeScript launcher
+smoke: install test stage-local-binary
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tarball="$(npm pack --silent .)"
+    trap 'rm -f "$tarball"; rm -rf vendor' EXIT
+    npm exec --yes --package "./${tarball}" -- skilly --help
