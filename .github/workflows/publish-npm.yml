@@ -64,7 +64,7 @@ jobs:
       - name: Sync npm package version from Cargo
         shell: bash
         run: |
-          VERSION="$(awk '
+          cargo_version="$(awk '
             $0 == "[package]" { in_package = 1; next }
             /^\[/ { in_package = 0 }
             in_package && $1 == "version" {
@@ -73,7 +73,12 @@ jobs:
               exit
             }
           ' Cargo.toml)"
-          npm --prefix ts version --no-git-tag-version "$VERSION"
+          npm_version="$(node -p "require('./ts/package.json').version")"
+          if [[ "$npm_version" == "$cargo_version" ]]; then
+            echo "ts/package.json already matches Cargo.toml version ${cargo_version}"
+            exit 0
+          fi
+          npm --prefix ts version --no-git-tag-version "$cargo_version"
       - name: Install TypeScript launcher dependencies
         run: npm --prefix ts ci
       - name: Stage published binaries into ts/vendor
