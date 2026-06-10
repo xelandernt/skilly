@@ -76,9 +76,14 @@ jobs:
         run: npm --prefix ts test
       - name: Smoke test packaged CLI
         run: |
+          set -euo pipefail
           cargo build --release --bin skilly
           npm --prefix ts run stage-local-binary
+          REPO_ROOT="$PWD"
           TARBALL=$(npm pack --silent ./ts)
-          npm exec --yes --package "./${TARBALL}" -- skilly --help
-          rm -f "$TARBALL"
-          rm -rf ts/vendor
+          TEMP_DIR=$(mktemp -d)
+          trap 'rm -f "${REPO_ROOT}/${TARBALL}"; rm -rf "$TEMP_DIR" "${REPO_ROOT}/ts/vendor"' EXIT
+          cd "$TEMP_DIR"
+          npm init -y >/dev/null 2>&1
+          npm install --silent "${REPO_ROOT}/${TARBALL}"
+          ./node_modules/@xelandernt/skilly/dist/src/bin/skilly.js --help

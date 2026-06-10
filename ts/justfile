@@ -1,6 +1,6 @@
-[private]
-default:
-    @just --list ts
+[private, default]
+_:
+    @just --list
 
 # install TypeScript package dependencies
 install:
@@ -45,6 +45,13 @@ publish-dry-run: install test stage-local-binary
 smoke: install test stage-local-binary
     #!/usr/bin/env bash
     set -euo pipefail
+    package_dir="$(pwd)"
     tarball="$(npm pack --silent .)"
-    trap 'rm -f "$tarball"; rm -rf vendor' EXIT
-    npm exec --yes --package "./${tarball}" -- skilly --help
+    temp_dir="$(mktemp -d)"
+    trap 'rm -f "${package_dir}/${tarball}"; rm -rf "$temp_dir" "${package_dir}/vendor"' EXIT
+    (
+        cd "$temp_dir"
+        npm init -y >/dev/null 2>&1
+        npm install --silent "${package_dir}/${tarball}"
+        ./node_modules/@xelandernt/skilly/dist/src/bin/skilly.js --help
+    )

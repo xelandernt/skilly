@@ -1,16 +1,16 @@
 {
   "name": "@xelandernt/skilly",
-  "version": "0.0.22",
+  "version": "0.0.23",
   "description": "Native npm launcher for the skilly CLI.",
   "license": "MIT",
   "bin": {
-    "skilly": "dist/bin/skilly.js"
+    "skilly": "dist/src/bin/skilly.js"
   },
   "type": "commonjs",
   "files": [
     "README.md",
-    "dist/bin",
-    "dist/lib",
+    "dist/src/bin",
+    "dist/src/lib",
     "vendor"
   ],
   "engines": {

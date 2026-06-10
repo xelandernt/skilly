@@ -32,7 +32,7 @@ export interface LaunchOptions {
 }
 
 export function resolveBinaryPath(options: Pick<LaunchOptions, "processLike" | "rootDir"> = {}): string {
-  const rootDir = options.rootDir ?? path.resolve(__dirname, "..", "..");
+  const rootDir = options.rootDir ?? path.resolve(__dirname, "..", "..", "..");
   const processLike = options.processLike ?? process;
   const target = resolveTarget(processLike);
   return path.join(rootDir, vendorRelativePath(target));
