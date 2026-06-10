@@ -22,9 +22,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "stage-local-binary": "npm run build && node ./dist/scripts/stage-local-binary.js",
+    "sync-readme": "node ./dist/scripts/sync-readme.js",
     "test": "npm run build && node --test ./dist/test/targets.test.js ./dist/test/launcher.test.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "prepack": "npm run build"
+    "prepack": "npm run build && npm run sync-readme"
   },
   "devDependencies": {
     "@types/node": "^22.16.5",
