@@ -138,6 +138,13 @@ def test_run_cli_list_prints_plain_output_without_terminal(
     assert "sample-skill" in capfd.readouterr().out
 
 
+def test_run_cli_list_reports_empty_directory(tmp_path: Path, capfd) -> None:
+    exit_code = run_cli(["list", "--directory", str(tmp_path)])
+
+    assert exit_code == 0
+    assert f"No skills found in directory {tmp_path}" in capfd.readouterr().out
+
+
 def test_native_cli_root_help_describes_commands() -> None:
     result = run_native_cli("--help")
 
@@ -159,6 +166,13 @@ def test_native_cli_list_prints_plain_output_without_terminal(tmp_path: Path) ->
 
     assert result.returncode == 0
     assert "sample-skill" in result.stdout
+
+
+def test_native_cli_list_reports_empty_directory(tmp_path: Path) -> None:
+    result = run_native_cli("list", "--directory", str(tmp_path))
+
+    assert result.returncode == 0
+    assert f"No skills found in directory {tmp_path}" in result.stdout
 
 
 def test_resolve_skills_directory_supports_local_agent_flavors() -> None:

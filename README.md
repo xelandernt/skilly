@@ -8,10 +8,14 @@ Python dependencies, and keeps managed skills up to date.
 
 ## Installation
 
-Run the CLI without installing it:
-
+Run with `uvx`:
 ```shell
 uvx skilly --help
+
+```
+
+Run with `npx`:
+```shell
 npx @xelandernt/skilly --help
 ```
 
@@ -136,6 +140,28 @@ Without destination options, `skilly` uses `.agents/skills`.
 uvx skilly download https://github.com/example/project --global --codex
 uvx skilly list --local --claude
 ```
+
+#### Destination Mapping
+
+`skilly` resolves destination paths before use. Relative paths become absolute
+from the current working directory, and `--directory "~/.copilot"` expands `~`
+to your home directory.
+
+| Flags                | Resolved destination                                                      |
+|----------------------|---------------------------------------------------------------------------|
+| _none_               | `.agents/skills`                                                          |
+| `--local`            | `.agents/skills`                                                          |
+| `--global`           | `~/.agents/skills`                                                        |
+| `--claude`           | `.claude/skills`                                                          |
+| `--claude --global`  | `~/.claude/skills`                                                        |
+| `--codex`            | `.codex/skills`                                                           |
+| `--codex --global`   | `~/.codex/skills`                                                         |
+| `--copilot`          | `.github/skills`                                                          |
+| `--copilot --global` | `~/.copilot/skills`                                                       |
+| `--directory <path>` | Exactly that directory, after `~` expansion and absolute-path resolution. |
+
+`--directory` overrides `--local`, `--global`, `--claude`, `--codex`, and
+`--copilot`.
 
 ### GitHub Authentication
 
