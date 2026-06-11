@@ -37,6 +37,37 @@ hook:
 unhook:
     uv run prek uninstall
 
+# bump version and install (default: patch)
+bump component="patch":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    component="{{ component }}"
+    cargo_toml="Cargo.toml"
+    package_json="ts/package.json"
+
+    current="$(awk '/^version *= */ { gsub(/[" ]/, "", $3); print $3; exit }' "$cargo_toml")"
+    IFS='.' read -r major minor patch <<< "$current"
+
+    case "$component" in
+        major) major=$((major + 1)); minor=0; patch=0 ;;
+        minor) minor=$((minor + 1)); patch=0 ;;
+        patch) patch=$((patch + 1)) ;;
+        *) echo "Unknown component: $component (use major, minor, or patch)" >&2; exit 2 ;;
+    esac
+
+    new_version="${major}.${minor}.${patch}"
+    echo "Bumping version: ${current} -> ${new_version} (${component})"
+
+    if [[ "$(uname)" == "Darwin" ]]; then
+        sed -i '' "s/^version = \".*\"/version = \"${new_version}\"/" "$cargo_toml"
+        sed -i '' "s/\"version\": \".*\"/\"version\": \"${new_version}\"/" "$package_json"
+    else
+        sed -i "s/^version = \".*\"/version = \"${new_version}\"/" "$cargo_toml"
+        sed -i "s/\"version\": \".*\"/\"version\": \"${new_version}\"/" "$package_json"
+    fi
+
+    @just install
+
 # publish project on pypi
 publish:
     rm -rf dist

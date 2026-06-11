@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias
 
 from . import _bridge as bridge
 from ._core import Skill
-from .constants import DEFAULT_SKILLS_PATH
+from .constants import DEFAULT_SKILLS_PATH, DEFAULT_VENV_PATH
 
 if TYPE_CHECKING:
     from ._core import (
@@ -19,20 +19,6 @@ if TYPE_CHECKING:
 
 
 ResourceKind: TypeAlias = Literal["script", "reference", "asset", "other"]
-
-
-class GitHubSkillFetcher(Protocol):
-    @property
-    def base_url(self) -> str | None: ...
-
-    @property
-    def api_key(self) -> str | None: ...
-
-    @property
-    def github_token(self) -> str | None: ...
-
-    @property
-    def proxy(self) -> str | None: ...
 
 
 class SkillsMpInstallableSkill(Protocol):
@@ -155,7 +141,7 @@ def resolve_skills_directory(
 
 
 def discover_venv_skills(
-    path: Path = Path(".venv"),
+    path: Path = DEFAULT_VENV_PATH,
     *,
     file_system: FileSystem | None = None,
 ) -> list[Skill]:
@@ -163,7 +149,7 @@ def discover_venv_skills(
 
 
 def discover_github_skills(
-    fetcher: GitHubSkillFetcher,
+    fetcher: bridge.ClientConfigSource,
     github_url: str,
     *,
     origin: SkillOrigin | None = None,

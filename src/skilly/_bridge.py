@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from os import PathLike
 from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, TypedDict
 
 from . import _core
+from .filesystem import FileSystem, StrPath
 
 if TYPE_CHECKING:
     from ._core import (
@@ -16,13 +16,11 @@ if TYPE_CHECKING:
         SkillsMpAiSearchApiResponseData,
         SkillsMpSearchApiResponseData,
     )
-    from .filesystem import FileSystem
 
 BridgeScalar: TypeAlias = str | int | float | bool | None
 BridgeObject: TypeAlias = Mapping[str, "BridgeValue"]
 BridgeArray: TypeAlias = Sequence["BridgeValue"]
 BridgeValue: TypeAlias = BridgeScalar | BridgeObject | BridgeArray
-StrPath: TypeAlias = str | PathLike[str]
 AgentName: TypeAlias = Literal["agents", "claude", "codex", "copilot"]
 
 

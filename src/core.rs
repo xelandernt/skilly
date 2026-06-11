@@ -38,6 +38,9 @@ pub const STATUS_INSTALLED: &str = "installed";
 pub const STATUS_INSTALLABLE: &str = "installable";
 pub const STATUS_UPDATABLE: &str = "updatable";
 
+pub const MAX_DESCRIPTION_LENGTH: usize = 1024;
+pub const MAX_COMPATIBILITY_LENGTH: usize = 500;
+
 static TEMPORARY_DIRECTORY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -74,7 +77,7 @@ pub fn default_skills_directory() -> Result<PathBuf> {
     Ok(PathBuf::from(DEFAULT_SKILLS_PATH))
 }
 
-fn absolute_path(path: &Path) -> Result<PathBuf> {
+pub(crate) fn absolute_path(path: &Path) -> Result<PathBuf> {
     let expanded = expand_home_path(path)?;
     if expanded.is_absolute() {
         return Ok(expanded);
@@ -878,15 +881,17 @@ fn find_skill_markdown_path_in(file_system: &dyn FileSystem, path: &Path) -> Res
 impl SkillData {
     pub fn validate(&self) -> Result<()> {
         validate_skill_name(&self.name)?;
-        if self.description.is_empty() || self.description.len() > 1024 {
-            bail!("Skill description must contain 1-1024 characters");
+        if self.description.is_empty() || self.description.len() > MAX_DESCRIPTION_LENGTH {
+            bail!("Skill description must contain 1-{MAX_DESCRIPTION_LENGTH} characters");
         }
         if self
             .compatibility
             .as_ref()
-            .is_some_and(|value| value.is_empty() || value.len() > 500)
+            .is_some_and(|value| value.is_empty() || value.len() > MAX_COMPATIBILITY_LENGTH)
         {
-            bail!("Skill compatibility must contain 1-500 characters when provided");
+            bail!(
+                "Skill compatibility must contain 1-{MAX_COMPATIBILITY_LENGTH} characters when provided"
+            );
         }
         Ok(())
     }

@@ -9,6 +9,8 @@ class _StrEnum(str, Enum):
 
 
 DEFAULT_SKILLS_PATH: Final[Path] = Path(".agents/skills")
+DEFAULT_VENV_PATH: Final[Path] = Path(".venv")
+DEFAULT_PYPROJECT_PATH: Final[Path] = Path("pyproject.toml")
 
 
 class SkillInstallStatus(_StrEnum):

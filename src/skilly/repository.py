@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import _bridge as bridge
-from .constants import DEFAULT_SKILLS_PATH, SkillInstallStatus
+from .constants import (
+    DEFAULT_PYPROJECT_PATH,
+    DEFAULT_SKILLS_PATH,
+    DEFAULT_VENV_PATH,
+    SkillInstallStatus,
+)
 from .skills import (
     Skill,
     SkillOrigin,
@@ -16,8 +21,8 @@ from .skills import (
 )
 
 if TYPE_CHECKING:
+    from ._bridge import ClientConfigSource
     from .filesystem import FileSystem
-    from .skills import GitHubSkillFetcher
 
 
 @dataclass(frozen=True)
@@ -42,8 +47,8 @@ class InstalledSkillUpdate:
 
 @dataclass(frozen=True)
 class ProjectSettings:
-    pyproject_toml_path: Path = Path("pyproject.toml")
-    venv_path: Path = Path(".venv")
+    pyproject_toml_path: Path = DEFAULT_PYPROJECT_PATH
+    venv_path: Path = DEFAULT_VENV_PATH
     include_project_dependencies: bool = True
     dependency_groups: tuple[str, ...] | None = None
     exclude_dependency_groups: tuple[str, ...] | None = None
@@ -337,7 +342,7 @@ class SkillRepository:
         exclude_dependency_groups: tuple[str, ...] | None = None,
         optional_dependencies: tuple[str, ...] | None = None,
         exclude_optional_dependencies: tuple[str, ...] | None = None,
-        github_fetcher: GitHubSkillFetcher | None = None,
+        github_fetcher: ClientConfigSource | None = None,
         file_system: FileSystem | None = None,
     ) -> Skill | None:
         if installed_skill.is_dependency():
@@ -390,7 +395,7 @@ class SkillRepository:
         exclude_dependency_groups: tuple[str, ...] | None = None,
         optional_dependencies: tuple[str, ...] | None = None,
         exclude_optional_dependencies: tuple[str, ...] | None = None,
-        github_fetcher: GitHubSkillFetcher | None = None,
+        github_fetcher: ClientConfigSource | None = None,
         file_system: FileSystem | None = None,
     ) -> Sequence[InstalledSkillUpdate]:
         settings = self._project_settings(
