@@ -79,7 +79,7 @@ pub(crate) struct InstalledSkillDiscoveryReport {
 
 #[derive(Debug, Clone)]
 pub(crate) enum ListedSkillEntry {
-    Valid(SkillData),
+    Valid(Box<SkillData>),
     Invalid(InvalidInstalledSkill),
 }
 
@@ -433,10 +433,8 @@ impl CreateFormState {
         match action {
             CreateAction::NextField => self.next_field(),
             CreateAction::PreviousField => self.previous_field(),
-            CreateAction::Insert(value) if self.active_field_is_toggle() => {
-                if value == ' ' {
-                    self.toggle_active();
-                }
+            CreateAction::Insert(value) if self.active_field_is_toggle() && value == ' ' => {
+                self.toggle_active();
             }
             CreateAction::NewLine if self.active_field_is_toggle() => self.toggle_active(),
             CreateAction::Insert(value) => {
@@ -1085,15 +1083,14 @@ pub(crate) fn multi_select_menu(
                     focused = crate::cli::args::next_selectable_index(&menu.items, focused);
                     state.select(Some(focused));
                 }
-                Some(MultiSelectMenuAction::ToggleSelect) => {
-                    if focused < selectable_count {
-                        if checked.contains(&focused) {
-                            checked.remove(&focused);
-                        } else {
-                            checked.insert(focused);
-                        }
+                Some(MultiSelectMenuAction::ToggleSelect) if focused < selectable_count => {
+                    if checked.contains(&focused) {
+                        checked.remove(&focused);
+                    } else {
+                        checked.insert(focused);
                     }
                 }
+                Some(MultiSelectMenuAction::ToggleSelect) => {}
                 Some(MultiSelectMenuAction::SelectAll) => {
                     let all_selected = (0..selectable_count).all(|i| checked.contains(&i));
                     if all_selected {

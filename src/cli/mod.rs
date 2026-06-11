@@ -58,14 +58,13 @@ pub fn run(args: Vec<String>) -> i32 {
 }
 
 fn try_run(args: Vec<String>) -> Result<i32> {
-    let cli =
-        match Cli::try_parse_from(std::iter::once("skilly".to_string()).chain(args.into_iter())) {
-            Ok(cli) => cli,
-            Err(error) => {
-                error.print()?;
-                return Ok(if error.use_stderr() { 2 } else { 0 });
-            }
-        };
+    let cli = match Cli::try_parse_from(std::iter::once("skilly".to_string()).chain(args)) {
+        Ok(cli) => cli,
+        Err(error) => {
+            error.print()?;
+            return Ok(if error.use_stderr() { 2 } else { 0 });
+        }
+    };
 
     match cli.command {
         Commands::Create {
@@ -172,12 +171,7 @@ fn client_config(
     github_token: Option<String>,
     proxy: Option<String>,
 ) -> ClientConfig {
-    ClientConfig {
-        base_url,
-        api_key,
-        github_token,
-        proxy,
-    }
+    ClientConfig::new(base_url, api_key, github_token, proxy)
 }
 
 fn run_create(directory: &Path, mut options: CreateOptions) -> Result<()> {
@@ -374,7 +368,7 @@ fn run_scan(
                         MenuUi {
                             title: menu_title_with_directory(
                                 format!("Choose an action for {}", selected.available.name),
-                                &directory,
+                                directory,
                             ),
                             items: actions
                                 .iter()
@@ -402,7 +396,7 @@ fn run_scan(
                         EXIT_CHOICE => break,
                         INSTALL_CHOICE | UPDATE_CHOICE => {
                             let installed = install_available_skill(
-                                &directory,
+                                directory,
                                 &selected.available,
                                 selected
                                     .installed
@@ -447,7 +441,7 @@ fn run_scan(
                         MenuUi {
                             title: menu_title_with_directory(
                                 format!("Action for {} selected skills", selected.len()),
-                                &directory,
+                                directory,
                             ),
                             items: actions
                                 .iter()
@@ -482,7 +476,7 @@ fn run_scan(
                         APPLY_ALL_CHOICE => {
                             for item in &selected {
                                 let installed = install_available_skill(
-                                    &directory,
+                                    directory,
                                     &item.available,
                                     item.installed.as_ref().map(skill_directory_name).as_deref(),
                                     item.installed.is_some(),
@@ -1496,7 +1490,7 @@ fn run_skillsmp_search(
             .zip(search_matches.iter())
             .map(|(skill, (_matched_skill, installed))| MenuItemUi {
                 label: search_skill_label(skill, installed.as_ref()),
-                preview_lines: skillsmp_search_preview_lines(skill, installed.as_ref(), &directory),
+                preview_lines: skillsmp_search_preview_lines(skill, installed.as_ref(), directory),
                 status: skillsmp_search_menu_status(installed.as_ref()),
                 selectable: true,
             })
@@ -1575,7 +1569,7 @@ fn run_skillsmp_search(
             MenuUi {
                 title: menu_title_with_directory(
                     format!("Choose an action for {}", skill.name),
-                    &directory,
+                    directory,
                 ),
                 items: actions
                     .iter()
@@ -1584,7 +1578,7 @@ fn run_skillsmp_search(
                         preview_lines: skillsmp_installable_preview_lines(
                             skill,
                             &downloadable_match,
-                            &directory,
+                            directory,
                         ),
                         status: MenuItemStatus::Default,
                         selectable: true,
@@ -1606,7 +1600,7 @@ fn run_skillsmp_search(
             BACK_CHOICE => continue,
             EXIT_CHOICE => break,
             INSTALL_CHOICE => {
-                let installed = installable.install_to(&directory, None, overwrite)?;
+                let installed = installable.install_to(directory, None, overwrite)?;
                 remember_status(
                     &mut messages,
                     &mut status_message,
@@ -1625,7 +1619,7 @@ fn run_skillsmp_search(
                 remember_status(
                     &mut messages,
                     &mut status_message,
-                    update_skill(&directory, installed, &client)?,
+                    update_skill(directory, installed, &client)?,
                 );
             }
             REMOVE_CHOICE => {
@@ -1633,7 +1627,7 @@ fn run_skillsmp_search(
                     .installed
                     .as_ref()
                     .context("Only installed skills can be removed")?;
-                let removed = remove_skill(&skill_directory_name(installed), &directory)?;
+                let removed = remove_skill(&skill_directory_name(installed), directory)?;
                 remember_status(
                     &mut messages,
                     &mut status_message,
@@ -2194,7 +2188,7 @@ fn listed_skill_entries(report: InstalledSkillDiscoveryReport) -> Vec<ListedSkil
     let mut entries = report
         .valid_skills
         .into_iter()
-        .map(ListedSkillEntry::Valid)
+        .map(|skill| ListedSkillEntry::Valid(Box::new(skill)))
         .collect::<Vec<_>>();
     entries.extend(
         report

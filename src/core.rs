@@ -211,17 +211,12 @@ impl ProjectDependencyOrigin {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum NamedSelection {
+    #[default]
     All,
     Include(BTreeSet<String>),
     Exclude(BTreeSet<String>),
-}
-
-impl Default for NamedSelection {
-    fn default() -> Self {
-        Self::All
-    }
 }
 
 impl NamedSelection {
@@ -653,13 +648,13 @@ fn frontmatter_metadata(parsed: &Mapping) -> BTreeMap<String, String> {
 }
 
 fn infer_source(metadata: &BTreeMap<String, String>) -> String {
-    if let Some(source) = metadata.get(SKILLY_SOURCE_METADATA_KEY) {
-        if matches!(
+    if let Some(source) = metadata.get(SKILLY_SOURCE_METADATA_KEY)
+        && matches!(
             source.as_str(),
             SKILLY_SOURCE_DEPENDENCY | SKILLY_SOURCE_GITHUB | SKILLY_SOURCE_SKILLSMP
-        ) {
-            return source.clone();
-        }
+        )
+    {
+        return source.clone();
     }
     if metadata.contains_key(SKILLY_SKILLSMP_ID_METADATA_KEY) {
         return SKILLY_SOURCE_SKILLSMP.to_string();

@@ -99,12 +99,7 @@ fn client_config(
     github_token: Option<String>,
     proxy: Option<String>,
 ) -> ClientConfig {
-    ClientConfig {
-        base_url,
-        api_key,
-        github_token,
-        proxy,
-    }
+    ClientConfig::new(base_url, api_key, github_token, proxy)
 }
 
 fn skillsmp_client(

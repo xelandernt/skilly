@@ -37,6 +37,20 @@ pub struct ClientConfig {
 }
 
 impl ClientConfig {
+    pub fn new(
+        base_url: Option<String>,
+        api_key: Option<String>,
+        github_token: Option<String>,
+        proxy: Option<String>,
+    ) -> Self {
+        Self {
+            base_url,
+            api_key,
+            github_token,
+            proxy,
+        }
+    }
+
     pub fn base_url(&self) -> String {
         self.base_url
             .clone()
@@ -411,10 +425,10 @@ impl SkillsMpClient {
         &self,
         location: &GitHubSkillLocationData,
     ) -> Result<(String, String)> {
-        if let Some(reference) = location.r#ref.as_ref() {
-            if looks_like_commit_sha(reference) {
-                return Ok((reference.clone(), reference.clone()));
-            }
+        if let Some(reference) = location.r#ref.as_ref()
+            && looks_like_commit_sha(reference)
+        {
+            return Ok((reference.clone(), reference.clone()));
         }
 
         let reference = match location.r#ref.as_ref() {
