@@ -1,3 +1,9 @@
+[![npm](https://img.shields.io/npm/v/%40xelandernt%2Fskilly
+)](https://www.npmjs.com/package/@xelandernt/skilly)
+[![pyrefly](https://img.shields.io/endpoint?url=https://pyrefly.org/badge.json)](https://github.com/facebook/pyrefly)
+[![GitHub stars](https://img.shields.io/github/stars/xelandernt/skilly)](https://github.com/xelandernt/skilly/stargazers)
+[![PyPI Downloads](https://static.pepy.tech/badge/skilly/month)](https://pepy.tech/projects/skilly)
+[![Supported versions](https://img.shields.io/pypi/pyversions/skilly.svg)](https://pypi.python.org/pypi/skilly)
 # skilly
 
 Manage [Agent Skills](https://agentskills.io/specification) from the command line

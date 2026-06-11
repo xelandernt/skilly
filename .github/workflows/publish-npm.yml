@@ -34,8 +34,15 @@ jobs:
             binary_name: skilly.exe
     steps:
       - uses: actions/checkout@v6
+      - name: Verify CLI dependency graph
+        shell: bash
+        run: |
+          if cargo tree --locked --no-default-features --edges normal | grep -Eq '(^| )pyo3([ -]|$)'; then
+            echo "The standalone npm CLI must not contain PyO3 dependencies."
+            exit 1
+          fi
       - name: Build CLI
-        run: cargo build --locked --release --bin skilly --target ${{ matrix.target }}
+        run: cargo build --locked --release --no-default-features --bin skilly --target ${{ matrix.target }}
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v7
         with:

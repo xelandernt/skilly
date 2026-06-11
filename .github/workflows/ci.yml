@@ -77,7 +77,11 @@ jobs:
       - name: Smoke test packaged CLI
         run: |
           set -euo pipefail
-          cargo build --release --bin skilly
+          if cargo tree --locked --no-default-features --edges normal | grep -Eq '(^| )pyo3([ -]|$)'; then
+            echo "The standalone npm CLI must not contain PyO3 dependencies."
+            exit 1
+          fi
+          cargo build --release --no-default-features --bin skilly
           npm --prefix ts run stage-local-binary
           REPO_ROOT="$PWD"
           TARBALL=$(npm pack --silent ./ts)

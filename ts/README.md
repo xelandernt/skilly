@@ -1,3 +1,5 @@
+[NPM](https://img.shields.io/npm/v/%40xelandernt%2Fskilly)
+
 # skilly
 
 Manage [Agent Skills](https://agentskills.io/specification) from the command line
@@ -8,14 +10,26 @@ Python dependencies, and keeps managed skills up to date.
 
 ## Installation
 
-Run the CLI without installing it:
-
+Run with `uvx`:
 ```shell
 uvx skilly --help
+
+```
+
+Run with `npx`:
+```shell
 npx @xelandernt/skilly --help
 ```
 
-Or install the CLI and Python package:
+Install the native CLI with Homebrew from this repository's tap:
+
+```shell
+brew tap xelandernt/skilly https://github.com/xelandernt/skilly
+brew install xelandernt/skilly/skilly
+```
+
+Homebrew installs the CLI only. Install the Python package when you need the
+import surface as well:
 
 ```shell
 pip install skilly
@@ -128,6 +142,28 @@ Without destination options, `skilly` uses `.agents/skills`.
 uvx skilly download https://github.com/example/project --global --codex
 uvx skilly list --local --claude
 ```
+
+#### Destination Mapping
+
+`skilly` resolves destination paths before use. Relative paths become absolute
+from the current working directory, and `--directory "~/.copilot"` expands `~`
+to your home directory.
+
+| Flags                | Resolved destination                                                      |
+|----------------------|---------------------------------------------------------------------------|
+| _none_               | `.agents/skills`                                                          |
+| `--local`            | `.agents/skills`                                                          |
+| `--global`           | `~/.agents/skills`                                                        |
+| `--claude`           | `.claude/skills`                                                          |
+| `--claude --global`  | `~/.claude/skills`                                                        |
+| `--codex`            | `.codex/skills`                                                           |
+| `--codex --global`   | `~/.codex/skills`                                                         |
+| `--copilot`          | `.github/skills`                                                          |
+| `--copilot --global` | `~/.copilot/skills`                                                       |
+| `--directory <path>` | Exactly that directory, after `~` expansion and absolute-path resolution. |
+
+`--directory` overrides `--local`, `--global`, `--claude`, `--codex`, and
+`--copilot`.
 
 ### GitHub Authentication
 

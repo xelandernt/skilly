@@ -20,7 +20,7 @@ typecheck:
 
 # stage the local release binary into the TypeScript package
 stage-local-binary:
-    uv run --no-sync cargo build --release --bin skilly
+    uv run --no-sync cargo build --release --no-default-features --bin skilly
     npm run stage-local-binary
 
 # pack the TypeScript launcher package
