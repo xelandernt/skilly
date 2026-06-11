@@ -2,6 +2,12 @@
 name = "skilly"
 version = "0.0.28"
 edition = "2024"
+description = "Manage agent skills — create, install, scan, and update skills for AI coding agents"
+repository = "https://github.com/anomalyco/skilly"
+license = "MIT"
+readme = "README.md"
+keywords = ["agents", "skills", "ai", "cli"]
+categories = ["development-tools"]
 
 [lib]
 name = "_core"
@@ -25,16 +31,26 @@ tar = "0.4"
 toml = "0.8"
 url = "2.5"
 
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
 [lints.clippy]
-correctness = "deny"
+correctness = { level = "deny", priority = -1 }
 suspicious = "warn"
 style = "warn"
 complexity = "warn"
 perf = "warn"
+undocumented_unsafe_blocks = "warn"
 
 [lints.rust]
 missing_docs = "warn"
 unsafe_op_in_unsafe_fn = "deny"
+
+[lints.rustdoc]
+broken_intra_doc_links = "warn"
 
 [features]
 default = []

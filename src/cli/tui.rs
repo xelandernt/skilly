@@ -532,7 +532,7 @@ impl CreateFormState {
         };
         skill.validate()?;
         if !self.overwrite && self.target_path(directory).exists() {
-            bail!("Skill directory already exists; enable overwrite to replace it");
+            bail!("skill directory already exists; enable overwrite to replace it");
         }
         Ok(skill)
     }
@@ -628,7 +628,7 @@ impl CreateFormState {
     }
 }
 
-pub(crate) fn interactive_terminal() -> bool {
+pub(crate) fn is_interactive_terminal() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
 }
 
@@ -639,7 +639,7 @@ pub(crate) fn parse_metadata(values: &[String]) -> Result<BTreeMap<String, Strin
             let (key, value) = value
                 .split_once('=')
                 .filter(|(key, _)| !key.is_empty())
-                .ok_or_else(|| anyhow::anyhow!("Metadata must use KEY=VALUE: {value}"))?;
+                .ok_or_else(|| anyhow::anyhow!("metadata must use KEY=VALUE: {value}"))?;
             Ok((key.to_string(), value.to_string()))
         })
         .collect()
@@ -1274,12 +1274,16 @@ pub(crate) fn on_off(value: bool) -> &'static str {
 
 pub(crate) fn truncate_summary(value: &str) -> String {
     let max_len = 24usize;
-    let mut chars = value.chars().collect::<Vec<_>>();
-    if chars.len() <= max_len {
+    if value.chars().count() <= max_len {
         return value.to_string();
     }
-    chars.truncate(max_len.saturating_sub(1));
-    format!("{}\u{2026}", chars.into_iter().collect::<String>())
+    format!(
+        "{}\u{2026}",
+        value
+            .chars()
+            .take(max_len.saturating_sub(1))
+            .collect::<String>()
+    )
 }
 
 pub(crate) fn empty_to_none(value: String) -> Option<String> {
@@ -1305,7 +1309,7 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
 {
-    if !interactive_terminal() {
+    if !is_interactive_terminal() {
         return work();
     }
     let mut session = TerminalSession::new()?;
@@ -1353,7 +1357,7 @@ where
                 frame_index = frame_index.wrapping_add(1);
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                bail!("Loading task ended unexpectedly");
+                bail!("loading task ended unexpectedly");
             }
         }
     }

@@ -1,5 +1,8 @@
 //! Skilly: manage agent skills — create, install, scan, and update skills
 //! for AI coding agents.
+//!
+//! This crate exposes the CLI entry point and (when the `python-bindings` feature
+//! is enabled) the PyO3 native module via [`maturin`].
 
 mod cli;
 mod client;

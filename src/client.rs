@@ -1,3 +1,5 @@
+//! Blocking HTTP transport for SkillsMP search and GitHub repository content fetching.
+
 #[cfg(feature = "python-bindings")]
 use crate::core::GitHubContentItemData;
 use crate::core::{
@@ -260,7 +262,7 @@ impl SkillsMpClient {
             );
         } else if require_api_key {
             bail!(
-                "API key is required. Set it via environment variable {SKILLSMP_API_KEY_ENV_VAR} or pass it to the client."
+                "API key is required; set it via environment variable {SKILLSMP_API_KEY_ENV_VAR} or pass it to the client"
             );
         }
         Ok(headers)
@@ -486,7 +488,7 @@ fn decode_github_file_content(file: &GitHubFileContent) -> Result<String> {
     };
     if !matches!(file.encoding.as_deref(), None | Some("base64")) {
         bail!(
-            "Unsupported GitHub file encoding for {}: {}",
+            "unsupported GitHub file encoding for {}: {}",
             file.path,
             file.encoding.as_deref().unwrap_or_default()
         );
@@ -526,7 +528,7 @@ fn extract_github_archive_files(
     let mut archive = Archive::new(decoder);
     for entry in archive
         .entries()
-        .context("Invalid GitHub archive response")?
+        .context("invalid GitHub archive response")?
     {
         let mut entry = entry?;
         if !entry.header().entry_type().is_file() {

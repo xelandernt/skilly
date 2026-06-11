@@ -233,10 +233,10 @@ pub(crate) struct DestinationArgs {
 impl DestinationArgs {
     fn validate(&self) -> Result<()> {
         if usize::from(self.local) + usize::from(self.global) > 1 {
-            bail!("Use either --local or --global");
+            bail!("use either --local or --global");
         }
         if usize::from(self.claude) + usize::from(self.codex) + usize::from(self.copilot) > 1 {
-            bail!("Use only one of --claude, --codex, or --copilot");
+            bail!("use only one of --claude, --codex, or --copilot");
         }
         Ok(())
     }

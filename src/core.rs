@@ -1,3 +1,6 @@
+//! Domain models, validation, filesystem-independent operations, and core business logic
+//! for skill discovery, installation, scanning, and update management.
+
 use anyhow::{Context, Result, anyhow, bail};
 use csv::ReaderBuilder;
 use percent_encoding::percent_decode_str;
@@ -45,6 +48,7 @@ static TEMPORARY_DIRECTORY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Target agent directory convention.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SkillDirectoryFlavor {
     #[default]
     Agents,
@@ -68,7 +72,7 @@ pub fn skills_directory(flavor: SkillDirectoryFlavor, global: bool) -> Result<Pa
     let home = env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("Could not determine the user home directory"))?;
+        .ok_or_else(|| anyhow!("could not determine the user home directory"))?;
     Ok(home.join(relative))
 }
 
@@ -93,7 +97,7 @@ fn expand_home_path(path: &Path) -> Result<PathBuf> {
     if value == "~" || value.starts_with("~/") {
         let home = env::var_os("HOME")
             .or_else(|| env::var_os("USERPROFILE"))
-            .ok_or_else(|| anyhow!("Could not determine the user home directory"))?;
+            .ok_or_else(|| anyhow!("could not determine the user home directory"))?;
         let home = PathBuf::from(home);
         if value == "~" {
             return Ok(home);
@@ -198,6 +202,7 @@ pub struct SkillSourceMetadata {
 
 /// Which part of a project produced a given dependency requirement.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum ProjectDependencyOrigin {
     Project,
     DependencyGroup { group: String },
@@ -205,6 +210,7 @@ pub enum ProjectDependencyOrigin {
 }
 
 impl ProjectDependencyOrigin {
+    #[must_use]
     pub fn scan_label(&self) -> String {
         match self {
             Self::Project => "project".to_string(),
@@ -213,6 +219,7 @@ impl ProjectDependencyOrigin {
         }
     }
 
+    #[must_use]
     pub fn detail_label(&self) -> String {
         match self {
             Self::Project => "project dependency".to_string(),
@@ -408,6 +415,7 @@ impl Default for ProjectEnvironment {
 }
 
 impl ProjectEnvironment {
+    #[must_use = "constructs a ProjectEnvironment; assign to use it"]
     pub fn with_paths(
         directory: &Path,
         pyproject_toml_path: &Path,
@@ -469,10 +477,16 @@ impl FileSystem for NativeFileSystem {
     }
 
     fn list_files(&self, path: &Path) -> Result<Vec<String>> {
-        Ok(fs::read_dir(path)?
-            .filter_map(Result::ok)
-            .map(|entry| entry.file_name().to_string_lossy().to_string())
-            .collect())
+        let mut files = Vec::new();
+        for entry in fs::read_dir(path)? {
+            match entry {
+                Ok(entry) => {
+                    files.push(entry.file_name().to_string_lossy().to_string());
+                }
+                Err(_) => continue,
+            }
+        }
+        Ok(files)
     }
 
     fn exists(&self, path: &Path) -> Result<bool> {
@@ -490,7 +504,7 @@ impl FileSystem for NativeFileSystem {
                 return Ok(());
             }
             if path.exists() {
-                bail!("File exists: {}", path.display());
+                bail!("file exists: {}", path.display());
             }
             fs::create_dir_all(path)?;
             return Ok(());
@@ -714,6 +728,10 @@ fn collect_resource_files_in(
             continue;
         }
         let Ok(relative_path) = child_path.strip_prefix(skill_directory) else {
+            warnings.push(format!(
+                "path {} is not inside skill directory",
+                child_path.display()
+            ));
             continue;
         };
         let relative_path = relative_path
@@ -725,11 +743,14 @@ fn collect_resource_files_in(
             continue;
         }
         match file_system.read_file(&child_path) {
-            Ok(content) => resources.push(SkillResourceData {
-                relative_path: relative_path.clone(),
-                kind: classify_resource_kind(&relative_path),
-                content,
-            }),
+            Ok(content) => {
+                let kind = classify_resource_kind(&relative_path);
+                resources.push(SkillResourceData {
+                    relative_path,
+                    kind,
+                    content,
+                });
+            }
             Err(error) => warnings.push(format!(
                 "{}: could not read bundled resource ({error})",
                 child_path.display()
@@ -827,7 +848,7 @@ fn validate_resource_path(path: &str) -> Result<()> {
     if valid {
         Ok(())
     } else {
-        bail!("Invalid relative resource path: {path}")
+        bail!("invalid relative resource path: {path}")
     }
 }
 
@@ -865,7 +886,12 @@ fn replace_tree(path: &Path, replacement: &Path) -> Result<()> {
     let backup = temporary_sibling(path)?;
     fs::rename(path, &backup)?;
     if let Err(error) = fs::rename(replacement, path) {
-        let _ = fs::rename(&backup, path);
+        if let Err(backup_error) = fs::rename(&backup, path) {
+            eprintln!(
+                "skilly: failed to restore backup during replacement (original at {}): {backup_error}",
+                backup.display()
+            );
+        }
         return Err(error.into());
     }
     fs::remove_dir_all(backup)?;
@@ -1033,43 +1059,54 @@ impl SkillData {
     /// Render the skill as a SKILL.md string with frontmatter and body.
     #[must_use]
     pub fn render(&self, metadata_override: Option<&BTreeMap<String, String>>) -> String {
-        let mut combined_metadata = self.metadata.clone();
-        if let Some(metadata_override) = metadata_override {
-            for (key, value) in metadata_override {
-                combined_metadata.insert(key.clone(), value.clone());
+        let combined_metadata = match metadata_override {
+            Some(overrides) if !overrides.is_empty() => {
+                let mut combined = self.metadata.clone();
+                for (key, value) in overrides {
+                    combined.insert(key.clone(), value.clone());
+                }
+                combined
             }
-        }
+            _ => self.metadata.clone(),
+        };
 
-        let mut frontmatter = vec![
+        let frontmatter = self.build_frontmatter_lines(&combined_metadata);
+        let total_estimate =
+            frontmatter.iter().map(|s| s.len() + 1).sum::<usize>() + self.content.len() + 8;
+        let mut output = String::with_capacity(total_estimate);
+        output.push_str("---\n");
+        for line in &frontmatter {
+            output.push_str(line);
+            output.push('\n');
+        }
+        output.push_str("---\n");
+        if !self.content.is_empty() {
+            output.push_str(&self.content);
+        }
+        output
+    }
+
+    fn build_frontmatter_lines(&self, combined_metadata: &BTreeMap<String, String>) -> Vec<String> {
+        let mut lines = vec![
             format!("name: {}", format_scalar(&self.name)),
             format!("description: {}", format_scalar(&self.description)),
         ];
         if let Some(license) = self.license.as_ref() {
-            frontmatter.push(format!("license: {}", format_scalar(license)));
+            lines.push(format!("license: {}", format_scalar(license)));
         }
         if let Some(compatibility) = self.compatibility.as_ref() {
-            frontmatter.push(format!("compatibility: {}", format_scalar(compatibility)));
+            lines.push(format!("compatibility: {}", format_scalar(compatibility)));
         }
         if let Some(allowed_tools) = self.allowed_tools.as_ref() {
-            frontmatter.push(format!("allowed-tools: {}", format_scalar(allowed_tools)));
+            lines.push(format!("allowed-tools: {}", format_scalar(allowed_tools)));
         }
         if !combined_metadata.is_empty() {
-            frontmatter.push("metadata:".to_string());
+            lines.push("metadata:".to_string());
             for (key, value) in combined_metadata {
-                frontmatter.push(format!("  {key}: {}", format_scalar(&value)));
+                lines.push(format!("  {key}: {}", format_scalar(value)));
             }
         }
-
-        let header = std::iter::once("---".to_string())
-            .chain(frontmatter)
-            .chain(std::iter::once("---".to_string()))
-            .collect::<Vec<_>>()
-            .join("\n");
-        if self.content.is_empty() {
-            format!("{header}\n")
-        } else {
-            format!("{header}\n{}", self.content)
-        }
+        lines
     }
 
     /// Write the skill to disk (native filesystem), returning the installed skill.
@@ -1117,8 +1154,13 @@ impl SkillData {
         )?;
         let replacement = temporary_sibling(&root)?;
         if let Err(error) = self.write_to_root_in(file_system, &replacement, false) {
-            if matches!(file_system.exists(&replacement), Ok(true)) {
-                let _ = file_system.remove_tree(&replacement);
+            if matches!(file_system.exists(&replacement), Ok(true))
+                && let Err(cleanup_error) = file_system.remove_tree(&replacement)
+            {
+                eprintln!(
+                    "skilly: failed to clean up temporary replacement {}: {cleanup_error}",
+                    replacement.display()
+                );
             }
             return Err(error);
         }
@@ -1306,6 +1348,7 @@ pub fn require_installed_skill_in(
     let matches = skills
         .into_iter()
         .filter(|skill| skill.name == name)
+        .take(2)
         .collect::<Vec<_>>();
     match matches.len() {
         0 => bail!("installed skill not found: {name}"),

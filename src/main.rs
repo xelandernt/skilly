@@ -1,4 +1,4 @@
-//! Skilly CLI binary.
+//! Skilly CLI binary — delegates to the library crate via shared modules.
 
 mod cli;
 mod client;

@@ -9,7 +9,7 @@ use crate::cli::args::{
 use crate::cli::tui::{
     DownloadableSkillMatch, InstalledSkillDiscoveryReport, InvalidInstalledSkill, ListedSkillEntry,
     MenuItemStatus, MenuItemUi, MenuUi, MultiSelectMenuResult, MultiSelectResult, SelectMenuResult,
-    TerminalSession, interactive_terminal, multi_select_menu, parse_metadata, run_create_tui,
+    TerminalSession, is_interactive_terminal, multi_select_menu, parse_metadata, run_create_tui,
     select_menu, show_loading_message,
 };
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery, SkillsMpSkill};
@@ -175,7 +175,7 @@ fn client_config(
 }
 
 fn run_create(directory: &Path, mut options: CreateOptions) -> Result<()> {
-    let interactive = interactive_terminal();
+    let interactive = is_interactive_terminal();
     if interactive {
         let Some(submission) = run_create_tui(directory, options)? else {
             println!("Cancelled without creating skill");
@@ -262,7 +262,7 @@ fn run_scan(
         println!("All discovered dependency skills are already installed");
         return Ok(());
     }
-    if !interactive_terminal() {
+    if !is_interactive_terminal() {
         println!("Dependency skills requiring action:");
         for item in actionable {
             println!("{}", scan_choice_label(&item));
@@ -522,14 +522,14 @@ fn run_download(
     let mut skills = discover_github_skills(&client, github_url, SKILLY_SOURCE_GITHUB, None)?;
     let directory = destination.resolve()?;
     if all && skill_name.is_some() && skills.len() != 1 {
-        bail!("Use either --skill-name or --all when downloading multiple skills");
+        bail!("use either --skill-name or --all when downloading multiple skills");
     }
-    let interactive_destinations = if interactive_terminal() {
+    let interactive_destinations = if is_interactive_terminal() {
         destination.resolve_interactive_destinations()?
     } else {
         Vec::new()
     };
-    if interactive_terminal() && (skills.len() > 1 || interactive_destinations.len() > 1) {
+    if is_interactive_terminal() && (skills.len() > 1 || interactive_destinations.len() > 1) {
         if skills.len() > 1 && !all && skill_name.is_none() {
             return download_selected_skills(
                 &client,
@@ -540,7 +540,7 @@ fn run_download(
         }
         if let Some(skill_name) = skill_name {
             if skills.len() != 1 && all {
-                bail!("Custom skill names can only be used when downloading a single skill");
+                bail!("custom skill names can only be used when downloading a single skill");
             }
             if skills.len() != 1 {
                 skills = vec![select_download_skill(&skills, skill_name)?];
@@ -549,8 +549,8 @@ fn run_download(
         return download_selected_skills(&client, &interactive_destinations, overwrite, &skills);
     }
     if skills.len() > 1 && !all && skill_name.is_none() {
-        if !interactive_terminal() {
-            bail!("Multiple skills found; use --skill-name <name> or --all");
+        if !is_interactive_terminal() {
+            bail!("multiple skills found; use --skill-name <name> or --all");
         }
         return download_selected_skills(
             &client,
@@ -565,7 +565,7 @@ fn run_download(
     }
     if let Some(skill_name) = skill_name {
         if skills.len() != 1 && all {
-            bail!("Custom skill names can only be used when downloading a single skill");
+            bail!("custom skill names can only be used when downloading a single skill");
         }
         if skills.len() != 1 {
             skills = vec![select_download_skill(&skills, skill_name)?];
@@ -880,7 +880,7 @@ fn download_selected_skills(
 }
 
 fn run_list(destination: &DestinationArgs, config: ClientConfig) -> Result<()> {
-    if !interactive_terminal() {
+    if !is_interactive_terminal() {
         let directory = destination.resolve()?;
         let report = discover_installed_skills_report(&directory)?;
         let entries = listed_skill_entries(report);
@@ -1443,7 +1443,7 @@ fn run_skillsmp_search(
         println!("No SkillsMP skills found for {query}");
         return Ok(());
     }
-    if !interactive_terminal() {
+    if !is_interactive_terminal() {
         for skill in response.data.skills {
             println!("{} [{}] ({})", skill.name, skill.author, skill.id);
         }
@@ -1644,7 +1644,7 @@ fn run_skillsmp_search(
 }
 
 fn run_skillsmp_list(destination: &DestinationArgs, config: ClientConfig) -> Result<()> {
-    if !interactive_terminal() {
+    if !is_interactive_terminal() {
         let directory = destination.resolve()?;
         let skills = discover_installed_skills_report(&directory)?
             .valid_skills
@@ -2267,7 +2267,7 @@ fn select_download_skill(skills: &[SkillData], skill_name: &str) -> Result<Skill
     match matches.len() {
         1 => Ok(matches[0].clone()),
         0 => bail!(
-            "Downloadable skill not found: {}. Available: {}",
+            "downloadable skill not found: {}. available: {}",
             skill_name,
             skills
                 .iter()
@@ -2275,7 +2275,7 @@ fn select_download_skill(skills: &[SkillData], skill_name: &str) -> Result<Skill
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        _ => bail!("Multiple downloadable skills match name: {skill_name}"),
+        _ => bail!("multiple downloadable skills match name: {skill_name}"),
     }
 }
 

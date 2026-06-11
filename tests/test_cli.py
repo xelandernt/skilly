@@ -206,7 +206,7 @@ def test_run_cli_create_rejects_invalid_name_without_writing(
 
     assert exit_code == 1
     assert not (tmp_path.parent / "unsafe").exists()
-    assert "Invalid skill name" in capfd.readouterr().err
+    assert "invalid skill name" in capfd.readouterr().err
 
 
 def test_run_cli_list_prints_plain_output_without_terminal(
