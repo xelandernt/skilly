@@ -1362,3 +1362,525 @@ where
         }
     }
 }
+
+/// Interactive configuration TUI that lets users select which directories skilly
+/// should manage. Two tabs: Global Directories and Local Directories.
+pub(crate) fn run_configure_tui(config: &crate::config::SkillyConfig) -> Result<Option<PathBuf>> {
+    use crate::config::BUILTIN_KEYS;
+
+    let global_builtins: Vec<&str> = BUILTIN_KEYS
+        .iter()
+        .filter(|k| k.ends_with("_global"))
+        .copied()
+        .collect();
+    let local_builtins: Vec<&str> = BUILTIN_KEYS
+        .iter()
+        .filter(|k| k.ends_with("_local"))
+        .copied()
+        .collect();
+
+    let mut global_enabled: Vec<bool> = global_builtins
+        .iter()
+        .map(|k| config.enabled_builtin.iter().any(|e| e == k))
+        .collect();
+    let mut local_enabled: Vec<bool> = local_builtins
+        .iter()
+        .map(|k| config.enabled_builtin.iter().any(|e| e == k))
+        .collect();
+
+    let mut custom_global: Vec<String> = config.custom_global_dirs.clone();
+    let mut custom_local: Vec<String> = config.custom_local_dirs.clone();
+
+    let mut session = TerminalSession::new()?;
+    let mut active_tab: usize = 0; // 0 = Global, 1 = Local
+    let mut selected = 0usize;
+    let mut status_message: Option<String> = None;
+    let mut input_buffer: Option<TextBuffer> = None;
+
+    let tabs = vec![
+        MenuTabUi {
+            label: "Global Directories".to_string(),
+            color: Color::Cyan,
+            dimmed: false,
+        },
+        MenuTabUi {
+            label: "Local Directories".to_string(),
+            color: Color::Yellow,
+            dimmed: false,
+        },
+    ];
+
+    let help_text =
+        "\u{2191}\u{2193} move | Tab switch | Space toggle | Enter add | ^S save | Esc cancel";
+
+    loop {
+        // Build items snapshot for this frame
+        let items = build_configure_items(
+            active_tab,
+            &global_builtins,
+            &local_builtins,
+            &global_enabled,
+            &local_enabled,
+            &custom_global,
+            &custom_local,
+        );
+        let selectable_count = if active_tab == 0 {
+            let builtin_end = global_builtins.len();
+            if custom_global.is_empty() {
+                builtin_end
+            } else {
+                builtin_end + custom_global.len()
+            }
+        } else {
+            let builtin_end = local_builtins.len();
+            if custom_local.is_empty() {
+                builtin_end
+            } else {
+                builtin_end + custom_local.len()
+            }
+        };
+
+        if selected >= selectable_count.saturating_add(2).min(items.len()) {
+            selected = items.len().saturating_sub(1);
+        }
+
+        // --- Render ---
+        session.terminal.draw(|frame| {
+            let layout = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Length(if tabs.len() > 1 { 1 } else { 0 }),
+                    Constraint::Min(3),
+                    Constraint::Length(if status_message.is_some() { 1 } else { 0 }),
+                    Constraint::Length(if input_buffer.is_some() { 3 } else { 1 }),
+                ])
+                .split(frame.area());
+            let title_area = layout[0];
+            let tabs_area = layout[1];
+            let content_area = layout[2];
+            let status_area = layout[3];
+            let bottom_area = layout[4];
+
+            frame.render_widget(
+                Paragraph::new("Configure — skilly directories")
+                    .style(Style::default().add_modifier(Modifier::BOLD)),
+                title_area,
+            );
+            if tabs.len() > 1 {
+                render_menu_tabs(frame, tabs_area, &tabs, active_tab);
+            }
+
+            let panes = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(content_area);
+
+            let display_items: Vec<ListItem<'_>> = items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| {
+                    let style = menu_item_style(item);
+                    let line = if i == selected && input_buffer.is_none() {
+                        Line::from(Span::styled(format!("\u{276f} {}", item.label), style))
+                    } else {
+                        Line::from(Span::styled(item.label.clone(), style))
+                    };
+                    ListItem::new(line)
+                })
+                .collect();
+
+            let mut list_state = ListState::default();
+            if input_buffer.is_none() {
+                list_state.select(Some(selected));
+            }
+
+            let list = List::new(display_items)
+                .block(Block::default().borders(Borders::ALL).title("Directories"))
+                .highlight_style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("");
+            frame.render_stateful_widget(list, panes[0], &mut list_state);
+
+            let preview_lines: Vec<Line<'_>> = items
+                .get(selected)
+                .map(|item| {
+                    if item.preview_lines.is_empty() {
+                        vec![Line::from("No item selected.")]
+                    } else {
+                        item.preview_lines
+                            .iter()
+                            .map(|s| Line::from(s.clone()))
+                            .collect()
+                    }
+                })
+                .unwrap_or_else(|| vec![Line::from("No item selected.")]);
+
+            let preview = Paragraph::new(preview_lines)
+                .block(Block::default().borders(Borders::ALL).title("Preview"))
+                .wrap(Wrap { trim: false });
+            frame.render_widget(preview, panes[1]);
+
+            if let Some(ref msg) = status_message {
+                frame.render_widget(
+                    Paragraph::new(msg.clone()).style(Style::default().fg(Color::Yellow)),
+                    status_area,
+                );
+            }
+
+            if let Some(ref buf) = input_buffer {
+                let input_layout = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Length(1), Constraint::Length(1)])
+                    .split(bottom_area);
+                frame.render_widget(
+                    Paragraph::new("Enter path (Enter confirm, Esc cancel):")
+                        .style(Style::default().fg(Color::Cyan)),
+                    input_layout[0],
+                );
+                let input_text = buf.text();
+                frame.render_widget(
+                    Paragraph::new(format!("> {input_text}_")).style(Style::default()),
+                    input_layout[1],
+                );
+            } else {
+                frame.render_widget(
+                    Paragraph::new(help_text).style(Style::default().fg(Color::Gray)),
+                    bottom_area,
+                );
+            }
+        })?;
+
+        // --- Handle input ---
+        if let Some(ref mut buf) = input_buffer {
+            let Event::Key(key) = event::read()? else {
+                continue;
+            };
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+            match key.code {
+                KeyCode::Esc => {
+                    input_buffer = None;
+                    status_message = None;
+                }
+                KeyCode::Enter => {
+                    let path = buf.text().trim().to_string();
+                    if path.is_empty() {
+                        status_message = Some("path must not be empty".to_string());
+                        continue;
+                    }
+                    if active_tab == 0 {
+                        if path.starts_with('/') || path.starts_with('~') {
+                            if !custom_global.contains(&path) {
+                                custom_global.push(path);
+                            }
+                            input_buffer = None;
+                            status_message = Some("Custom global directory added".to_string());
+                        } else {
+                            status_message = Some(
+                                "global directories must be absolute (start with / or ~)"
+                                    .to_string(),
+                            );
+                        }
+                    } else {
+                        if path.starts_with('/') || path.starts_with('~') {
+                            status_message = Some(
+                                "local directories must be relative (no leading / or ~)"
+                                    .to_string(),
+                            );
+                        } else {
+                            if !custom_local.contains(&path) {
+                                custom_local.push(path);
+                            }
+                            input_buffer = None;
+                            status_message = Some("Custom local directory added".to_string());
+                        }
+                    }
+                    // Position on "Add custom..." after adding
+                    let new_selectable = if active_tab == 0 {
+                        let builtin_end = global_builtins.len();
+                        if custom_global.is_empty() {
+                            builtin_end
+                        } else {
+                            builtin_end + custom_global.len()
+                        }
+                    } else {
+                        let builtin_end = local_builtins.len();
+                        if custom_local.is_empty() {
+                            builtin_end
+                        } else {
+                            builtin_end + custom_local.len()
+                        }
+                    };
+                    selected = new_selectable.saturating_add(1);
+                }
+                KeyCode::Backspace => {
+                    buf.backspace();
+                }
+                KeyCode::Char(c) => {
+                    buf.insert_char(c);
+                }
+                _ => {}
+            }
+        } else {
+            let Event::Key(key) = event::read()? else {
+                continue;
+            };
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+
+            // Ctrl+S save
+            if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                let mut new_config = config.clone();
+                new_config.enabled_builtin.clear();
+                for (i, key) in global_builtins.iter().enumerate() {
+                    if global_enabled[i] {
+                        new_config.enabled_builtin.push(key.to_string());
+                    }
+                }
+                for (i, key) in local_builtins.iter().enumerate() {
+                    if local_enabled[i] {
+                        new_config.enabled_builtin.push(key.to_string());
+                    }
+                }
+                new_config.custom_global_dirs = custom_global.clone();
+                new_config.custom_local_dirs = custom_local.clone();
+                new_config.save()?;
+                return Ok(Some(crate::config::SkillyConfig::config_path()?));
+            }
+
+            match key.code {
+                KeyCode::Up => {
+                    selected = crate::cli::args::previous_selectable_index(&items, selected);
+                }
+                KeyCode::Down => {
+                    selected = crate::cli::args::next_selectable_index(&items, selected);
+                }
+                KeyCode::Tab => {
+                    active_tab = (active_tab + 1) % tabs.len();
+                    selected = 0;
+                    status_message = None;
+                }
+                KeyCode::BackTab => {
+                    active_tab = (active_tab + tabs.len() - 1) % tabs.len();
+                    selected = 0;
+                    status_message = None;
+                }
+                KeyCode::Esc => return Ok(None),
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    return Ok(None);
+                }
+                KeyCode::Char(' ') | KeyCode::Enter => {
+                    // Toggle checkbox (Space or Enter)
+                    let add_custom_index = items.len().saturating_sub(1);
+                    if selected == add_custom_index {
+                        // "Add custom..." is always the last item
+                        input_buffer = Some(TextBuffer::from_text(""));
+                        status_message = None;
+                    } else {
+                        let toggled = toggle_configure_selection(
+                            active_tab,
+                            selected,
+                            &mut global_enabled,
+                            &mut local_enabled,
+                            &mut custom_global,
+                            &mut custom_local,
+                        );
+                        if let Some(msg) = toggled {
+                            status_message = Some(msg);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Build the list of [`MenuItemUi`] for a configure tab.
+fn build_configure_items(
+    active_tab: usize,
+    global_builtins: &[&str],
+    local_builtins: &[&str],
+    global_enabled: &[bool],
+    local_enabled: &[bool],
+    custom_global: &[String],
+    custom_local: &[String],
+) -> Vec<MenuItemUi> {
+    let mut items = Vec::new();
+    if active_tab == 0 {
+        for (i, key) in global_builtins.iter().enumerate() {
+            let label = builtin_key_to_label(key);
+            let preview = builtin_preview_line(key);
+            items.push(MenuItemUi {
+                label: if global_enabled[i] {
+                    format!("[\u{2713}] {label}")
+                } else {
+                    format!("[ ] {label}")
+                },
+                preview_lines: vec![preview],
+                status: if global_enabled[i] {
+                    MenuItemStatus::Installed
+                } else {
+                    MenuItemStatus::Default
+                },
+                selectable: true,
+            });
+        }
+        if !custom_global.is_empty() {
+            items.push(MenuItemUi {
+                label: "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
+                    .to_string(),
+                preview_lines: vec![],
+                status: MenuItemStatus::Disabled,
+                selectable: false,
+            });
+            for dir in custom_global {
+                items.push(MenuItemUi {
+                    label: format!("[\u{2713}] {dir}"),
+                    preview_lines: vec![format!("Path: {dir}")],
+                    status: MenuItemStatus::Installed,
+                    selectable: true,
+                });
+            }
+        }
+    } else {
+        for (i, key) in local_builtins.iter().enumerate() {
+            let label = builtin_key_to_label(key);
+            let preview = builtin_preview_line(key);
+            items.push(MenuItemUi {
+                label: if local_enabled[i] {
+                    format!("[\u{2713}] {label}")
+                } else {
+                    format!("[ ] {label}")
+                },
+                preview_lines: vec![preview],
+                status: if local_enabled[i] {
+                    MenuItemStatus::Installed
+                } else {
+                    MenuItemStatus::Default
+                },
+                selectable: true,
+            });
+        }
+        if !custom_local.is_empty() {
+            items.push(MenuItemUi {
+                label: "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
+                    .to_string(),
+                preview_lines: vec![],
+                status: MenuItemStatus::Disabled,
+                selectable: false,
+            });
+            for dir in custom_local {
+                items.push(MenuItemUi {
+                    label: format!("[\u{2713}] {dir}"),
+                    preview_lines: vec![format!("Path (relative to cwd): {dir}")],
+                    status: MenuItemStatus::Installed,
+                    selectable: true,
+                });
+            }
+        }
+    }
+    items.push(MenuItemUi {
+        label: "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
+            .to_string(),
+        preview_lines: vec![],
+        status: MenuItemStatus::Disabled,
+        selectable: false,
+    });
+    items.push(MenuItemUi {
+        label: "Add custom...".to_string(),
+        preview_lines: vec![if active_tab == 0 {
+            "Enter an absolute path (e.g. /opt/skills or ~/skills).".to_string()
+        } else {
+            "Enter a relative path (e.g. .agents/skills).".to_string()
+        }],
+        status: MenuItemStatus::Default,
+        selectable: true,
+    });
+    items
+}
+
+/// Toggle a checkbox in the configure TUI. Returns an optional status message.
+/// Handles built-in enable/disable and custom dir removal.
+/// The `+1` offset on custom-dir bounds accounts for the separator row between
+/// built-in entries and custom entries.
+fn toggle_configure_selection(
+    active_tab: usize,
+    selected: usize,
+    global_enabled: &mut [bool],
+    local_enabled: &mut [bool],
+    custom_global: &mut Vec<String>,
+    custom_local: &mut Vec<String>,
+) -> Option<String> {
+    if active_tab == 0 {
+        let builtin_count = global_enabled.len();
+        if selected < builtin_count {
+            global_enabled[selected] = !global_enabled[selected];
+            None
+        } else {
+            let custom_start = builtin_count + 1; // +1 for separator
+            let custom_end = custom_start + custom_global.len();
+            if selected >= custom_start && selected < custom_end {
+                let idx = selected - custom_start;
+                let removed = custom_global.remove(idx);
+                Some(format!("Custom global directory removed: {removed}"))
+            } else {
+                None
+            }
+        }
+    } else {
+        let builtin_count = local_enabled.len();
+        if selected < builtin_count {
+            local_enabled[selected] = !local_enabled[selected];
+            None
+        } else {
+            let custom_start = builtin_count + 1;
+            let custom_end = custom_start + custom_local.len();
+            if selected >= custom_start && selected < custom_end {
+                let idx = selected - custom_start;
+                let removed = custom_local.remove(idx);
+                Some(format!("Custom local directory removed: {removed}"))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Convert a built-in key like `"agents_global"` to a display label like `"agents (global)"`.
+fn builtin_key_to_label(key: &str) -> String {
+    if let Some(stripped) = key.strip_suffix("_global") {
+        format!("{stripped} (global)")
+    } else if let Some(stripped) = key.strip_suffix("_local") {
+        format!("{stripped} (local)")
+    } else {
+        key.to_string()
+    }
+}
+
+/// Generate a preview line describing the resolved destination path for a built-in key.
+fn builtin_preview_line(key: &str) -> String {
+    use crate::core::{SkillDirectoryFlavor, skills_directory};
+
+    let (flavor, global) = match key {
+        "agents_global" => (SkillDirectoryFlavor::Agents, true),
+        "agents_local" => (SkillDirectoryFlavor::Agents, false),
+        "claude_global" => (SkillDirectoryFlavor::Claude, true),
+        "claude_local" => (SkillDirectoryFlavor::Claude, false),
+        "codex_global" => (SkillDirectoryFlavor::Codex, true),
+        "codex_local" => (SkillDirectoryFlavor::Codex, false),
+        "copilot_global" => (SkillDirectoryFlavor::Copilot, true),
+        "copilot_local" => (SkillDirectoryFlavor::Copilot, false),
+        _ => return format!("Unknown key: {key}"),
+    };
+    match skills_directory(flavor, global) {
+        Ok(path) => format!("Resolves to: {}", path.display()),
+        Err(e) => format!("Error resolving: {e}"),
+    }
+}

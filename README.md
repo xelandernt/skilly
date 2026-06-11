@@ -25,6 +25,7 @@ Manage [Agent Skills](https://agentskills.io/specification) from the command lin
   - [Install Dependency Skills](#install-dependency-skills)
   - [Install GitHub Skills](#install-github-skills)
   - [Destinations](#destinations)
+  - [Configure Destinations](#configure-destinations)
   - [GitHub Authentication](#github-authentication)
 - [Python API](#python-api)
 - [Development](#development)
@@ -79,6 +80,7 @@ uvx skilly update                     # Preview available updates
 | `remove <name>` | Remove an installed skill by directory name |
 | `skillsmp search <query>` | Search SkillsMP and install a selected result |
 | `create` | Create a valid skill through a terminal wizard or explicit options |
+| `configure` | Set which directories skilly manages via TUI or CLI flags |
 
 Run `skilly <command> --help` for all options.
 
@@ -159,6 +161,39 @@ export SKILLY_DIRECTORY="$HOME/.config/skilly/skills"
 ```
 
 `--directory` overrides all other destination options and `SKILLY_DIRECTORY`.
+
+### Configure Destinations
+
+`skilly configure` lets you choose which directories skilly should manage. Interactive terminals open a two-tab TUI (Global / Local). Non-interactive runs accept flags.
+
+```shell
+uvx skilly configure                 # Open the TUI
+uvx skilly configure --show          # Print current config as TOML
+uvx skilly configure --reset         # Restore defaults
+```
+
+Add or remove custom directories:
+
+```shell
+uvx skilly configure --add-global /opt/skills
+uvx skilly configure --add-local .project/skills
+uvx skilly configure --remove-global /opt/skills
+uvx skilly configure --remove-local .project/skills
+```
+
+Enable or disable built-in destinations (valid keys: `agents_global`, `agents_local`, `claude_global`, `claude_local`, `codex_global`, `codex_local`, `copilot_global`, `copilot_local`):
+
+```shell
+uvx skilly configure --enable agents_global --disable copilot_global
+```
+
+Configuration is stored in `~/.skilly.toml`:
+
+```toml
+enabled_builtin = ["agents_global", "agents_local", ...]
+custom_global_dirs = []
+custom_local_dirs = []
+```
 
 ### GitHub Authentication
 

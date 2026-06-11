@@ -6,6 +6,7 @@
 
 mod cli;
 mod client;
+mod config;
 mod core;
 
 #[cfg(feature = "python-bindings")]

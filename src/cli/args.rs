@@ -1,10 +1,11 @@
+use crate::config::SkillyConfig;
 use crate::core::{
     NamedSelection, ScanDependencySelection, SkillDirectoryFlavor, absolute_path, skills_directory,
 };
 use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand};
 use ratatui::style::Color;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::tui::{MenuItemUi, MenuTabUi};
 
@@ -12,6 +13,12 @@ use super::tui::{MenuItemUi, MenuTabUi};
 pub(crate) enum DestinationScope {
     Local,
     Global,
+}
+
+impl From<bool> for DestinationScope {
+    fn from(global: bool) -> Self {
+        if global { Self::Global } else { Self::Local }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +133,59 @@ pub(crate) enum Commands {
     Skillsmp(SkillsMpCommands),
     #[command(about = "Utility commands for dependency and virtual environment inspection.")]
     Util(UtilCommands),
+    #[command(
+        about = "Configure which directories skilly manages. Opens a TUI when run interactively without flags."
+    )]
+    Configure {
+        #[arg(
+            long,
+            short = 's',
+            alias = "list",
+            help = "Print the current configuration as TOML and exit."
+        )]
+        show: bool,
+        #[arg(
+            long,
+            help = "Restore the default configuration (all built-in destinations, no custom dirs)."
+        )]
+        reset: bool,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Add an absolute path (or ~-prefixed) as a custom global directory."
+        )]
+        add_global: Vec<String>,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Remove a custom global directory by its path."
+        )]
+        remove_global: Vec<String>,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Add a relative path as a custom local directory."
+        )]
+        add_local: Vec<String>,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Remove a custom local directory by its path."
+        )]
+        remove_local: Vec<String>,
+        #[arg(
+            long,
+            value_name = "KEY",
+            help = "Enable a built-in destination (e.g. agents_global, claude_local)."
+        )]
+        enable: Vec<String>,
+        #[arg(
+            long,
+            value_name = "KEY",
+            help = "Disable a built-in destination (e.g. copilot_global, codex_local)."
+        )]
+        disable: Vec<String>,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -258,7 +318,10 @@ impl DestinationArgs {
         absolute_path(&skills_directory(flavor, self.global)?)
     }
 
-    pub(crate) fn resolve_interactive_destinations(&self) -> Result<Vec<ResolvedDestination>> {
+    pub(crate) fn resolve_interactive_destinations(
+        &self,
+        config: &SkillyConfig,
+    ) -> Result<Vec<ResolvedDestination>> {
         if let Some(directory) = self.directory.as_ref() {
             return Ok(vec![ResolvedDestination {
                 label: "custom".to_string(),
@@ -273,7 +336,7 @@ impl DestinationArgs {
                 self.selected_scope(),
             )?]);
         }
-        all_interactive_destinations()
+        all_interactive_destinations(config)
     }
 
     fn selected_flavor(&self) -> SkillDirectoryFlavor {
@@ -297,19 +360,55 @@ impl DestinationArgs {
     }
 }
 
-pub(crate) fn all_interactive_destinations() -> Result<Vec<ResolvedDestination>> {
+pub(crate) fn all_interactive_destinations(
+    config: &SkillyConfig,
+) -> Result<Vec<ResolvedDestination>> {
     let mut destinations = Vec::new();
-    for scope in [DestinationScope::Local, DestinationScope::Global] {
-        for flavor in [
-            SkillDirectoryFlavor::Agents,
-            SkillDirectoryFlavor::Claude,
-            SkillDirectoryFlavor::Codex,
-            SkillDirectoryFlavor::Copilot,
-        ] {
-            destinations.push(resolved_destination(flavor, scope)?);
+    for key in &config.enabled_builtin {
+        if let Some((flavor, global)) = builtin_key_to_flavor_scope(key) {
+            destinations.push(resolved_destination(flavor, global.into())?);
         }
     }
+    for dir in &config.custom_global_dirs {
+        destinations.push(custom_destination(dir, true)?);
+    }
+    for dir in &config.custom_local_dirs {
+        destinations.push(custom_destination(dir, false)?);
+    }
     Ok(destinations)
+}
+
+/// Map a built-in key string (e.g. `"agents_global"`) to its flavor and scope.
+fn builtin_key_to_flavor_scope(key: &str) -> Option<(SkillDirectoryFlavor, bool)> {
+    match key {
+        "agents_global" => Some((SkillDirectoryFlavor::Agents, true)),
+        "agents_local" => Some((SkillDirectoryFlavor::Agents, false)),
+        "claude_global" => Some((SkillDirectoryFlavor::Claude, true)),
+        "claude_local" => Some((SkillDirectoryFlavor::Claude, false)),
+        "codex_global" => Some((SkillDirectoryFlavor::Codex, true)),
+        "codex_local" => Some((SkillDirectoryFlavor::Codex, false)),
+        "copilot_global" => Some((SkillDirectoryFlavor::Copilot, true)),
+        "copilot_local" => Some((SkillDirectoryFlavor::Copilot, false)),
+        _ => None,
+    }
+}
+
+/// Create a [`ResolvedDestination`] for a custom directory path.
+fn custom_destination(path: &str, global: bool) -> Result<ResolvedDestination> {
+    let label = PathBuf::from(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string());
+    let resolved = if global {
+        absolute_path(Path::new(path))?
+    } else {
+        PathBuf::from(path)
+    };
+    Ok(ResolvedDestination {
+        label,
+        path: resolved,
+        color: Color::White,
+    })
 }
 
 fn resolved_destination(

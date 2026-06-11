@@ -2,6 +2,7 @@
 
 mod cli;
 mod client;
+mod config;
 mod core;
 
 fn main() {

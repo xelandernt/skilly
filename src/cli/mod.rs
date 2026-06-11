@@ -9,10 +9,11 @@ use crate::cli::args::{
 use crate::cli::tui::{
     DownloadableSkillMatch, InstalledSkillDiscoveryReport, InvalidInstalledSkill, ListedSkillEntry,
     MenuItemStatus, MenuItemUi, MenuUi, MultiSelectMenuResult, MultiSelectResult, SelectMenuResult,
-    TerminalSession, is_interactive_terminal, multi_select_menu, parse_metadata, run_create_tui,
-    select_menu, show_loading_message,
+    TerminalSession, is_interactive_terminal, multi_select_menu, parse_metadata, run_configure_tui,
+    run_create_tui, select_menu, show_loading_message,
 };
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery, SkillsMpSkill};
+use crate::config::SkillyConfig;
 use crate::core::{
     ProjectDependencyOrigin, ProjectEnvironment, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP,
     SKILLY_UNKNOWN_SOURCE, STATUS_INSTALLABLE, STATUS_INSTALLED, STATUS_UPDATABLE,
@@ -39,6 +40,8 @@ pub(crate) const REMOVE_ALL_CHOICE: &str = "remove selected";
 const DEFAULT_HELP_TEXT: &str = "Up/Down move | Tab switch directory | Enter select | Esc cancel";
 const MULTI_SELECT_HELP_TEXT: &str =
     "↑↓ move | Tab switch directory | Space select | A all | Enter action | Esc cancel";
+const CONFIGURE_HINT: &str =
+    "No directories configured. Run 'skilly configure' to set up directories.";
 const DEFAULT_EMPTY_PREVIEW: &str = "No details available.";
 pub(crate) const DEFAULT_CREATE_INSTRUCTIONS: &str =
     "# Instructions\n\nDescribe the procedure this skill should follow.";
@@ -65,6 +68,8 @@ fn try_run(args: Vec<String>) -> Result<i32> {
             return Ok(if error.use_stderr() { 2 } else { 0 });
         }
     };
+
+    let skilly_config = SkillyConfig::load()?;
 
     match cli.command {
         Commands::Create {
@@ -100,7 +105,7 @@ fn try_run(args: Vec<String>) -> Result<i32> {
         Commands::Scan {
             destination,
             dependencies,
-        } => run_scan(&destination, dependencies.selection()?)?,
+        } => run_scan(&destination, dependencies.selection()?, &skilly_config)?,
         Commands::Download {
             github_url,
             destination,
@@ -115,11 +120,16 @@ fn try_run(args: Vec<String>) -> Result<i32> {
             all,
             overwrite,
             client_config(None, None, github_token, None),
+            &skilly_config,
         )?,
         Commands::List {
             destination,
             github_token,
-        } => run_list(&destination, client_config(None, None, github_token, None))?,
+        } => run_list(
+            &destination,
+            client_config(None, None, github_token, None),
+            &skilly_config,
+        )?,
         Commands::Update {
             destination,
             yes,
@@ -144,11 +154,16 @@ fn try_run(args: Vec<String>) -> Result<i32> {
                 &destination,
                 overwrite,
                 client_config(None, None, github_token, None),
+                &skilly_config,
             )?,
             SkillsMpSubcommand::List {
                 destination,
                 github_token,
-            } => run_skillsmp_list(&destination, client_config(None, None, github_token, None))?,
+            } => run_skillsmp_list(
+                &destination,
+                client_config(None, None, github_token, None),
+                &skilly_config,
+            )?,
         },
         Commands::Util(util) => match util.command {
             UtilSubcommand::Dependencies { file, dev, extras } => {
@@ -160,9 +175,113 @@ fn try_run(args: Vec<String>) -> Result<i32> {
             }
             UtilSubcommand::Venv { path, detailed } => run_util_venv(&path, detailed)?,
         },
+        Commands::Configure {
+            show,
+            reset,
+            add_global,
+            remove_global,
+            add_local,
+            remove_local,
+            enable,
+            disable,
+        } => run_configure(
+            &skilly_config,
+            ConfigureFlags {
+                show,
+                reset,
+                add_global,
+                remove_global,
+                add_local,
+                remove_local,
+                enable,
+                disable,
+            },
+        )?,
     }
 
     Ok(0)
+}
+
+struct ConfigureFlags {
+    show: bool,
+    reset: bool,
+    add_global: Vec<String>,
+    remove_global: Vec<String>,
+    add_local: Vec<String>,
+    remove_local: Vec<String>,
+    enable: Vec<String>,
+    disable: Vec<String>,
+}
+
+fn run_configure(skilly_config: &SkillyConfig, flags: ConfigureFlags) -> Result<()> {
+    if flags.reset {
+        let default = SkillyConfig::default();
+        default.save()?;
+        println!("Configuration reset to defaults (saved to ~/.skilly.toml)");
+        return Ok(());
+    }
+
+    let has_modifications = !flags.add_global.is_empty()
+        || !flags.remove_global.is_empty()
+        || !flags.add_local.is_empty()
+        || !flags.remove_local.is_empty()
+        || !flags.enable.is_empty()
+        || !flags.disable.is_empty();
+
+    let config_to_display = if has_modifications {
+        let mut config = skilly_config.clone();
+        for path in &flags.add_global {
+            config.add_global_dir(path)?;
+        }
+        for path in &flags.remove_global {
+            config.remove_global_dir(path)?;
+        }
+        for path in &flags.add_local {
+            config.add_local_dir(path)?;
+        }
+        for path in &flags.remove_local {
+            config.remove_local_dir(path)?;
+        }
+        for key in &flags.disable {
+            config.disable(key)?;
+        }
+        for key in &flags.enable {
+            config.enable(key)?;
+        }
+        config.save()?;
+        config
+    } else {
+        skilly_config.clone()
+    };
+
+    if flags.show {
+        let content = toml::to_string_pretty(&config_to_display)
+            .context("failed to serialize configuration")?;
+        print!("{content}");
+        if has_modifications {
+            println!("Configuration updated (saved to ~/.skilly.toml)");
+        }
+        return Ok(());
+    }
+
+    if has_modifications {
+        println!("Configuration updated (saved to ~/.skilly.toml)");
+        return Ok(());
+    }
+
+    // Interactive terminal: launch TUI
+    if is_interactive_terminal() {
+        if let Some(config_path) = run_configure_tui(skilly_config)? {
+            println!("Configuration saved to {}", config_path.display());
+        }
+        return Ok(());
+    }
+
+    // Non-interactive terminal with no flags: print current config
+    let content =
+        toml::to_string_pretty(skilly_config).context("failed to serialize configuration")?;
+    print!("{content}");
+    Ok(())
 }
 
 fn client_config(
@@ -238,6 +357,7 @@ fn run_create(directory: &Path, mut options: CreateOptions) -> Result<()> {
 fn run_scan(
     destination: &DestinationArgs,
     dependency_selection: ScanDependencySelection,
+    skilly_config: &SkillyConfig,
 ) -> Result<()> {
     let single_directory = destination.resolve()?;
     let environment = ProjectEnvironment::with_paths(
@@ -270,7 +390,11 @@ fn run_scan(
         return Ok(());
     }
 
-    let destinations = destination.resolve_interactive_destinations()?;
+    let destinations = destination.resolve_interactive_destinations(skilly_config)?;
+    if destinations.is_empty() {
+        println!("{CONFIGURE_HINT}");
+        return Ok(());
+    }
     let mut session = TerminalSession::new()?;
     let mut messages = Vec::new();
     let mut status_message = None;
@@ -517,6 +641,7 @@ fn run_download(
     all: bool,
     overwrite: bool,
     config: ClientConfig,
+    skilly_config: &SkillyConfig,
 ) -> Result<()> {
     let client = SkillsMpClient::new(config)?;
     let mut skills = discover_github_skills(&client, github_url, SKILLY_SOURCE_GITHUB, None)?;
@@ -525,7 +650,7 @@ fn run_download(
         bail!("use either --skill-name or --all when downloading multiple skills");
     }
     let interactive_destinations = if is_interactive_terminal() {
-        destination.resolve_interactive_destinations()?
+        destination.resolve_interactive_destinations(skilly_config)?
     } else {
         Vec::new()
     };
@@ -879,7 +1004,11 @@ fn download_selected_skills(
     Ok(())
 }
 
-fn run_list(destination: &DestinationArgs, config: ClientConfig) -> Result<()> {
+fn run_list(
+    destination: &DestinationArgs,
+    config: ClientConfig,
+    skilly_config: &SkillyConfig,
+) -> Result<()> {
     if !is_interactive_terminal() {
         let directory = destination.resolve()?;
         let report = discover_installed_skills_report(&directory)?;
@@ -894,7 +1023,11 @@ fn run_list(destination: &DestinationArgs, config: ClientConfig) -> Result<()> {
         return Ok(());
     }
 
-    let destinations = destination.resolve_interactive_destinations()?;
+    let destinations = destination.resolve_interactive_destinations(skilly_config)?;
+    if destinations.is_empty() {
+        println!("{CONFIGURE_HINT}");
+        return Ok(());
+    }
     let client = SkillsMpClient::new(config)?;
     let mut session = TerminalSession::new()?;
     let mut messages = Vec::new();
@@ -1436,6 +1569,7 @@ fn run_skillsmp_search(
     destination: &DestinationArgs,
     overwrite: bool,
     config: ClientConfig,
+    skilly_config: &SkillyConfig,
 ) -> Result<()> {
     let client = SkillsMpClient::new(config.clone())?;
     let response = client.search(&SkillsMpSearchQuery::new(query))?;
@@ -1450,7 +1584,11 @@ fn run_skillsmp_search(
         return Ok(());
     }
 
-    let destinations = destination.resolve_interactive_destinations()?;
+    let destinations = destination.resolve_interactive_destinations(skilly_config)?;
+    if destinations.is_empty() {
+        println!("{CONFIGURE_HINT}");
+        return Ok(());
+    }
     let mut session = TerminalSession::new()?;
     let mut cache = std::collections::BTreeMap::<String, SkillData>::new();
     let mut messages = Vec::new();
@@ -1643,7 +1781,11 @@ fn run_skillsmp_search(
     Ok(())
 }
 
-fn run_skillsmp_list(destination: &DestinationArgs, config: ClientConfig) -> Result<()> {
+fn run_skillsmp_list(
+    destination: &DestinationArgs,
+    config: ClientConfig,
+    skilly_config: &SkillyConfig,
+) -> Result<()> {
     if !is_interactive_terminal() {
         let directory = destination.resolve()?;
         let skills = discover_installed_skills_report(&directory)?
@@ -1664,7 +1806,11 @@ fn run_skillsmp_list(destination: &DestinationArgs, config: ClientConfig) -> Res
         return Ok(());
     }
 
-    let destinations = destination.resolve_interactive_destinations()?;
+    let destinations = destination.resolve_interactive_destinations(skilly_config)?;
+    if destinations.is_empty() {
+        println!("{CONFIGURE_HINT}");
+        return Ok(());
+    }
     let client = SkillsMpClient::new(config)?;
     let mut session = TerminalSession::new()?;
     let mut messages = Vec::new();

@@ -501,3 +501,142 @@ Body
     assert exit_code == 0
     assert not (install_directory / "removable-skill").exists()
     assert "Removed removable-skill" in capfd.readouterr().out
+
+
+# ── configure command tests ────────────────────────────────────────────
+
+
+def test_configure_help_shows_flags(capfd) -> None:
+    exit_code = run_cli(["configure", "--help"])
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "--show" in output
+    assert "--reset" in output
+    assert "--add-global" in output
+    assert "--remove-global" in output
+    assert "--add-local" in output
+    assert "--remove-local" in output
+    assert "--enable" in output
+    assert "--disable" in output
+
+
+def test_configure_show_prints_toml(capfd, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # Start with default config (file doesn't exist yet)
+    exit_code = run_cli(["configure", "--show"])
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "enabled_builtin" in output
+    assert "agents_global" in output
+    assert "custom_global_dirs" in output
+    assert "custom_local_dirs" in output
+
+
+def test_configure_add_global_and_show(capfd, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    exit_code = run_cli(["configure", "--add-global", "/opt/test-skills", "--show"])
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "/opt/test-skills" in output
+
+
+def test_configure_add_local_and_show(capfd, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    exit_code = run_cli(["configure", "--add-local", ".custom/skills", "--show"])
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert ".custom/skills" in output
+
+
+def test_configure_add_local_rejects_absolute(
+    capfd, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    exit_code = run_cli(["configure", "--add-local", "/bad/path"])
+
+    assert exit_code == 1
+    assert "relative path" in capfd.readouterr().err.lower()
+
+
+def test_configure_enable_disable_builtin(capfd, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # Disable all built-ins, then enable one
+    keys = [
+        "agents_global",
+        "agents_local",
+        "claude_global",
+        "claude_local",
+        "codex_global",
+        "codex_local",
+        "copilot_global",
+        "copilot_local",
+    ]
+    args = ["configure"]
+    for k in keys:
+        args.extend(["--disable", k])
+    args.extend(["--enable", "agents_local"])
+    args.append("--show")
+    exit_code = run_cli(args)
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "agents_local" in output
+    assert "agents_global" not in output
+
+
+def test_configure_reset_restores_defaults(capfd, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # First, disable everything
+    keys = [
+        "agents_global",
+        "agents_local",
+        "claude_global",
+        "claude_local",
+        "codex_global",
+        "codex_local",
+        "copilot_global",
+        "copilot_local",
+    ]
+    args = ["configure"]
+    for k in keys:
+        args.extend(["--disable", k])
+    run_cli(args)
+
+    # Reset
+    exit_code = run_cli(["configure", "--reset"])
+    assert exit_code == 0
+
+    # Now show should have all defaults
+    exit_code = run_cli(["configure", "--show"])
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "agents_global" in output
+    assert "copilot_local" in output
+
+
+def test_configure_list_flag_does_not_conflict_with_modify(
+    capfd,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    exit_code = run_cli(["configure", "--show", "--add-global", "/opt/x"])
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    # --show with --add-global: shows current config (which doesn't yet have /opt/x)
+    # The add happens first, then show
+    assert "/opt/x" in output
+
+
+def test_root_help_lists_configure(capfd) -> None:
+    exit_code = run_cli(["--help"])
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "configure" in output
+    assert "Configure which directories skilly manages" in output

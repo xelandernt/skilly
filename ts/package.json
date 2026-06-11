@@ -1,6 +1,6 @@
 {
 	"name": "@xelandernt/skilly",
-	"version": "0.0.29",
+	"version": "0.0.30",
 	"description": "Native npm launcher for the skilly CLI.",
 	"license": "MIT",
 	"bin": {
