@@ -45,7 +45,7 @@ pythonpath=["src", "tests"]
 bindings = "pyo3"
 python-source = "src"
 module-name = "skilly._core"
-features = ["extension-module"]
+features = ["python-bindings", "extension-module"]
 
 [tool.ruff]
 exclude = [

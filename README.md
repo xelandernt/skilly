@@ -15,7 +15,15 @@ uvx skilly --help
 npx @xelandernt/skilly --help
 ```
 
-Or install the CLI and Python package:
+Install the native CLI with Homebrew from this repository's tap:
+
+```shell
+brew tap xelandernt/skilly https://github.com/xelandernt/skilly
+brew install xelandernt/skilly/skilly
+```
+
+Homebrew installs the CLI only. Install the Python package when you need the
+import surface as well:
 
 ```shell
 pip install skilly

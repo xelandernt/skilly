@@ -1,6 +1,8 @@
 mod ts
 
-default:
+[default]
+[private]
+_:
     @just --list --list-submodules
 
 # install dependencies
