@@ -45,8 +45,26 @@ class ProjectSettings:
     pyproject_toml_path: Path = Path("pyproject.toml")
     venv_path: Path = Path(".venv")
     include_project_dependencies: bool = True
-    include_dependency_groups: bool = True
-    include_optional_dependencies: bool = True
+    dependency_groups: tuple[str, ...] | None = None
+    exclude_dependency_groups: tuple[str, ...] | None = None
+    optional_dependencies: tuple[str, ...] | None = None
+    exclude_optional_dependencies: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            self.dependency_groups is not None
+            and self.exclude_dependency_groups is not None
+        ):
+            raise ValueError(
+                "dependency_groups and exclude_dependency_groups cannot both be set"
+            )
+        if (
+            self.optional_dependencies is not None
+            and self.exclude_optional_dependencies is not None
+        ):
+            raise ValueError(
+                "optional_dependencies and exclude_optional_dependencies cannot both be set"
+            )
 
 
 class SkillRepository:
@@ -76,8 +94,10 @@ class SkillRepository:
         pyproject_toml_path: Path | None = None,
         venv_path: Path | None = None,
         include_project_dependencies: bool | None = None,
-        include_dependency_groups: bool | None = None,
-        include_optional_dependencies: bool | None = None,
+        dependency_groups: tuple[str, ...] | None = None,
+        exclude_dependency_groups: tuple[str, ...] | None = None,
+        optional_dependencies: tuple[str, ...] | None = None,
+        exclude_optional_dependencies: tuple[str, ...] | None = None,
     ) -> ProjectSettings:
         if project is not None:
             return project
@@ -87,12 +107,26 @@ class SkillRepository:
             include_project_dependencies=self.project.include_project_dependencies
             if include_project_dependencies is None
             else include_project_dependencies,
-            include_dependency_groups=self.project.include_dependency_groups
-            if include_dependency_groups is None
-            else include_dependency_groups,
-            include_optional_dependencies=self.project.include_optional_dependencies
-            if include_optional_dependencies is None
-            else include_optional_dependencies,
+            dependency_groups=(
+                self.project.dependency_groups
+                if dependency_groups is None
+                else dependency_groups
+            ),
+            exclude_dependency_groups=(
+                self.project.exclude_dependency_groups
+                if exclude_dependency_groups is None
+                else exclude_dependency_groups
+            ),
+            optional_dependencies=(
+                self.project.optional_dependencies
+                if optional_dependencies is None
+                else optional_dependencies
+            ),
+            exclude_optional_dependencies=(
+                self.project.exclude_optional_dependencies
+                if exclude_optional_dependencies is None
+                else exclude_optional_dependencies
+            ),
         )
 
     def list(
@@ -181,8 +215,10 @@ class SkillRepository:
         pyproject_toml_path: Path | None = None,
         venv_path: Path | None = None,
         include_project_dependencies: bool | None = None,
-        include_dependency_groups: bool | None = None,
-        include_optional_dependencies: bool | None = None,
+        dependency_groups: tuple[str, ...] | None = None,
+        exclude_dependency_groups: tuple[str, ...] | None = None,
+        optional_dependencies: tuple[str, ...] | None = None,
+        exclude_optional_dependencies: tuple[str, ...] | None = None,
         file_system: FileSystem | None = None,
     ) -> Sequence[Skill]:
         settings = self._project_settings(
@@ -190,8 +226,10 @@ class SkillRepository:
             pyproject_toml_path=pyproject_toml_path,
             venv_path=venv_path,
             include_project_dependencies=include_project_dependencies,
-            include_dependency_groups=include_dependency_groups,
-            include_optional_dependencies=include_optional_dependencies,
+            dependency_groups=dependency_groups,
+            exclude_dependency_groups=exclude_dependency_groups,
+            optional_dependencies=optional_dependencies,
+            exclude_optional_dependencies=exclude_optional_dependencies,
         )
         return [
             match.available
@@ -206,8 +244,10 @@ class SkillRepository:
         pyproject_toml_path: Path | None = None,
         venv_path: Path | None = None,
         include_project_dependencies: bool | None = None,
-        include_dependency_groups: bool | None = None,
-        include_optional_dependencies: bool | None = None,
+        dependency_groups: tuple[str, ...] | None = None,
+        exclude_dependency_groups: tuple[str, ...] | None = None,
+        optional_dependencies: tuple[str, ...] | None = None,
+        exclude_optional_dependencies: tuple[str, ...] | None = None,
         file_system: FileSystem | None = None,
     ) -> Sequence[SkillMatch]:
         settings = self._project_settings(
@@ -215,8 +255,10 @@ class SkillRepository:
             pyproject_toml_path=pyproject_toml_path,
             venv_path=venv_path,
             include_project_dependencies=include_project_dependencies,
-            include_dependency_groups=include_dependency_groups,
-            include_optional_dependencies=include_optional_dependencies,
+            dependency_groups=dependency_groups,
+            exclude_dependency_groups=exclude_dependency_groups,
+            optional_dependencies=optional_dependencies,
+            exclude_optional_dependencies=exclude_optional_dependencies,
         )
         return [
             SkillMatch(available=available, installed=installed)
@@ -225,8 +267,26 @@ class SkillRepository:
                 settings.pyproject_toml_path,
                 settings.venv_path,
                 include_project_dependencies=settings.include_project_dependencies,
-                include_dependency_groups=settings.include_dependency_groups,
-                include_optional_dependencies=settings.include_optional_dependencies,
+                dependency_groups=(
+                    None
+                    if settings.dependency_groups is None
+                    else list(settings.dependency_groups)
+                ),
+                exclude_dependency_groups=(
+                    None
+                    if settings.exclude_dependency_groups is None
+                    else list(settings.exclude_dependency_groups)
+                ),
+                optional_dependencies=(
+                    None
+                    if settings.optional_dependencies is None
+                    else list(settings.optional_dependencies)
+                ),
+                exclude_optional_dependencies=(
+                    None
+                    if settings.exclude_optional_dependencies is None
+                    else list(settings.exclude_optional_dependencies)
+                ),
                 file_system=self._resolve_file_system(file_system),
             )
         ]
@@ -239,8 +299,10 @@ class SkillRepository:
         pyproject_toml_path: Path | None = None,
         venv_path: Path | None = None,
         include_project_dependencies: bool | None = None,
-        include_dependency_groups: bool | None = None,
-        include_optional_dependencies: bool | None = None,
+        dependency_groups: tuple[str, ...] | None = None,
+        exclude_dependency_groups: tuple[str, ...] | None = None,
+        optional_dependencies: tuple[str, ...] | None = None,
+        exclude_optional_dependencies: tuple[str, ...] | None = None,
         file_system: FileSystem | None = None,
     ) -> Sequence[SkillMatch]:
         return [
@@ -252,8 +314,10 @@ class SkillRepository:
                     pyproject_toml_path=pyproject_toml_path,
                     venv_path=venv_path,
                     include_project_dependencies=include_project_dependencies,
-                    include_dependency_groups=include_dependency_groups,
-                    include_optional_dependencies=include_optional_dependencies,
+                    dependency_groups=dependency_groups,
+                    exclude_dependency_groups=exclude_dependency_groups,
+                    optional_dependencies=optional_dependencies,
+                    exclude_optional_dependencies=exclude_optional_dependencies,
                 ),
                 file_system=file_system,
             )
@@ -269,8 +333,10 @@ class SkillRepository:
         pyproject_toml_path: Path | None = None,
         venv_path: Path | None = None,
         include_project_dependencies: bool | None = None,
-        include_dependency_groups: bool | None = None,
-        include_optional_dependencies: bool | None = None,
+        dependency_groups: tuple[str, ...] | None = None,
+        exclude_dependency_groups: tuple[str, ...] | None = None,
+        optional_dependencies: tuple[str, ...] | None = None,
+        exclude_optional_dependencies: tuple[str, ...] | None = None,
         github_fetcher: GitHubSkillFetcher | None = None,
         file_system: FileSystem | None = None,
     ) -> Skill | None:
@@ -282,8 +348,10 @@ class SkillRepository:
                 pyproject_toml_path=pyproject_toml_path,
                 venv_path=venv_path,
                 include_project_dependencies=include_project_dependencies,
-                include_dependency_groups=include_dependency_groups,
-                include_optional_dependencies=include_optional_dependencies,
+                dependency_groups=dependency_groups,
+                exclude_dependency_groups=exclude_dependency_groups,
+                optional_dependencies=optional_dependencies,
+                exclude_optional_dependencies=exclude_optional_dependencies,
                 file_system=file_system,
             )
 
@@ -318,8 +386,10 @@ class SkillRepository:
         pyproject_toml_path: Path | None = None,
         venv_path: Path | None = None,
         include_project_dependencies: bool | None = None,
-        include_dependency_groups: bool | None = None,
-        include_optional_dependencies: bool | None = None,
+        dependency_groups: tuple[str, ...] | None = None,
+        exclude_dependency_groups: tuple[str, ...] | None = None,
+        optional_dependencies: tuple[str, ...] | None = None,
+        exclude_optional_dependencies: tuple[str, ...] | None = None,
         github_fetcher: GitHubSkillFetcher | None = None,
         file_system: FileSystem | None = None,
     ) -> Sequence[InstalledSkillUpdate]:
@@ -328,8 +398,10 @@ class SkillRepository:
             pyproject_toml_path=pyproject_toml_path,
             venv_path=venv_path,
             include_project_dependencies=include_project_dependencies,
-            include_dependency_groups=include_dependency_groups,
-            include_optional_dependencies=include_optional_dependencies,
+            dependency_groups=dependency_groups,
+            exclude_dependency_groups=exclude_dependency_groups,
+            optional_dependencies=optional_dependencies,
+            exclude_optional_dependencies=exclude_optional_dependencies,
         )
         updates: list[InstalledSkillUpdate] = []
         for installed in self.list(directory, file_system=file_system):
@@ -358,8 +430,10 @@ class SkillRepository:
         pyproject_toml_path: Path | None = None,
         venv_path: Path | None = None,
         include_project_dependencies: bool | None = None,
-        include_dependency_groups: bool | None = None,
-        include_optional_dependencies: bool | None = None,
+        dependency_groups: tuple[str, ...] | None = None,
+        exclude_dependency_groups: tuple[str, ...] | None = None,
+        optional_dependencies: tuple[str, ...] | None = None,
+        exclude_optional_dependencies: tuple[str, ...] | None = None,
         file_system: FileSystem | None = None,
     ) -> Skill | None:
         settings = self._project_settings(
@@ -367,8 +441,10 @@ class SkillRepository:
             pyproject_toml_path=pyproject_toml_path,
             venv_path=venv_path,
             include_project_dependencies=include_project_dependencies,
-            include_dependency_groups=include_dependency_groups,
-            include_optional_dependencies=include_optional_dependencies,
+            dependency_groups=dependency_groups,
+            exclude_dependency_groups=exclude_dependency_groups,
+            optional_dependencies=optional_dependencies,
+            exclude_optional_dependencies=exclude_optional_dependencies,
         )
         return bridge.available_dependency_skill(
             installed_skill,
@@ -376,8 +452,26 @@ class SkillRepository:
             settings.pyproject_toml_path,
             settings.venv_path,
             include_project_dependencies=settings.include_project_dependencies,
-            include_dependency_groups=settings.include_dependency_groups,
-            include_optional_dependencies=settings.include_optional_dependencies,
+            dependency_groups=(
+                None
+                if settings.dependency_groups is None
+                else list(settings.dependency_groups)
+            ),
+            exclude_dependency_groups=(
+                None
+                if settings.exclude_dependency_groups is None
+                else list(settings.exclude_dependency_groups)
+            ),
+            optional_dependencies=(
+                None
+                if settings.optional_dependencies is None
+                else list(settings.optional_dependencies)
+            ),
+            exclude_optional_dependencies=(
+                None
+                if settings.exclude_optional_dependencies is None
+                else list(settings.exclude_optional_dependencies)
+            ),
             file_system=self._resolve_file_system(file_system),
         )
 

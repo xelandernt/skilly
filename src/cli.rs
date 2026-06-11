@@ -1,10 +1,10 @@
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery, SkillsMpSkill};
 use crate::core::{
-    ProjectDependencyOrigin, ProjectEnvironment, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP,
-    SKILLY_UNKNOWN_SOURCE, STATUS_INSTALLABLE, STATUS_INSTALLED, STATUS_UPDATABLE,
-    ScanDependencySelection, SkillData, SkillDirectoryFlavor, SkillMatchData,
-    available_dependency_skill_in, default_skills_directory, dependency_updates_in,
-    discover_github_skills, discover_installed_skills, github_versions_match, project_requirements,
+    NamedSelection, ProjectDependencyOrigin, ProjectEnvironment, SKILLY_SOURCE_GITHUB,
+    SKILLY_SOURCE_SKILLSMP, SKILLY_UNKNOWN_SOURCE, STATUS_INSTALLABLE, STATUS_INSTALLED,
+    STATUS_UPDATABLE, ScanDependencySelection, SkillData, SkillDirectoryFlavor, SkillMatchData,
+    SkillSourceMetadata, available_dependency_skill_in, default_skills_directory,
+    dependency_updates_in, discover_github_skills, github_versions_match, project_requirements,
     remove_skill, scan_match_status, scan_project_in, skills_directory,
 };
 use anyhow::{Context, Result, bail};
@@ -18,7 +18,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -38,8 +38,9 @@ const APPLY_ALL_CHOICE: &str = "apply selected";
 const INSTALL_ALL_CHOICE: &str = "install selected";
 const UPDATE_ALL_CHOICE: &str = "update selected";
 const REMOVE_ALL_CHOICE: &str = "remove selected";
-const DEFAULT_HELP_TEXT: &str = "Up/Down move | Enter select | Esc cancel";
-const MULTI_SELECT_HELP_TEXT: &str = "↑↓ move | Space select | A all | Enter action | Esc cancel";
+const DEFAULT_HELP_TEXT: &str = "Up/Down move | Tab switch directory | Enter select | Esc cancel";
+const MULTI_SELECT_HELP_TEXT: &str =
+    "↑↓ move | Tab switch directory | Space select | A all | Enter action | Esc cancel";
 const DEFAULT_EMPTY_PREVIEW: &str = "No details available.";
 const DEFAULT_CREATE_INSTRUCTIONS: &str =
     "# Instructions\n\nDescribe the procedure this skill should follow.";
@@ -50,7 +51,8 @@ const LOADING_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "�
 struct MenuItemUi {
     label: String,
     preview_lines: Vec<String>,
-    installed: bool,
+    status: MenuItemStatus,
+    selectable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -62,12 +64,48 @@ struct MenuUi {
     status: Option<String>,
     help_text: String,
     empty_preview: String,
+    tabs: Vec<MenuTabUi>,
+    active_tab: usize,
+}
+
+#[derive(Debug, Clone)]
+struct MenuTabUi {
+    label: String,
+    color: Color,
+    dimmed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenuItemStatus {
+    Default,
+    Installed,
+    Updatable,
+    Disabled,
 }
 
 #[derive(Debug, Clone)]
 struct DownloadableSkillMatch {
     available: SkillData,
     installed: Option<SkillData>,
+}
+
+#[derive(Debug, Clone)]
+struct InvalidInstalledSkill {
+    directory_name: String,
+    path: PathBuf,
+    error: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct InstalledSkillDiscoveryReport {
+    valid_skills: Vec<SkillData>,
+    invalid_skills: Vec<InvalidInstalledSkill>,
+}
+
+#[derive(Debug, Clone)]
+enum ListedSkillEntry {
+    Valid(SkillData),
+    Invalid(InvalidInstalledSkill),
 }
 
 impl DownloadableSkillMatch {
@@ -92,6 +130,8 @@ enum MenuAction {
     MoveDown,
     Select,
     Cancel,
+    NextTab,
+    PreviousTab,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,12 +142,43 @@ enum MultiSelectMenuAction {
     SelectAll,
     Confirm,
     Cancel,
+    NextTab,
+    PreviousTab,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum MultiSelectResult {
     Single(usize),
     Bulk(Vec<usize>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectMenuResult {
+    Selected(usize),
+    Cancel,
+    NextTab,
+    PreviousTab,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MultiSelectMenuResult {
+    Selection(MultiSelectResult),
+    Cancel,
+    NextTab,
+    PreviousTab,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DestinationScope {
+    Local,
+    Global,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedDestination {
+    label: String,
+    path: PathBuf,
+    color: Color,
 }
 
 impl TerminalSession {
@@ -242,23 +313,49 @@ struct SkillsMpCommands {
     command: SkillsMpSubcommand,
 }
 
-#[derive(Args, Debug, Clone, Copy, Default)]
+#[derive(Args, Debug, Clone, Default)]
 struct ScanDependencyArgs {
     #[arg(long, help = "Ignore [project].dependencies while scanning.")]
     no_project_dependencies: bool,
-    #[arg(long, help = "Ignore [dependency-groups] while scanning.")]
-    no_dependency_groups: bool,
-    #[arg(long, help = "Ignore [project.optional-dependencies] while scanning.")]
-    no_optional_dependencies: bool,
+    #[arg(
+        long = "group",
+        help = "Include only the named [dependency-groups] entry.",
+        value_name = "NAME"
+    )]
+    groups: Vec<String>,
+    #[arg(
+        long = "exclude-group",
+        help = "Exclude the named [dependency-groups] entry.",
+        value_name = "NAME"
+    )]
+    exclude_groups: Vec<String>,
+    #[arg(
+        long = "extra",
+        help = "Include only the named [project.optional-dependencies] extra.",
+        value_name = "NAME"
+    )]
+    extras: Vec<String>,
+    #[arg(
+        long = "exclude-extra",
+        help = "Exclude the named [project.optional-dependencies] extra.",
+        value_name = "NAME"
+    )]
+    exclude_extras: Vec<String>,
 }
 
 impl ScanDependencyArgs {
-    fn selection(self) -> ScanDependencySelection {
-        ScanDependencySelection {
+    fn selection(self) -> Result<ScanDependencySelection> {
+        Ok(ScanDependencySelection {
             include_project_dependencies: !self.no_project_dependencies,
-            include_dependency_groups: !self.no_dependency_groups,
-            include_optional_dependencies: !self.no_optional_dependencies,
-        }
+            dependency_groups: NamedSelection::new(
+                (!self.groups.is_empty()).then_some(self.groups),
+                (!self.exclude_groups.is_empty()).then_some(self.exclude_groups),
+            )?,
+            optional_dependencies: NamedSelection::new(
+                (!self.extras.is_empty()).then_some(self.extras),
+                (!self.exclude_extras.is_empty()).then_some(self.exclude_extras),
+            )?,
+        })
     }
 }
 
@@ -313,16 +410,21 @@ struct DestinationArgs {
 }
 
 impl DestinationArgs {
-    fn resolve(&self) -> Result<PathBuf> {
-        if let Some(directory) = self.directory.as_ref() {
-            return absolute_path(directory);
-        }
+    fn validate(&self) -> Result<()> {
         if usize::from(self.local) + usize::from(self.global) > 1 {
             bail!("Use either --local or --global");
         }
         if usize::from(self.claude) + usize::from(self.codex) + usize::from(self.copilot) > 1 {
             bail!("Use only one of --claude, --codex, or --copilot");
         }
+        Ok(())
+    }
+
+    fn resolve(&self) -> Result<PathBuf> {
+        if let Some(directory) = self.directory.as_ref() {
+            return absolute_path(directory);
+        }
+        self.validate()?;
         let flavor = if self.claude {
             SkillDirectoryFlavor::Claude
         } else if self.codex {
@@ -334,6 +436,173 @@ impl DestinationArgs {
         };
         absolute_path(&skills_directory(flavor, self.global)?)
     }
+
+    fn resolve_interactive_destinations(&self) -> Result<Vec<ResolvedDestination>> {
+        if let Some(directory) = self.directory.as_ref() {
+            return Ok(vec![ResolvedDestination {
+                label: "custom".to_string(),
+                path: absolute_path(directory)?,
+                color: Color::White,
+            }]);
+        }
+        self.validate()?;
+        if self.local || self.global || self.claude || self.codex || self.copilot {
+            return Ok(vec![resolved_destination(
+                self.selected_flavor(),
+                self.selected_scope(),
+            )?]);
+        }
+        all_interactive_destinations()
+    }
+
+    fn selected_flavor(&self) -> SkillDirectoryFlavor {
+        if self.claude {
+            SkillDirectoryFlavor::Claude
+        } else if self.codex {
+            SkillDirectoryFlavor::Codex
+        } else if self.copilot {
+            SkillDirectoryFlavor::Copilot
+        } else {
+            SkillDirectoryFlavor::Agents
+        }
+    }
+
+    fn selected_scope(&self) -> DestinationScope {
+        if self.global {
+            DestinationScope::Global
+        } else {
+            DestinationScope::Local
+        }
+    }
+}
+
+fn all_interactive_destinations() -> Result<Vec<ResolvedDestination>> {
+    let mut destinations = Vec::new();
+    for scope in [DestinationScope::Local, DestinationScope::Global] {
+        for flavor in [
+            SkillDirectoryFlavor::Agents,
+            SkillDirectoryFlavor::Claude,
+            SkillDirectoryFlavor::Codex,
+            SkillDirectoryFlavor::Copilot,
+        ] {
+            destinations.push(resolved_destination(flavor, scope)?);
+        }
+    }
+    Ok(destinations)
+}
+
+fn resolved_destination(
+    flavor: SkillDirectoryFlavor,
+    scope: DestinationScope,
+) -> Result<ResolvedDestination> {
+    let global = scope == DestinationScope::Global;
+    let label = match (flavor, scope) {
+        (SkillDirectoryFlavor::Agents, DestinationScope::Local) => "agents local",
+        (SkillDirectoryFlavor::Agents, DestinationScope::Global) => "agents global",
+        (SkillDirectoryFlavor::Claude, DestinationScope::Local) => "claude local",
+        (SkillDirectoryFlavor::Claude, DestinationScope::Global) => "claude global",
+        (SkillDirectoryFlavor::Codex, DestinationScope::Local) => "codex local",
+        (SkillDirectoryFlavor::Codex, DestinationScope::Global) => "codex global",
+        (SkillDirectoryFlavor::Copilot, DestinationScope::Local) => "copilot local",
+        (SkillDirectoryFlavor::Copilot, DestinationScope::Global) => "copilot global",
+    }
+    .to_string();
+    let color = match flavor {
+        SkillDirectoryFlavor::Agents => Color::Green,
+        SkillDirectoryFlavor::Claude => Color::Yellow,
+        SkillDirectoryFlavor::Codex => Color::Cyan,
+        SkillDirectoryFlavor::Copilot => Color::Blue,
+    };
+    Ok(ResolvedDestination {
+        label,
+        path: absolute_path(&skills_directory(flavor, global)?)?,
+        color,
+    })
+}
+
+fn next_tab_index(current: usize, len: usize) -> usize {
+    if len <= 1 {
+        return current;
+    }
+    (current + 1) % len
+}
+
+fn next_non_empty_tab_index(current: usize, empty_flags: &[bool]) -> usize {
+    let len = empty_flags.len();
+    if len <= 1 {
+        return current;
+    }
+    for offset in 1..=len {
+        let candidate = (current + offset) % len;
+        if !empty_flags.get(candidate).copied().unwrap_or(false) {
+            return candidate;
+        }
+    }
+    current
+}
+
+fn previous_tab_index(current: usize, len: usize) -> usize {
+    if len <= 1 {
+        return current;
+    }
+    (current + len - 1) % len
+}
+
+fn previous_non_empty_tab_index(current: usize, empty_flags: &[bool]) -> usize {
+    let len = empty_flags.len();
+    if len <= 1 {
+        return current;
+    }
+    for offset in 1..=len {
+        let candidate = (current + len - offset) % len;
+        if !empty_flags.get(candidate).copied().unwrap_or(false) {
+            return candidate;
+        }
+    }
+    current
+}
+
+fn destination_tabs(destinations: &[ResolvedDestination], empty_flags: &[bool]) -> Vec<MenuTabUi> {
+    destinations
+        .iter()
+        .enumerate()
+        .map(|(index, destination)| MenuTabUi {
+            label: destination.label.clone(),
+            color: destination.color,
+            dimmed: empty_flags.get(index).copied().unwrap_or(false),
+        })
+        .collect()
+}
+
+fn first_non_empty_tab(empty_flags: &[bool]) -> usize {
+    empty_flags
+        .iter()
+        .position(|is_empty| !is_empty)
+        .unwrap_or(0)
+}
+
+fn first_selectable_index(items: &[MenuItemUi]) -> usize {
+    items.iter().position(|item| item.selectable).unwrap_or(0)
+}
+
+fn next_selectable_index(items: &[MenuItemUi], current: usize) -> usize {
+    let start = current.saturating_add(1);
+    items
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find_map(|(index, item)| item.selectable.then_some(index))
+        .unwrap_or(current)
+}
+
+fn previous_selectable_index(items: &[MenuItemUi], current: usize) -> usize {
+    items
+        .iter()
+        .enumerate()
+        .take(current)
+        .rev()
+        .find_map(|(index, item)| item.selectable.then_some(index))
+        .unwrap_or(current)
 }
 
 fn absolute_path(path: &Path) -> Result<PathBuf> {
@@ -448,7 +717,7 @@ fn try_run(args: Vec<String>) -> Result<i32> {
         Commands::Scan {
             destination,
             dependencies,
-        } => run_scan(&destination.resolve()?, dependencies.selection())?,
+        } => run_scan(&destination, dependencies.selection()?)?,
         Commands::Download {
             github_url,
             destination,
@@ -458,7 +727,7 @@ fn try_run(args: Vec<String>) -> Result<i32> {
             github_token,
         } => run_download(
             &github_url,
-            &destination.resolve()?,
+            &destination,
             skill_name.as_deref(),
             all,
             overwrite,
@@ -467,10 +736,7 @@ fn try_run(args: Vec<String>) -> Result<i32> {
         Commands::List {
             destination,
             github_token,
-        } => run_list(
-            &destination.resolve()?,
-            client_config(None, None, github_token, None),
-        )?,
+        } => run_list(&destination, client_config(None, None, github_token, None))?,
         Commands::Update {
             destination,
             yes,
@@ -492,17 +758,14 @@ fn try_run(args: Vec<String>) -> Result<i32> {
                 github_token,
             } => run_skillsmp_search(
                 &query,
-                &destination.resolve()?,
+                &destination,
                 overwrite,
                 client_config(None, None, github_token, None),
             )?,
             SkillsMpSubcommand::List {
                 destination,
                 github_token,
-            } => run_skillsmp_list(
-                &destination.resolve()?,
-                client_config(None, None, github_token, None),
-            )?,
+            } => run_skillsmp_list(&destination, client_config(None, None, github_token, None))?,
         },
         Commands::Util(util) => match util.command {
             UtilSubcommand::Dependencies { file, dev, extras } => {
@@ -1294,43 +1557,83 @@ fn render_create_form(
     cursor
 }
 
-fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result<Option<usize>> {
+fn render_menu_tabs(frame: &mut ratatui::Frame<'_>, area: Rect, tabs: &[MenuTabUi], active: usize) {
+    let line = Line::from(
+        tabs.iter()
+            .enumerate()
+            .flat_map(|(index, tab)| {
+                let mut style = Style::default().fg(if tab.dimmed {
+                    Color::DarkGray
+                } else {
+                    tab.color
+                });
+                if index == active {
+                    style = style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+                }
+                let mut spans = vec![Span::styled(format!("[{}]", tab.label), style)];
+                if index + 1 < tabs.len() {
+                    spans.push(Span::raw(" "));
+                }
+                spans
+            })
+            .collect::<Vec<_>>(),
+    );
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn menu_item_style(item: &MenuItemUi) -> Style {
+    match item.status {
+        MenuItemStatus::Default => Style::default(),
+        MenuItemStatus::Installed => Style::default().fg(Color::Green),
+        MenuItemStatus::Updatable => Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+        MenuItemStatus::Disabled => Style::default().fg(Color::DarkGray),
+    }
+}
+
+fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result<SelectMenuResult> {
     if menu.items.is_empty() {
-        return Ok(None);
+        return Ok(SelectMenuResult::Cancel);
     }
 
     let mut state = ListState::default();
     let mut selected = menu.default.min(menu.items.len().saturating_sub(1));
+    if !menu.items[selected].selectable {
+        selected = first_selectable_index(&menu.items);
+    }
     state.select(Some(selected));
 
     loop {
         session.terminal.draw(|frame| {
             let status_height = if menu.status.is_some() { 1 } else { 0 };
+            let tab_height = if menu.tabs.len() > 1 { 1 } else { 0 };
             let layout = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(1),
+                    Constraint::Length(tab_height),
                     Constraint::Min(3),
                     Constraint::Length(status_height),
                     Constraint::Length(1),
                 ])
                 .split(frame.area());
+            let title_area = layout[0];
+            let tabs_area = layout[1];
+            let content_area = layout[2];
+            let status_area = layout[3];
+            let help_area = layout[4];
 
             let panes = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(layout[1]);
+                .split(content_area);
 
             let items = menu
                 .items
                 .iter()
                 .map(|item| {
-                    let style = if item.installed {
-                        Style::default().fg(Color::Green)
-                    } else {
-                        Style::default()
-                    };
-                    ListItem::new(Line::from(item.label.clone())).style(style)
+                    ListItem::new(Line::from(item.label.clone())).style(menu_item_style(item))
                 })
                 .collect::<Vec<_>>();
             let list = List::new(items)
@@ -1344,8 +1647,11 @@ fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result<Option<usi
             frame.render_widget(
                 Paragraph::new(menu.title.clone())
                     .style(Style::default().add_modifier(Modifier::BOLD)),
-                layout[0],
+                title_area,
             );
+            if tab_height == 1 {
+                render_menu_tabs(frame, tabs_area, &menu.tabs, menu.active_tab);
+            }
             frame.render_stateful_widget(list, panes[0], &mut state);
 
             let preview_lines = menu.items[selected].preview_lines.clone();
@@ -1368,27 +1674,29 @@ fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result<Option<usi
             if let Some(status) = menu.status.as_ref() {
                 frame.render_widget(
                     Paragraph::new(status.clone()).style(Style::default().fg(Color::Green)),
-                    layout[2],
+                    status_area,
                 );
             }
             frame.render_widget(
                 Paragraph::new(menu.help_text.clone()).style(Style::default().fg(Color::Gray)),
-                layout[3],
+                help_area,
             );
         })?;
 
         if let Event::Key(key) = event::read()? {
             match menu_action(key) {
                 Some(MenuAction::MoveUp) => {
-                    selected = selected.saturating_sub(1);
+                    selected = previous_selectable_index(&menu.items, selected);
                     state.select(Some(selected));
                 }
                 Some(MenuAction::MoveDown) => {
-                    selected = (selected + 1).min(menu.items.len().saturating_sub(1));
+                    selected = next_selectable_index(&menu.items, selected);
                     state.select(Some(selected));
                 }
-                Some(MenuAction::Select) => return Ok(Some(selected)),
-                Some(MenuAction::Cancel) => return Ok(None),
+                Some(MenuAction::Select) => return Ok(SelectMenuResult::Selected(selected)),
+                Some(MenuAction::Cancel) => return Ok(SelectMenuResult::Cancel),
+                Some(MenuAction::NextTab) => return Ok(SelectMenuResult::NextTab),
+                Some(MenuAction::PreviousTab) => return Ok(SelectMenuResult::PreviousTab),
                 None => {}
             }
         }
@@ -1400,13 +1708,16 @@ fn multi_select_menu(
     menu: MenuUi,
     selectable_count: usize,
     initially_checked: &[usize],
-) -> Result<Option<MultiSelectResult>> {
+) -> Result<MultiSelectMenuResult> {
     if menu.items.is_empty() {
-        return Ok(None);
+        return Ok(MultiSelectMenuResult::Cancel);
     }
 
     let mut state = ListState::default();
     let mut focused = menu.default.min(menu.items.len().saturating_sub(1));
+    if !menu.items[focused].selectable {
+        focused = first_selectable_index(&menu.items);
+    }
     state.select(Some(focused));
     let mut checked: HashSet<usize> = initially_checked
         .iter()
@@ -1417,20 +1728,27 @@ fn multi_select_menu(
     loop {
         session.terminal.draw(|frame| {
             let status_height = if menu.status.is_some() { 1 } else { 0 };
+            let tab_height = if menu.tabs.len() > 1 { 1 } else { 0 };
             let layout = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(1),
+                    Constraint::Length(tab_height),
                     Constraint::Min(3),
                     Constraint::Length(status_height),
                     Constraint::Length(1),
                 ])
                 .split(frame.area());
+            let title_area = layout[0];
+            let tabs_area = layout[1];
+            let content_area = layout[2];
+            let status_area = layout[3];
+            let help_area = layout[4];
 
             let panes = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(layout[1]);
+                .split(content_area);
 
             let items = menu
                 .items
@@ -1451,10 +1769,8 @@ fn multi_select_menu(
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD)
-                    } else if item.installed {
-                        Style::default().fg(Color::Green)
                     } else {
-                        Style::default()
+                        menu_item_style(item)
                     };
                     ListItem::new(Line::from(label)).style(style)
                 })
@@ -1472,8 +1788,11 @@ fn multi_select_menu(
             frame.render_widget(
                 Paragraph::new(menu.title.clone())
                     .style(Style::default().add_modifier(Modifier::BOLD)),
-                layout[0],
+                title_area,
             );
+            if tab_height == 1 {
+                render_menu_tabs(frame, tabs_area, &menu.tabs, menu.active_tab);
+            }
             frame.render_stateful_widget(list, panes[0], &mut state);
 
             let preview_lines = menu.items[focused].preview_lines.clone();
@@ -1496,23 +1815,23 @@ fn multi_select_menu(
             if let Some(status) = menu.status.as_ref() {
                 frame.render_widget(
                     Paragraph::new(status.clone()).style(Style::default().fg(Color::Green)),
-                    layout[2],
+                    status_area,
                 );
             }
             frame.render_widget(
                 Paragraph::new(menu.help_text.clone()).style(Style::default().fg(Color::Gray)),
-                layout[3],
+                help_area,
             );
         })?;
 
         if let Event::Key(key) = event::read()? {
             match multi_select_action(key) {
                 Some(MultiSelectMenuAction::MoveUp) => {
-                    focused = focused.saturating_sub(1);
+                    focused = previous_selectable_index(&menu.items, focused);
                     state.select(Some(focused));
                 }
                 Some(MultiSelectMenuAction::MoveDown) => {
-                    focused = (focused + 1).min(menu.items.len().saturating_sub(1));
+                    focused = next_selectable_index(&menu.items, focused);
                     state.select(Some(focused));
                 }
                 Some(MultiSelectMenuAction::ToggleSelect) => {
@@ -1534,13 +1853,23 @@ fn multi_select_menu(
                 }
                 Some(MultiSelectMenuAction::Confirm) => {
                     if checked.is_empty() {
-                        return Ok(Some(MultiSelectResult::Single(focused)));
+                        return Ok(MultiSelectMenuResult::Selection(MultiSelectResult::Single(
+                            focused,
+                        )));
                     }
                     let mut indices: Vec<usize> = checked.iter().copied().collect();
                     indices.sort_unstable();
-                    return Ok(Some(MultiSelectResult::Bulk(indices)));
+                    return Ok(MultiSelectMenuResult::Selection(MultiSelectResult::Bulk(
+                        indices,
+                    )));
                 }
-                Some(MultiSelectMenuAction::Cancel) => return Ok(None),
+                Some(MultiSelectMenuAction::Cancel) => return Ok(MultiSelectMenuResult::Cancel),
+                Some(MultiSelectMenuAction::NextTab) => {
+                    return Ok(MultiSelectMenuResult::NextTab);
+                }
+                Some(MultiSelectMenuAction::PreviousTab) => {
+                    return Ok(MultiSelectMenuResult::PreviousTab);
+                }
                 None => {}
             }
         }
@@ -1556,6 +1885,8 @@ fn menu_action(key: KeyEvent) -> Option<MenuAction> {
         KeyCode::Up => Some(MenuAction::MoveUp),
         KeyCode::Down => Some(MenuAction::MoveDown),
         KeyCode::Enter => Some(MenuAction::Select),
+        KeyCode::Tab => Some(MenuAction::NextTab),
+        KeyCode::BackTab => Some(MenuAction::PreviousTab),
         KeyCode::Esc => Some(MenuAction::Cancel),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(MenuAction::Cancel)
@@ -1571,6 +1902,8 @@ fn multi_select_action(key: KeyEvent) -> Option<MultiSelectMenuAction> {
     match key.code {
         KeyCode::Up => Some(MultiSelectMenuAction::MoveUp),
         KeyCode::Down => Some(MultiSelectMenuAction::MoveDown),
+        KeyCode::Tab => Some(MultiSelectMenuAction::NextTab),
+        KeyCode::BackTab => Some(MultiSelectMenuAction::PreviousTab),
         KeyCode::Char(' ') => Some(MultiSelectMenuAction::ToggleSelect),
         KeyCode::Char('a') | KeyCode::Char('A') => Some(MultiSelectMenuAction::SelectAll),
         KeyCode::Enter => Some(MultiSelectMenuAction::Confirm),
@@ -1778,12 +2111,16 @@ where
     }
 }
 
-fn run_scan(directory: &Path, dependency_selection: ScanDependencySelection) -> Result<()> {
+fn run_scan(
+    destination: &DestinationArgs,
+    dependency_selection: ScanDependencySelection,
+) -> Result<()> {
+    let single_directory = destination.resolve()?;
     let environment = ProjectEnvironment::with_paths(
-        directory,
+        &single_directory,
         Path::new("pyproject.toml"),
         Path::new(".venv"),
-        dependency_selection,
+        dependency_selection.clone(),
     );
     let matches = scan_project_in(&environment)?;
     if matches.is_empty() {
@@ -1791,7 +2128,7 @@ fn run_scan(directory: &Path, dependency_selection: ScanDependencySelection) -> 
         return Ok(());
     }
 
-    let mut actionable = matches
+    let actionable = matches
         .into_iter()
         .filter(|item| {
             scan_match_status(&item.available, item.installed.as_ref()) != STATUS_INSTALLED
@@ -1809,162 +2146,142 @@ fn run_scan(directory: &Path, dependency_selection: ScanDependencySelection) -> 
         return Ok(());
     }
 
+    let destinations = destination.resolve_interactive_destinations()?;
     let mut session = TerminalSession::new()?;
     let mut messages = Vec::new();
     let mut status_message = None;
-    let mut selected_index = 0;
-    let mut checked_indices = Vec::new();
-    while !actionable.is_empty() {
+    let mut active_tab = 0usize;
+    let mut selected_indices = vec![0usize; destinations.len()];
+    let mut checked_indices = vec![Vec::<usize>::new(); destinations.len()];
+
+    loop {
+        let actionables_by_tab = destinations
+            .iter()
+            .map(|destination| {
+                let environment = ProjectEnvironment::with_paths(
+                    &destination.path,
+                    Path::new("pyproject.toml"),
+                    Path::new(".venv"),
+                    dependency_selection.clone(),
+                );
+                Ok(scan_project_in(&environment)?
+                    .into_iter()
+                    .filter(|item| {
+                        scan_match_status(&item.available, item.installed.as_ref())
+                            != STATUS_INSTALLED
+                    })
+                    .collect::<Vec<_>>())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let empty_flags = actionables_by_tab
+            .iter()
+            .map(Vec::is_empty)
+            .collect::<Vec<_>>();
+        if empty_flags.iter().all(|is_empty| *is_empty) {
+            println!("All discovered dependency skills are already installed");
+            break;
+        }
+        if active_tab >= destinations.len() {
+            active_tab = 0;
+        }
+
+        let directory = &destinations[active_tab].path;
+        let actionable = &actionables_by_tab[active_tab];
         let selectable_count = actionable.len();
         let mut items = actionable
             .iter()
             .map(|item| MenuItemUi {
                 label: scan_choice_label(item),
                 preview_lines: scan_match_preview_lines(item),
-                installed: false,
+                status: scan_menu_status(item),
+                selectable: true,
             })
             .collect::<Vec<_>>();
         items.push(exit_menu_item("Exit scan"));
 
-        let Some(result) = multi_select_menu(
+        let result = multi_select_menu(
             &mut session,
             MenuUi {
-                title: menu_title_with_directory(
+                title: menu_title_for_destination(
                     "Select dependency skills to install".to_string(),
-                    directory,
+                    &destinations,
+                    active_tab,
                 ),
                 items,
-                default: selected_index,
+                default: selected_indices[active_tab].min(selectable_count),
                 preview_title: "Dependency skill".to_string(),
                 status: status_message.clone(),
                 help_text: MULTI_SELECT_HELP_TEXT.to_string(),
                 empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
+                tabs: destination_tabs(&destinations, &vec![false; destinations.len()]),
+                active_tab,
             },
             selectable_count,
-            &checked_indices,
-        )?
-        else {
-            break;
-        };
+            &checked_indices[active_tab],
+        )?;
 
         match result {
-            MultiSelectResult::Single(index) => {
-                checked_indices.clear();
-                if index == selectable_count {
-                    break;
-                }
-                selected_index = index;
-                let selected = actionable[index].clone();
-                let actions = scan_skill_actions(&selected);
-                let Some(action_index) = select_menu(
-                    &mut session,
-                    MenuUi {
-                        title: menu_title_with_directory(
-                            format!("Choose an action for {}", selected.available.name),
-                            directory,
-                        ),
-                        items: actions
-                            .iter()
-                            .map(|item| MenuItemUi {
-                                label: (*item).to_string(),
-                                preview_lines: scan_match_preview_lines(&selected),
-                                installed: false,
-                            })
-                            .collect(),
-                        default: action_menu_default(&actions),
-                        preview_title: selected.available.name.clone(),
-                        status: status_message.clone(),
-                        help_text: DEFAULT_HELP_TEXT.to_string(),
-                        empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
-                    },
-                )?
-                else {
-                    continue;
-                };
-                match actions[action_index] {
-                    BACK_CHOICE => continue,
-                    EXIT_CHOICE => break,
-                    INSTALL_CHOICE | UPDATE_CHOICE => {
-                        let installed = install_available_skill(
-                            directory,
-                            &selected.available,
-                            selected
-                                .installed
-                                .as_ref()
-                                .map(skill_directory_name)
-                                .as_deref(),
-                            selected.installed.is_some(),
-                        )?;
-                        actionable.retain(|item| !item.available.matches(&selected.available));
-                        let message = if selected.installed.is_none() {
-                            format!(
-                                "Installed {} to {}",
-                                skill_directory_name(&installed),
-                                installed.path.as_deref().unwrap_or_default()
-                            )
-                        } else {
-                            format!(
-                                "Updated {} to {}",
-                                skill_directory_name(&installed),
-                                installed.package_version.as_deref().unwrap_or("unknown")
-                            )
-                        };
-                        remember_status(&mut messages, &mut status_message, message);
-                    }
-                    _ => {}
-                }
+            MultiSelectMenuResult::Cancel => break,
+            MultiSelectMenuResult::NextTab => {
+                active_tab = next_tab_index(active_tab, destinations.len());
+                continue;
             }
-            MultiSelectResult::Bulk(indices) => {
-                selected_index = indices.first().copied().unwrap_or(selected_index);
-                let selected: Vec<SkillMatchData> =
-                    indices.iter().map(|&i| actionable[i].clone()).collect();
-                let preview_names = selected
-                    .iter()
-                    .map(|item| item.available.name.clone())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let actions = vec![APPLY_ALL_CHOICE, BACK_CHOICE, EXIT_CHOICE];
-                let action_index = select_menu(
-                    &mut session,
-                    MenuUi {
-                        title: menu_title_with_directory(
-                            format!("Action for {} selected skills", selected.len()),
-                            directory,
-                        ),
-                        items: actions
-                            .iter()
-                            .map(|a| MenuItemUi {
-                                label: (*a).to_string(),
-                                preview_lines: preview_names.lines().map(str::to_owned).collect(),
-                                installed: false,
-                            })
-                            .collect(),
-                        default: action_menu_default(&actions),
-                        preview_title: "Selected skills".to_string(),
-                        status: status_message.clone(),
-                        help_text: DEFAULT_HELP_TEXT.to_string(),
-                        empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
-                    },
-                )?;
-                checked_indices = retained_multi_select_indices(
-                    action_index.map(|index| actions[index]),
-                    &indices,
-                );
-                let Some(action_index) = action_index else {
-                    continue;
-                };
-                match actions[action_index] {
-                    BACK_CHOICE => continue,
-                    EXIT_CHOICE => break,
-                    APPLY_ALL_CHOICE => {
-                        for item in &selected {
+            MultiSelectMenuResult::PreviousTab => {
+                active_tab = previous_tab_index(active_tab, destinations.len());
+                continue;
+            }
+            MultiSelectMenuResult::Selection(result) => match result {
+                MultiSelectResult::Single(index) => {
+                    checked_indices[active_tab].clear();
+                    if index == selectable_count {
+                        break;
+                    }
+                    selected_indices[active_tab] = index;
+                    let selected = actionable[index].clone();
+                    let actions = scan_skill_actions(&selected);
+                    let action_index = select_menu(
+                        &mut session,
+                        MenuUi {
+                            title: menu_title_with_directory(
+                                format!("Choose an action for {}", selected.available.name),
+                                &directory,
+                            ),
+                            items: actions
+                                .iter()
+                                .map(|item| MenuItemUi {
+                                    label: (*item).to_string(),
+                                    preview_lines: scan_match_preview_lines(&selected),
+                                    status: MenuItemStatus::Default,
+                                    selectable: true,
+                                })
+                                .collect(),
+                            default: action_menu_default(&actions),
+                            preview_title: selected.available.name.clone(),
+                            status: status_message.clone(),
+                            help_text: DEFAULT_HELP_TEXT.to_string(),
+                            empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
+                            tabs: Vec::new(),
+                            active_tab: 0,
+                        },
+                    )?;
+                    let SelectMenuResult::Selected(action_index) = action_index else {
+                        continue;
+                    };
+                    match actions[action_index] {
+                        BACK_CHOICE => continue,
+                        EXIT_CHOICE => break,
+                        INSTALL_CHOICE | UPDATE_CHOICE => {
                             let installed = install_available_skill(
-                                directory,
-                                &item.available,
-                                item.installed.as_ref().map(skill_directory_name).as_deref(),
-                                item.installed.is_some(),
+                                &directory,
+                                &selected.available,
+                                selected
+                                    .installed
+                                    .as_ref()
+                                    .map(skill_directory_name)
+                                    .as_deref(),
+                                selected.installed.is_some(),
                             )?;
-                            let message = if item.installed.is_none() {
+                            let message = if selected.installed.is_none() {
                                 format!(
                                     "Installed {} to {}",
                                     skill_directory_name(&installed),
@@ -1979,13 +2296,87 @@ fn run_scan(directory: &Path, dependency_selection: ScanDependencySelection) -> 
                             };
                             remember_status(&mut messages, &mut status_message, message);
                         }
-                        for item in &selected {
-                            actionable.retain(|a| !a.available.matches(&item.available));
-                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
-            }
+                MultiSelectResult::Bulk(indices) => {
+                    selected_indices[active_tab] = indices
+                        .first()
+                        .copied()
+                        .unwrap_or(selected_indices[active_tab]);
+                    let selected: Vec<SkillMatchData> =
+                        indices.iter().map(|&i| actionable[i].clone()).collect();
+                    let preview_names = selected
+                        .iter()
+                        .map(|item| item.available.name.clone())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let actions = vec![APPLY_ALL_CHOICE, BACK_CHOICE, EXIT_CHOICE];
+                    let action_index = select_menu(
+                        &mut session,
+                        MenuUi {
+                            title: menu_title_with_directory(
+                                format!("Action for {} selected skills", selected.len()),
+                                &directory,
+                            ),
+                            items: actions
+                                .iter()
+                                .map(|a| MenuItemUi {
+                                    label: (*a).to_string(),
+                                    preview_lines: preview_names
+                                        .lines()
+                                        .map(str::to_owned)
+                                        .collect(),
+                                    status: MenuItemStatus::Default,
+                                    selectable: true,
+                                })
+                                .collect(),
+                            default: action_menu_default(&actions),
+                            preview_title: "Selected skills".to_string(),
+                            status: status_message.clone(),
+                            help_text: DEFAULT_HELP_TEXT.to_string(),
+                            empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
+                            tabs: Vec::new(),
+                            active_tab: 0,
+                        },
+                    )?;
+                    let SelectMenuResult::Selected(action_index) = action_index else {
+                        checked_indices[active_tab] = indices;
+                        continue;
+                    };
+                    checked_indices[active_tab] =
+                        retained_multi_select_indices(Some(actions[action_index]), &indices);
+                    match actions[action_index] {
+                        BACK_CHOICE => continue,
+                        EXIT_CHOICE => break,
+                        APPLY_ALL_CHOICE => {
+                            for item in &selected {
+                                let installed = install_available_skill(
+                                    &directory,
+                                    &item.available,
+                                    item.installed.as_ref().map(skill_directory_name).as_deref(),
+                                    item.installed.is_some(),
+                                )?;
+                                let message = if item.installed.is_none() {
+                                    format!(
+                                        "Installed {} to {}",
+                                        skill_directory_name(&installed),
+                                        installed.path.as_deref().unwrap_or_default()
+                                    )
+                                } else {
+                                    format!(
+                                        "Updated {} to {}",
+                                        skill_directory_name(&installed),
+                                        installed.package_version.as_deref().unwrap_or("unknown")
+                                    )
+                                };
+                                remember_status(&mut messages, &mut status_message, message);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            },
         }
     }
 
@@ -1997,7 +2388,7 @@ fn run_scan(directory: &Path, dependency_selection: ScanDependencySelection) -> 
 
 fn run_download(
     github_url: &str,
-    directory: &Path,
+    destination: &DestinationArgs,
     skill_name: Option<&str>,
     all: bool,
     overwrite: bool,
@@ -2005,14 +2396,48 @@ fn run_download(
 ) -> Result<()> {
     let client = SkillsMpClient::new(config)?;
     let mut skills = discover_github_skills(&client, github_url, SKILLY_SOURCE_GITHUB, None)?;
+    let directory = destination.resolve()?;
     if all && skill_name.is_some() && skills.len() != 1 {
         bail!("Use either --skill-name or --all when downloading multiple skills");
+    }
+    let interactive_destinations = if interactive_terminal() {
+        destination.resolve_interactive_destinations()?
+    } else {
+        Vec::new()
+    };
+    if interactive_terminal() && (skills.len() > 1 || interactive_destinations.len() > 1) {
+        if skills.len() > 1 && !all && skill_name.is_none() {
+            return download_selected_skills(
+                &client,
+                &interactive_destinations,
+                overwrite,
+                &skills,
+            );
+        }
+        if let Some(skill_name) = skill_name {
+            if skills.len() != 1 && all {
+                bail!("Custom skill names can only be used when downloading a single skill");
+            }
+            if skills.len() != 1 {
+                skills = vec![select_download_skill(&skills, skill_name)?];
+            }
+        }
+        return download_selected_skills(&client, &interactive_destinations, overwrite, &skills);
     }
     if skills.len() > 1 && !all && skill_name.is_none() {
         if !interactive_terminal() {
             bail!("Multiple skills found; use --skill-name <name> or --all");
         }
-        return download_selected_skills(&client, directory, overwrite, &skills);
+        return download_selected_skills(
+            &client,
+            &[ResolvedDestination {
+                label: "current".to_string(),
+                path: directory.clone(),
+                color: Color::White,
+            }],
+            overwrite,
+            &skills,
+        );
     }
     if let Some(skill_name) = skill_name {
         if skills.len() != 1 && all {
@@ -2027,7 +2452,7 @@ fn run_download(
         .iter()
         .map(|skill| {
             skill.install_to(
-                directory,
+                &directory,
                 if skills.len() == 1 { skill_name } else { None },
                 overwrite,
             )
@@ -2055,189 +2480,120 @@ fn run_download(
 
 fn download_selected_skills(
     client: &SkillsMpClient,
-    directory: &Path,
+    destinations: &[ResolvedDestination],
     overwrite: bool,
     skills: &[SkillData],
 ) -> Result<()> {
     let mut session = TerminalSession::new()?;
     let mut messages = Vec::new();
     let mut status_message = None;
-    let mut selected_index = 0;
-    let mut checked_indices = Vec::new();
+    let mut active_tab = 0usize;
+    let mut selected_indices = vec![0usize; destinations.len()];
+    let mut checked_indices = vec![Vec::<usize>::new(); destinations.len()];
     loop {
-        let matches = downloadable_skill_matches(skills, &discover_installed_skills(directory)?);
+        let matches_by_tab = destinations
+            .iter()
+            .map(|destination| {
+                let installed_skills =
+                    discover_installed_skills_report(&destination.path)?.valid_skills;
+                Ok(downloadable_skill_matches(skills, &installed_skills))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if active_tab >= destinations.len() {
+            active_tab = 0;
+        }
+        let directory = &destinations[active_tab].path;
+        let matches = &matches_by_tab[active_tab];
         let selectable_count = matches.len();
         let mut items = matches
             .iter()
             .map(|item| MenuItemUi {
                 label: downloadable_skill_label(item),
                 preview_lines: downloadable_skill_preview_lines(item, directory),
-                installed: item.status() == STATUS_INSTALLED,
+                status: downloadable_skill_menu_status(item),
+                selectable: true,
             })
             .collect::<Vec<_>>();
         items.push(exit_menu_item("Exit download"));
-        let Some(result) = multi_select_menu(
+        let result = multi_select_menu(
             &mut session,
             MenuUi {
-                title: menu_title_with_directory(
+                title: menu_title_for_destination(
                     "Select skills to download".to_string(),
-                    directory,
+                    destinations,
+                    active_tab,
                 ),
                 items,
-                default: selected_index,
+                default: selected_indices[active_tab].min(selectable_count),
                 preview_title: "Downloadable skill".to_string(),
                 status: status_message.clone(),
                 help_text: MULTI_SELECT_HELP_TEXT.to_string(),
                 empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
+                tabs: destination_tabs(destinations, &vec![false; destinations.len()]),
+                active_tab,
             },
             selectable_count,
-            &checked_indices,
-        )?
-        else {
-            break;
-        };
+            &checked_indices[active_tab],
+        )?;
 
         match result {
-            MultiSelectResult::Single(index) => {
-                checked_indices.clear();
-                if index == selectable_count {
-                    break;
-                }
-                selected_index = index;
-                let selected = matches[index].clone();
-                let actions = downloadable_skill_actions(&selected);
-                let Some(action_index) = select_menu(
-                    &mut session,
-                    MenuUi {
-                        title: menu_title_with_directory(
-                            format!(
-                                "Choose an action for {}",
-                                skill_directory_name(&selected.available)
-                            ),
-                            directory,
-                        ),
-                        items: actions
-                            .iter()
-                            .map(|item| MenuItemUi {
-                                label: (*item).to_string(),
-                                preview_lines: downloadable_skill_preview_lines(
-                                    &selected, directory,
-                                ),
-                                installed: false,
-                            })
-                            .collect(),
-                        default: action_menu_default(&actions),
-                        preview_title: skill_directory_name(&selected.available),
-                        status: status_message.clone(),
-                        help_text: DEFAULT_HELP_TEXT.to_string(),
-                        empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
-                    },
-                )?
-                else {
-                    continue;
-                };
-                match actions[action_index] {
-                    BACK_CHOICE => continue,
-                    EXIT_CHOICE => break,
-                    INSTALL_CHOICE => {
-                        let installed =
-                            selected.available.install_to(directory, None, overwrite)?;
-                        remember_status(
-                            &mut messages,
-                            &mut status_message,
-                            format!(
-                                "Downloaded {} with {} files to {}",
-                                skill_directory_name(&installed),
-                                installed.resources.len() + 1,
-                                installed.path.as_deref().unwrap_or_default()
-                            ),
-                        );
-                    }
-                    UPDATE_CHOICE => {
-                        let installed = selected
-                            .installed
-                            .as_ref()
-                            .context("Only installed skills can be updated")?;
-                        remember_status(
-                            &mut messages,
-                            &mut status_message,
-                            update_skill(directory, installed, client)?,
-                        );
-                    }
-                    REMOVE_CHOICE => {
-                        let installed = selected
-                            .installed
-                            .as_ref()
-                            .context("Only installed skills can be removed")?;
-                        let removed = remove_skill(&skill_directory_name(installed), directory)?;
-                        remember_status(
-                            &mut messages,
-                            &mut status_message,
-                            format!("Removed {}", skill_directory_name(&removed)),
-                        );
-                    }
-                    _ => {}
-                }
+            MultiSelectMenuResult::Cancel => break,
+            MultiSelectMenuResult::NextTab => {
+                active_tab = next_tab_index(active_tab, destinations.len());
+                continue;
             }
-            MultiSelectResult::Bulk(indices) => {
-                selected_index = indices.first().copied().unwrap_or(selected_index);
-                let selected: Vec<DownloadableSkillMatch> =
-                    indices.iter().map(|&i| matches[i].clone()).collect();
-                let has_installable = selected.iter().any(|m| m.status() == STATUS_INSTALLABLE);
-                let has_updatable = selected.iter().any(|m| m.status() == STATUS_UPDATABLE);
-                let has_removable = selected.iter().any(|m| m.installed.is_some());
-                let mut actions: Vec<&'static str> = Vec::new();
-                if has_installable {
-                    actions.push(INSTALL_ALL_CHOICE);
-                }
-                if has_updatable {
-                    actions.push(UPDATE_ALL_CHOICE);
-                }
-                if has_removable {
-                    actions.push(REMOVE_ALL_CHOICE);
-                }
-                actions.push(BACK_CHOICE);
-                actions.push(EXIT_CHOICE);
-                let preview_names = selected
-                    .iter()
-                    .map(|m| skill_directory_name(&m.available))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let action_index = select_menu(
-                    &mut session,
-                    MenuUi {
-                        title: menu_title_with_directory(
-                            format!("Action for {} selected skills", selected.len()),
-                            directory,
-                        ),
-                        items: actions
-                            .iter()
-                            .map(|a| MenuItemUi {
-                                label: (*a).to_string(),
-                                preview_lines: preview_names.lines().map(str::to_owned).collect(),
-                                installed: false,
-                            })
-                            .collect(),
-                        default: action_menu_default(&actions),
-                        preview_title: "Selected skills".to_string(),
-                        status: status_message.clone(),
-                        help_text: DEFAULT_HELP_TEXT.to_string(),
-                        empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
-                    },
-                )?;
-                checked_indices = retained_multi_select_indices(
-                    action_index.map(|index| actions[index]),
-                    &indices,
-                );
-                let Some(action_index) = action_index else {
-                    continue;
-                };
-                match actions[action_index] {
-                    BACK_CHOICE => continue,
-                    EXIT_CHOICE => break,
-                    INSTALL_ALL_CHOICE => {
-                        for m in selected.iter().filter(|m| m.status() == STATUS_INSTALLABLE) {
-                            let installed = m.available.install_to(directory, None, overwrite)?;
+            MultiSelectMenuResult::PreviousTab => {
+                active_tab = previous_tab_index(active_tab, destinations.len());
+                continue;
+            }
+            MultiSelectMenuResult::Selection(result) => match result {
+                MultiSelectResult::Single(index) => {
+                    checked_indices[active_tab].clear();
+                    if index == selectable_count {
+                        break;
+                    }
+                    selected_indices[active_tab] = index;
+                    let selected = matches[index].clone();
+                    let actions = downloadable_skill_actions(&selected);
+                    let action_index = select_menu(
+                        &mut session,
+                        MenuUi {
+                            title: menu_title_with_directory(
+                                format!(
+                                    "Choose an action for {}",
+                                    skill_directory_name(&selected.available)
+                                ),
+                                directory,
+                            ),
+                            items: actions
+                                .iter()
+                                .map(|item| MenuItemUi {
+                                    label: (*item).to_string(),
+                                    preview_lines: downloadable_skill_preview_lines(
+                                        &selected, directory,
+                                    ),
+                                    status: MenuItemStatus::Default,
+                                    selectable: true,
+                                })
+                                .collect(),
+                            default: action_menu_default(&actions),
+                            preview_title: skill_directory_name(&selected.available),
+                            status: status_message.clone(),
+                            help_text: DEFAULT_HELP_TEXT.to_string(),
+                            empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
+                            tabs: Vec::new(),
+                            active_tab: 0,
+                        },
+                    )?;
+                    let SelectMenuResult::Selected(action_index) = action_index else {
+                        continue;
+                    };
+                    match actions[action_index] {
+                        BACK_CHOICE => continue,
+                        EXIT_CHOICE => break,
+                        INSTALL_CHOICE => {
+                            let installed =
+                                selected.available.install_to(directory, None, overwrite)?;
                             remember_status(
                                 &mut messages,
                                 &mut status_message,
@@ -2249,38 +2605,147 @@ fn download_selected_skills(
                                 ),
                             );
                         }
-                    }
-                    UPDATE_ALL_CHOICE => {
-                        for m in selected.iter().filter(|m| m.status() == STATUS_UPDATABLE) {
-                            let installed_skill = m
+                        UPDATE_CHOICE => {
+                            let installed = selected
                                 .installed
                                 .as_ref()
                                 .context("Only installed skills can be updated")?;
                             remember_status(
                                 &mut messages,
                                 &mut status_message,
-                                update_skill(directory, installed_skill, client)?,
+                                update_skill(directory, installed, client)?,
                             );
                         }
-                    }
-                    REMOVE_ALL_CHOICE => {
-                        for m in selected.iter().filter(|m| m.installed.is_some()) {
-                            let installed_skill = m
+                        REMOVE_CHOICE => {
+                            let installed = selected
                                 .installed
                                 .as_ref()
                                 .context("Only installed skills can be removed")?;
                             let removed =
-                                remove_skill(&skill_directory_name(installed_skill), directory)?;
+                                remove_skill(&skill_directory_name(installed), directory)?;
                             remember_status(
                                 &mut messages,
                                 &mut status_message,
                                 format!("Removed {}", skill_directory_name(&removed)),
                             );
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
-            }
+                MultiSelectResult::Bulk(indices) => {
+                    selected_indices[active_tab] = indices
+                        .first()
+                        .copied()
+                        .unwrap_or(selected_indices[active_tab]);
+                    let selected: Vec<DownloadableSkillMatch> =
+                        indices.iter().map(|&i| matches[i].clone()).collect();
+                    let has_installable = selected.iter().any(|m| m.status() == STATUS_INSTALLABLE);
+                    let has_updatable = selected.iter().any(|m| m.status() == STATUS_UPDATABLE);
+                    let has_removable = selected.iter().any(|m| m.installed.is_some());
+                    let mut actions: Vec<&'static str> = Vec::new();
+                    if has_installable {
+                        actions.push(INSTALL_ALL_CHOICE);
+                    }
+                    if has_updatable {
+                        actions.push(UPDATE_ALL_CHOICE);
+                    }
+                    if has_removable {
+                        actions.push(REMOVE_ALL_CHOICE);
+                    }
+                    actions.push(BACK_CHOICE);
+                    actions.push(EXIT_CHOICE);
+                    let preview_names = selected
+                        .iter()
+                        .map(|m| skill_directory_name(&m.available))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let action_index = select_menu(
+                        &mut session,
+                        MenuUi {
+                            title: menu_title_with_directory(
+                                format!("Action for {} selected skills", selected.len()),
+                                directory,
+                            ),
+                            items: actions
+                                .iter()
+                                .map(|a| MenuItemUi {
+                                    label: (*a).to_string(),
+                                    preview_lines: preview_names
+                                        .lines()
+                                        .map(str::to_owned)
+                                        .collect(),
+                                    status: MenuItemStatus::Default,
+                                    selectable: true,
+                                })
+                                .collect(),
+                            default: action_menu_default(&actions),
+                            preview_title: "Selected skills".to_string(),
+                            status: status_message.clone(),
+                            help_text: DEFAULT_HELP_TEXT.to_string(),
+                            empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
+                            tabs: Vec::new(),
+                            active_tab: 0,
+                        },
+                    )?;
+                    let SelectMenuResult::Selected(action_index) = action_index else {
+                        checked_indices[active_tab] = indices;
+                        continue;
+                    };
+                    checked_indices[active_tab] =
+                        retained_multi_select_indices(Some(actions[action_index]), &indices);
+                    match actions[action_index] {
+                        BACK_CHOICE => continue,
+                        EXIT_CHOICE => break,
+                        INSTALL_ALL_CHOICE => {
+                            for m in selected.iter().filter(|m| m.status() == STATUS_INSTALLABLE) {
+                                let installed =
+                                    m.available.install_to(directory, None, overwrite)?;
+                                remember_status(
+                                    &mut messages,
+                                    &mut status_message,
+                                    format!(
+                                        "Downloaded {} with {} files to {}",
+                                        skill_directory_name(&installed),
+                                        installed.resources.len() + 1,
+                                        installed.path.as_deref().unwrap_or_default()
+                                    ),
+                                );
+                            }
+                        }
+                        UPDATE_ALL_CHOICE => {
+                            for m in selected.iter().filter(|m| m.status() == STATUS_UPDATABLE) {
+                                let installed_skill = m
+                                    .installed
+                                    .as_ref()
+                                    .context("Only installed skills can be updated")?;
+                                remember_status(
+                                    &mut messages,
+                                    &mut status_message,
+                                    update_skill(directory, installed_skill, client)?,
+                                );
+                            }
+                        }
+                        REMOVE_ALL_CHOICE => {
+                            for m in selected.iter().filter(|m| m.installed.is_some()) {
+                                let installed_skill = m
+                                    .installed
+                                    .as_ref()
+                                    .context("Only installed skills can be removed")?;
+                                let removed = remove_skill(
+                                    &skill_directory_name(installed_skill),
+                                    directory,
+                                )?;
+                                remember_status(
+                                    &mut messages,
+                                    &mut status_message,
+                                    format!("Removed {}", skill_directory_name(&removed)),
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            },
         }
     }
 
@@ -2290,146 +2755,270 @@ fn download_selected_skills(
     Ok(())
 }
 
-fn run_list(directory: &Path, config: ClientConfig) -> Result<()> {
-    let skills = discover_installed_skills(directory)?;
-    if skills.is_empty() {
-        println!("{}", no_skills_found_message(directory));
-        return Ok(());
-    }
-
+fn run_list(destination: &DestinationArgs, config: ClientConfig) -> Result<()> {
     if !interactive_terminal() {
-        for skill in skills {
-            println!("{}", installed_skill_label(&skill));
+        let directory = destination.resolve()?;
+        let report = discover_installed_skills_report(&directory)?;
+        let entries = listed_skill_entries(report);
+        if entries.is_empty() {
+            println!("{}", no_skills_found_message(&directory));
+            return Ok(());
+        }
+        for entry in entries {
+            println!("{}", listed_skill_label(&entry));
         }
         return Ok(());
     }
+
+    let destinations = destination.resolve_interactive_destinations()?;
     let client = SkillsMpClient::new(config)?;
     let mut session = TerminalSession::new()?;
     let mut messages = Vec::new();
     let mut status_message = None;
-    let mut selected_index = 0;
-    let mut checked_indices = Vec::new();
+    let mut selected_indices = vec![0usize; destinations.len()];
+    let mut checked_indices = vec![Vec::<usize>::new(); destinations.len()];
+    let mut active_tab = 0usize;
+
     loop {
-        let skills = discover_installed_skills(directory)?;
-        if skills.is_empty() {
+        let reports_by_tab = destinations
+            .iter()
+            .map(|destination| discover_installed_skills_report(&destination.path))
+            .collect::<Result<Vec<_>>>()?;
+        let entries_by_tab = reports_by_tab
+            .into_iter()
+            .map(listed_skill_entries)
+            .collect::<Vec<_>>();
+        let empty_flags = entries_by_tab.iter().map(Vec::is_empty).collect::<Vec<_>>();
+        if empty_flags.iter().all(|is_empty| *is_empty) {
+            println!("{}", no_skills_found_message_anywhere());
             break;
         }
-        let selectable_count = skills.len();
-        let mut items = skills
+        if active_tab >= destinations.len() {
+            active_tab = 0;
+        }
+
+        let directory = &destinations[active_tab].path;
+        let entries = &entries_by_tab[active_tab];
+        let selectable_count = entries
             .iter()
-            .map(|skill| MenuItemUi {
-                label: installed_skill_label(skill),
-                preview_lines: installed_skill_preview_lines(skill),
-                installed: false,
+            .filter(|entry| matches!(entry, ListedSkillEntry::Valid(_)))
+            .count();
+        let exit_index = entries.len();
+        let mut items = entries
+            .iter()
+            .map(|entry| MenuItemUi {
+                label: listed_skill_label(entry),
+                preview_lines: listed_skill_preview_lines(entry),
+                status: listed_skill_menu_status(entry),
+                selectable: matches!(entry, ListedSkillEntry::Valid(_)),
             })
             .collect::<Vec<_>>();
         items.push(exit_menu_item("Exit list"));
-        let Some(result) = multi_select_menu(
+
+        match multi_select_menu(
             &mut session,
             MenuUi {
-                title: menu_title_with_directory("Select installed skills".to_string(), directory),
+                title: menu_title_for_destination(
+                    "Select installed skills".to_string(),
+                    &destinations,
+                    active_tab,
+                ),
                 items,
-                default: selected_index,
+                default: selected_indices[active_tab].min(selectable_count),
                 preview_title: "Installed skill".to_string(),
                 status: status_message.clone(),
                 help_text: MULTI_SELECT_HELP_TEXT.to_string(),
                 empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
+                tabs: destination_tabs(&destinations, &empty_flags),
+                active_tab,
             },
             selectable_count,
-            &checked_indices,
-        )?
-        else {
-            break;
-        };
-
-        match result {
-            MultiSelectResult::Single(index) => {
-                checked_indices.clear();
-                if index == selectable_count {
+            &checked_indices[active_tab],
+        )? {
+            MultiSelectMenuResult::Cancel => break,
+            MultiSelectMenuResult::NextTab => {
+                active_tab = next_non_empty_tab_index(active_tab, &empty_flags);
+            }
+            MultiSelectMenuResult::PreviousTab => {
+                active_tab = previous_non_empty_tab_index(active_tab, &empty_flags);
+            }
+            MultiSelectMenuResult::Selection(MultiSelectResult::Single(index)) => {
+                checked_indices[active_tab].clear();
+                if index == exit_index {
                     break;
                 }
-                selected_index = index;
-                let selected = skills[index].clone();
-                let update_available = update_available_or_remember_error(
-                    directory,
-                    &selected,
-                    &client,
-                    &mut status_message,
-                );
-                let actions = installed_skill_actions(update_available, REMOVE_CHOICE);
-                let Some(action_index) = select_menu(
-                    &mut session,
-                    MenuUi {
-                        title: menu_title_with_directory(
-                            format!("Choose an action for {}", skill_directory_name(&selected)),
+                selected_indices[active_tab] = index;
+                match entries[index].clone() {
+                    ListedSkillEntry::Valid(selected) => {
+                        let update_available = update_available_or_remember_error(
                             directory,
-                        ),
-                        items: actions
-                            .iter()
-                            .map(|item| MenuItemUi {
-                                label: (*item).to_string(),
-                                preview_lines: installed_skill_preview_lines(&selected),
-                                installed: false,
-                            })
-                            .collect(),
-                        default: action_menu_default(&actions),
-                        preview_title: skill_directory_name(&selected),
-                        status: status_message.clone(),
-                        help_text: DEFAULT_HELP_TEXT.to_string(),
-                        empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
-                    },
-                )?
-                else {
-                    continue;
-                };
-                match actions[action_index] {
-                    BACK_CHOICE => continue,
-                    EXIT_CHOICE => break,
-                    UPDATE_CHOICE => {
-                        remember_status(
-                            &mut messages,
+                            &selected,
+                            &client,
                             &mut status_message,
-                            update_skill(directory, &selected, &client)?,
                         );
+                        let actions = installed_skill_actions(update_available, REMOVE_CHOICE);
+                        match select_menu(
+                            &mut session,
+                            MenuUi {
+                                title: menu_title_for_destination(
+                                    format!(
+                                        "Choose an action for {}",
+                                        skill_directory_name(&selected)
+                                    ),
+                                    &destinations,
+                                    active_tab,
+                                ),
+                                items: actions
+                                    .iter()
+                                    .map(|item| MenuItemUi {
+                                        label: (*item).to_string(),
+                                        preview_lines: listed_skill_preview_lines(
+                                            &ListedSkillEntry::Valid(selected.clone()),
+                                        ),
+                                        status: MenuItemStatus::Default,
+                                        selectable: true,
+                                    })
+                                    .collect(),
+                                default: action_menu_default(&actions),
+                                preview_title: skill_directory_name(&selected),
+                                status: status_message.clone(),
+                                help_text: DEFAULT_HELP_TEXT.to_string(),
+                                empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
+                                tabs: destination_tabs(&destinations, &empty_flags),
+                                active_tab,
+                            },
+                        )? {
+                            SelectMenuResult::Cancel => continue,
+                            SelectMenuResult::NextTab => {
+                                active_tab = next_non_empty_tab_index(active_tab, &empty_flags);
+                            }
+                            SelectMenuResult::PreviousTab => {
+                                active_tab = previous_non_empty_tab_index(active_tab, &empty_flags);
+                            }
+                            SelectMenuResult::Selected(action_index) => match actions[action_index]
+                            {
+                                BACK_CHOICE => continue,
+                                EXIT_CHOICE => break,
+                                UPDATE_CHOICE => {
+                                    remember_status(
+                                        &mut messages,
+                                        &mut status_message,
+                                        update_skill(directory, &selected, &client)?,
+                                    );
+                                }
+                                REMOVE_CHOICE => {
+                                    let removed =
+                                        remove_skill(&skill_directory_name(&selected), directory)?;
+                                    remember_status(
+                                        &mut messages,
+                                        &mut status_message,
+                                        format!("Removed {}", skill_directory_name(&removed)),
+                                    );
+                                }
+                                _ => {}
+                            },
+                        }
                     }
-                    REMOVE_CHOICE => {
-                        let removed = remove_skill(&skill_directory_name(&selected), directory)?;
-                        remember_status(
-                            &mut messages,
-                            &mut status_message,
-                            format!("Removed {}", skill_directory_name(&removed)),
-                        );
+                    ListedSkillEntry::Invalid(selected) => {
+                        let actions = invalid_installed_skill_actions(REMOVE_CHOICE);
+                        match select_menu(
+                            &mut session,
+                            MenuUi {
+                                title: menu_title_for_destination(
+                                    format!("Choose an action for {}", selected.directory_name),
+                                    &destinations,
+                                    active_tab,
+                                ),
+                                items: actions
+                                    .iter()
+                                    .map(|item| MenuItemUi {
+                                        label: (*item).to_string(),
+                                        preview_lines: listed_skill_preview_lines(
+                                            &ListedSkillEntry::Invalid(selected.clone()),
+                                        ),
+                                        status: MenuItemStatus::Default,
+                                        selectable: true,
+                                    })
+                                    .collect(),
+                                default: action_menu_default(&actions),
+                                preview_title: selected.directory_name.clone(),
+                                status: status_message.clone(),
+                                help_text: DEFAULT_HELP_TEXT.to_string(),
+                                empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
+                                tabs: destination_tabs(&destinations, &empty_flags),
+                                active_tab,
+                            },
+                        )? {
+                            SelectMenuResult::Cancel => continue,
+                            SelectMenuResult::NextTab => {
+                                active_tab = next_non_empty_tab_index(active_tab, &empty_flags);
+                            }
+                            SelectMenuResult::PreviousTab => {
+                                active_tab = previous_non_empty_tab_index(active_tab, &empty_flags);
+                            }
+                            SelectMenuResult::Selected(action_index) => match actions[action_index]
+                            {
+                                BACK_CHOICE => continue,
+                                EXIT_CHOICE => break,
+                                REMOVE_CHOICE => {
+                                    fs::remove_dir_all(&selected.path)?;
+                                    let removed_name = selected.directory_name;
+                                    remember_status(
+                                        &mut messages,
+                                        &mut status_message,
+                                        format!("Removed invalid skill {removed_name}"),
+                                    );
+                                }
+                                _ => {}
+                            },
+                        }
                     }
-                    _ => {}
                 }
             }
-            MultiSelectResult::Bulk(indices) => {
-                selected_index = indices.first().copied().unwrap_or(selected_index);
-                let selected: Vec<SkillData> = indices.iter().map(|&i| skills[i].clone()).collect();
+            MultiSelectMenuResult::Selection(MultiSelectResult::Bulk(indices)) => {
+                selected_indices[active_tab] = indices
+                    .first()
+                    .copied()
+                    .unwrap_or(selected_indices[active_tab]);
+                let selected = indices
+                    .iter()
+                    .map(|&i| entries[i].clone())
+                    .collect::<Vec<_>>();
                 let preview_names = selected
                     .iter()
-                    .map(skill_directory_name)
+                    .map(|entry| match entry {
+                        ListedSkillEntry::Valid(skill) => skill_directory_name(skill),
+                        ListedSkillEntry::Invalid(skill) => skill.directory_name.clone(),
+                    })
                     .collect::<Vec<_>>()
                     .join("\n");
-                let actions = vec![
-                    REMOVE_ALL_CHOICE,
-                    UPDATE_ALL_CHOICE,
-                    BACK_CHOICE,
-                    EXIT_CHOICE,
-                ];
-                let action_index = select_menu(
+                let has_valid = selected
+                    .iter()
+                    .any(|entry| matches!(entry, ListedSkillEntry::Valid(_)));
+                let has_invalid = selected
+                    .iter()
+                    .any(|entry| matches!(entry, ListedSkillEntry::Invalid(_)));
+                let mut actions = vec![REMOVE_ALL_CHOICE];
+                if has_valid && !has_invalid {
+                    actions.push(UPDATE_ALL_CHOICE);
+                }
+                actions.push(BACK_CHOICE);
+                actions.push(EXIT_CHOICE);
+                match select_menu(
                     &mut session,
                     MenuUi {
-                        title: menu_title_with_directory(
+                        title: menu_title_for_destination(
                             format!("Action for {} selected skills", selected.len()),
-                            directory,
+                            &destinations,
+                            active_tab,
                         ),
                         items: actions
                             .iter()
-                            .map(|a| MenuItemUi {
-                                label: (*a).to_string(),
+                            .map(|action| MenuItemUi {
+                                label: (*action).to_string(),
                                 preview_lines: preview_names.lines().map(str::to_owned).collect(),
-                                installed: false,
+                                status: MenuItemStatus::Default,
+                                selectable: true,
                             })
                             .collect(),
                         default: action_menu_default(&actions),
@@ -2437,49 +3026,87 @@ fn run_list(directory: &Path, config: ClientConfig) -> Result<()> {
                         status: status_message.clone(),
                         help_text: DEFAULT_HELP_TEXT.to_string(),
                         empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
+                        tabs: destination_tabs(&destinations, &empty_flags),
+                        active_tab,
                     },
-                )?;
-                checked_indices = retained_multi_select_indices(
-                    action_index.map(|index| actions[index]),
-                    &indices,
-                );
-                let Some(action_index) = action_index else {
-                    continue;
-                };
-                match actions[action_index] {
-                    BACK_CHOICE => continue,
-                    EXIT_CHOICE => break,
-                    REMOVE_ALL_CHOICE => {
-                        for skill in &selected {
-                            let removed = remove_skill(&skill_directory_name(skill), directory)?;
-                            remember_status(
-                                &mut messages,
-                                &mut status_message,
-                                format!("Removed {}", skill_directory_name(&removed)),
-                            );
-                        }
+                )? {
+                    SelectMenuResult::Cancel => {
+                        checked_indices[active_tab] = indices;
                     }
-                    UPDATE_ALL_CHOICE => {
-                        for skill in &selected {
-                            match update_skill(directory, skill, &client) {
-                                Ok(msg) if !msg.contains("already up to date") => {
-                                    remember_status(&mut messages, &mut status_message, msg);
-                                }
-                                Ok(_) => {}
-                                Err(e) => {
-                                    remember_status(
-                                        &mut messages,
-                                        &mut status_message,
-                                        format!(
-                                            "Failed to update {}: {e}",
-                                            skill_directory_name(skill)
-                                        ),
-                                    );
+                    SelectMenuResult::NextTab => {
+                        checked_indices[active_tab] = indices;
+                        active_tab = next_non_empty_tab_index(active_tab, &empty_flags);
+                    }
+                    SelectMenuResult::PreviousTab => {
+                        checked_indices[active_tab] = indices;
+                        active_tab = previous_non_empty_tab_index(active_tab, &empty_flags);
+                    }
+                    SelectMenuResult::Selected(action_index) => {
+                        checked_indices[active_tab] =
+                            retained_multi_select_indices(Some(actions[action_index]), &indices);
+                        match actions[action_index] {
+                            BACK_CHOICE => continue,
+                            EXIT_CHOICE => break,
+                            REMOVE_ALL_CHOICE => {
+                                for entry in &selected {
+                                    match entry {
+                                        ListedSkillEntry::Valid(skill) => {
+                                            let removed = remove_skill(
+                                                &skill_directory_name(skill),
+                                                directory,
+                                            )?;
+                                            remember_status(
+                                                &mut messages,
+                                                &mut status_message,
+                                                format!(
+                                                    "Removed {}",
+                                                    skill_directory_name(&removed)
+                                                ),
+                                            );
+                                        }
+                                        ListedSkillEntry::Invalid(skill) => {
+                                            fs::remove_dir_all(&skill.path)?;
+                                            remember_status(
+                                                &mut messages,
+                                                &mut status_message,
+                                                format!(
+                                                    "Removed invalid skill {}",
+                                                    skill.directory_name
+                                                ),
+                                            );
+                                        }
+                                    }
                                 }
                             }
+                            UPDATE_ALL_CHOICE => {
+                                for entry in &selected {
+                                    if let ListedSkillEntry::Valid(skill) = entry {
+                                        match update_skill(directory, skill, &client) {
+                                            Ok(msg) if !msg.contains("already up to date") => {
+                                                remember_status(
+                                                    &mut messages,
+                                                    &mut status_message,
+                                                    msg,
+                                                );
+                                            }
+                                            Ok(_) => {}
+                                            Err(error) => {
+                                                remember_status(
+                                                    &mut messages,
+                                                    &mut status_message,
+                                                    format!(
+                                                        "Failed to update {}: {error}",
+                                                        skill_directory_name(skill)
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    _ => {}
                 }
             }
         }
@@ -2499,7 +3126,7 @@ struct PendingSkillUpdate {
 
 fn run_update(directory: &Path, config: ClientConfig, yes: bool) -> Result<()> {
     let client = SkillsMpClient::new(config)?;
-    let installed_skills = discover_installed_skills(directory)?;
+    let installed_skills = discover_installed_skills_report(directory)?.valid_skills;
     let environment = ProjectEnvironment::with_paths(
         directory,
         Path::new("pyproject.toml"),
@@ -2682,7 +3309,7 @@ fn short_revision(revision: Option<&str>) -> String {
 
 fn run_skillsmp_search(
     query: &str,
-    directory: &Path,
+    destination: &DestinationArgs,
     overwrite: bool,
     config: ClientConfig,
 ) -> Result<()> {
@@ -2699,18 +3326,38 @@ fn run_skillsmp_search(
         return Ok(());
     }
 
+    let destinations = destination.resolve_interactive_destinations()?;
     let mut session = TerminalSession::new()?;
     let mut cache = std::collections::BTreeMap::<String, SkillData>::new();
     let mut messages = Vec::new();
     let mut status_message = None;
-    let mut selected_index = 0;
+    let mut active_tab = 0usize;
+    let mut selected_indices = vec![0usize; destinations.len()];
     loop {
-        let installed_skills = discover_installed_skills(directory)?;
+        let installed_skills_by_tab = destinations
+            .iter()
+            .map(
+                |destination| Ok(discover_installed_skills_report(&destination.path)?.valid_skills),
+            )
+            .collect::<Result<Vec<_>>>()?;
+        let empty_flags = installed_skills_by_tab
+            .iter()
+            .map(Vec::is_empty)
+            .collect::<Vec<_>>();
+        if active_tab >= destinations.len() || empty_flags[active_tab] {
+            active_tab = first_non_empty_tab(&empty_flags);
+        }
+        let directory = &destinations[active_tab].path;
         let search_matches = response
             .data
             .skills
             .iter()
-            .map(|skill| (skill, installed_skillsmp_match(skill, &installed_skills)))
+            .map(|skill| {
+                (
+                    skill,
+                    installed_skillsmp_match(skill, &installed_skills_by_tab[active_tab]),
+                )
+            })
             .collect::<Vec<_>>();
         let mut items = response
             .data
@@ -2719,33 +3366,46 @@ fn run_skillsmp_search(
             .zip(search_matches.iter())
             .map(|(skill, (_matched_skill, installed))| MenuItemUi {
                 label: search_skill_label(skill, installed.as_ref()),
-                preview_lines: skillsmp_search_preview_lines(skill, installed.as_ref(), directory),
-                installed: installed.is_some(),
+                preview_lines: skillsmp_search_preview_lines(skill, installed.as_ref(), &directory),
+                status: skillsmp_search_menu_status(installed.as_ref()),
+                selectable: true,
             })
             .collect::<Vec<_>>();
         items.push(exit_menu_item("Exit search"));
-        let Some(index) = select_menu(
+        let index = select_menu(
             &mut session,
             MenuUi {
-                title: menu_title_with_directory(
+                title: menu_title_for_destination(
                     format!("Select a skill for \"{query}\""),
-                    directory,
+                    &destinations,
+                    active_tab,
                 ),
                 items,
-                default: selected_index,
+                default: selected_indices[active_tab],
                 preview_title: "SkillsMP result".to_string(),
                 status: status_message.clone(),
                 help_text: DEFAULT_HELP_TEXT.to_string(),
                 empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
+                tabs: destination_tabs(&destinations, &vec![false; destinations.len()]),
+                active_tab,
             },
-        )?
-        else {
-            break;
+        )?;
+        let index = match index {
+            SelectMenuResult::Cancel => break,
+            SelectMenuResult::NextTab => {
+                active_tab = next_tab_index(active_tab, destinations.len());
+                continue;
+            }
+            SelectMenuResult::PreviousTab => {
+                active_tab = previous_tab_index(active_tab, destinations.len());
+                continue;
+            }
+            SelectMenuResult::Selected(index) => index,
         };
         if index == response.data.skills.len() {
             break;
         }
-        selected_index = index;
+        selected_indices[active_tab] = index;
         let skill = search_matches[index].0;
         let matched_installed = search_matches[index].1.clone();
         let installable = if let Some(existing) = cache.get(&skill.id) {
@@ -2780,12 +3440,12 @@ fn run_skillsmp_search(
             installed: matched_installed,
         };
         let actions = downloadable_skill_actions(&downloadable_match);
-        let Some(action_index) = select_menu(
+        let action_index = select_menu(
             &mut session,
             MenuUi {
                 title: menu_title_with_directory(
                     format!("Choose an action for {}", skill.name),
-                    directory,
+                    &directory,
                 ),
                 items: actions
                     .iter()
@@ -2794,9 +3454,10 @@ fn run_skillsmp_search(
                         preview_lines: skillsmp_installable_preview_lines(
                             skill,
                             &downloadable_match,
-                            directory,
+                            &directory,
                         ),
-                        installed: false,
+                        status: MenuItemStatus::Default,
+                        selectable: true,
                     })
                     .collect(),
                 default: action_menu_default(&actions),
@@ -2804,16 +3465,18 @@ fn run_skillsmp_search(
                 status: status_message.clone(),
                 help_text: DEFAULT_HELP_TEXT.to_string(),
                 empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
+                tabs: Vec::new(),
+                active_tab: 0,
             },
-        )?
-        else {
+        )?;
+        let SelectMenuResult::Selected(action_index) = action_index else {
             continue;
         };
         match actions[action_index] {
             BACK_CHOICE => continue,
             EXIT_CHOICE => break,
             INSTALL_CHOICE => {
-                let installed = installable.install_to(directory, None, overwrite)?;
+                let installed = installable.install_to(&directory, None, overwrite)?;
                 remember_status(
                     &mut messages,
                     &mut status_message,
@@ -2832,7 +3495,7 @@ fn run_skillsmp_search(
                 remember_status(
                     &mut messages,
                     &mut status_message,
-                    update_skill(directory, installed, &client)?,
+                    update_skill(&directory, installed, &client)?,
                 );
             }
             REMOVE_CHOICE => {
@@ -2840,7 +3503,7 @@ fn run_skillsmp_search(
                     .installed
                     .as_ref()
                     .context("Only installed skills can be removed")?;
-                let removed = remove_skill(&skill_directory_name(installed), directory)?;
+                let removed = remove_skill(&skill_directory_name(installed), &directory)?;
                 remember_status(
                     &mut messages,
                     &mut status_message,
@@ -2856,9 +3519,11 @@ fn run_skillsmp_search(
     Ok(())
 }
 
-fn run_skillsmp_list(directory: &Path, config: ClientConfig) -> Result<()> {
+fn run_skillsmp_list(destination: &DestinationArgs, config: ClientConfig) -> Result<()> {
     if !interactive_terminal() {
-        let skills = discover_installed_skills(directory)?
+        let directory = destination.resolve()?;
+        let skills = discover_installed_skills_report(&directory)?
+            .valid_skills
             .into_iter()
             .filter(|skill| skill.is_skillsmp())
             .collect::<Vec<_>>();
@@ -2874,111 +3539,145 @@ fn run_skillsmp_list(directory: &Path, config: ClientConfig) -> Result<()> {
         }
         return Ok(());
     }
+
+    let destinations = destination.resolve_interactive_destinations()?;
     let client = SkillsMpClient::new(config)?;
-    let skills = discover_installed_skills(directory)?
-        .into_iter()
-        .filter(|skill| skill.is_skillsmp())
-        .collect::<Vec<_>>();
-    if skills.is_empty() {
-        println!(
-            "No SkillsMP-installed skills found in {}",
-            directory.display()
-        );
-        return Ok(());
-    }
     let mut session = TerminalSession::new()?;
     let mut messages = Vec::new();
     let mut status_message = None;
-    let mut selected_index = 0;
+    let mut selected_indices = vec![0usize; destinations.len()];
+    let mut active_tab = 0usize;
+
     loop {
-        let skills = discover_installed_skills(directory)?
-            .into_iter()
-            .filter(|skill| skill.is_skillsmp())
-            .collect::<Vec<_>>();
-        if skills.is_empty() {
+        let skills_by_tab = destinations
+            .iter()
+            .map(|destination| {
+                Ok(discover_installed_skills_report(&destination.path)?
+                    .valid_skills
+                    .into_iter()
+                    .filter(|skill| skill.is_skillsmp())
+                    .collect::<Vec<_>>())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let empty_flags = skills_by_tab.iter().map(Vec::is_empty).collect::<Vec<_>>();
+        if empty_flags.iter().all(|is_empty| *is_empty) {
+            println!("No SkillsMP-installed skills found in any managed directory");
             break;
         }
+        if active_tab >= destinations.len() || empty_flags[active_tab] {
+            active_tab = first_non_empty_tab(&empty_flags);
+        }
+
+        let directory = &destinations[active_tab].path;
+        let skills = &skills_by_tab[active_tab];
         let mut items = skills
             .iter()
             .map(|skill| MenuItemUi {
                 label: installed_skill_label(skill),
                 preview_lines: installed_skill_preview_lines(skill),
-                installed: false,
+                status: MenuItemStatus::Default,
+                selectable: true,
             })
             .collect::<Vec<_>>();
         items.push(exit_menu_item("Exit list"));
-        let Some(index) = select_menu(
+
+        match select_menu(
             &mut session,
             MenuUi {
-                title: menu_title_with_directory(
+                title: menu_title_for_destination(
                     "Select an installed SkillsMP skill".to_string(),
-                    directory,
+                    &destinations,
+                    active_tab,
                 ),
                 items,
-                default: selected_index,
+                default: selected_indices[active_tab].min(skills.len()),
                 preview_title: "Installed skill".to_string(),
                 status: status_message.clone(),
                 help_text: DEFAULT_HELP_TEXT.to_string(),
                 empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
+                tabs: destination_tabs(&destinations, &empty_flags),
+                active_tab,
             },
-        )?
-        else {
-            break;
-        };
-        if index == skills.len() {
-            break;
-        }
-        selected_index = index;
-        let selected = skills[index].clone();
-        let update_available =
-            update_available_or_remember_error(directory, &selected, &client, &mut status_message);
-        let actions = installed_skill_actions(update_available, DELETE_CHOICE);
-        let Some(action_index) = select_menu(
-            &mut session,
-            MenuUi {
-                title: menu_title_with_directory(
-                    format!("Choose an action for {}", skill_directory_name(&selected)),
+        )? {
+            SelectMenuResult::Cancel => break,
+            SelectMenuResult::NextTab => {
+                active_tab = next_non_empty_tab_index(active_tab, &empty_flags);
+            }
+            SelectMenuResult::PreviousTab => {
+                active_tab = previous_non_empty_tab_index(active_tab, &empty_flags);
+            }
+            SelectMenuResult::Selected(index) => {
+                if index == skills.len() {
+                    break;
+                }
+                selected_indices[active_tab] = index;
+                let selected = skills[index].clone();
+                let update_available = update_available_or_remember_error(
                     directory,
-                ),
-                items: actions
-                    .iter()
-                    .map(|item| MenuItemUi {
-                        label: (*item).to_string(),
-                        preview_lines: installed_skill_preview_lines(&selected),
-                        installed: false,
-                    })
-                    .collect(),
-                default: action_menu_default(&actions),
-                preview_title: skill_directory_name(&selected),
-                status: status_message.clone(),
-                help_text: DEFAULT_HELP_TEXT.to_string(),
-                empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
-            },
-        )?
-        else {
-            continue;
-        };
-        match actions[action_index] {
-            BACK_CHOICE => continue,
-            EXIT_CHOICE => break,
-            UPDATE_CHOICE => {
-                remember_status(
-                    &mut messages,
+                    &selected,
+                    &client,
                     &mut status_message,
-                    update_skill(directory, &selected, &client)?,
                 );
+                let actions = installed_skill_actions(update_available, DELETE_CHOICE);
+                match select_menu(
+                    &mut session,
+                    MenuUi {
+                        title: menu_title_for_destination(
+                            format!("Choose an action for {}", skill_directory_name(&selected)),
+                            &destinations,
+                            active_tab,
+                        ),
+                        items: actions
+                            .iter()
+                            .map(|item| MenuItemUi {
+                                label: (*item).to_string(),
+                                preview_lines: installed_skill_preview_lines(&selected),
+                                status: MenuItemStatus::Default,
+                                selectable: true,
+                            })
+                            .collect(),
+                        default: action_menu_default(&actions),
+                        preview_title: skill_directory_name(&selected),
+                        status: status_message.clone(),
+                        help_text: DEFAULT_HELP_TEXT.to_string(),
+                        empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
+                        tabs: destination_tabs(&destinations, &empty_flags),
+                        active_tab,
+                    },
+                )? {
+                    SelectMenuResult::Cancel => continue,
+                    SelectMenuResult::NextTab => {
+                        active_tab = next_non_empty_tab_index(active_tab, &empty_flags);
+                    }
+                    SelectMenuResult::PreviousTab => {
+                        active_tab = previous_non_empty_tab_index(active_tab, &empty_flags);
+                    }
+                    SelectMenuResult::Selected(action_index) => match actions[action_index] {
+                        BACK_CHOICE => continue,
+                        EXIT_CHOICE => break,
+                        UPDATE_CHOICE => {
+                            remember_status(
+                                &mut messages,
+                                &mut status_message,
+                                update_skill(directory, &selected, &client)?,
+                            );
+                        }
+                        DELETE_CHOICE => {
+                            let removed =
+                                remove_skill(&skill_directory_name(&selected), directory)?;
+                            remember_status(
+                                &mut messages,
+                                &mut status_message,
+                                format!("Removed {}", skill_directory_name(&removed)),
+                            );
+                        }
+                        _ => {}
+                    },
+                }
             }
-            DELETE_CHOICE => {
-                let removed = remove_skill(&skill_directory_name(&selected), directory)?;
-                remember_status(
-                    &mut messages,
-                    &mut status_message,
-                    format!("Removed {}", skill_directory_name(&removed)),
-                );
-            }
-            _ => {}
         }
     }
+
     if !messages.is_empty() {
         println!("{}", messages.join("\n"));
     }
@@ -3202,6 +3901,24 @@ fn installed_skill_label(skill: &SkillData) -> String {
     )
 }
 
+fn invalid_installed_skill_label(skill: &InvalidInstalledSkill) -> String {
+    format!("{}: invalid [invalid]", skill.directory_name)
+}
+
+fn listed_skill_label(entry: &ListedSkillEntry) -> String {
+    match entry {
+        ListedSkillEntry::Valid(skill) => installed_skill_label(skill),
+        ListedSkillEntry::Invalid(skill) => invalid_installed_skill_label(skill),
+    }
+}
+
+fn listed_skill_menu_status(entry: &ListedSkillEntry) -> MenuItemStatus {
+    match entry {
+        ListedSkillEntry::Valid(_) => MenuItemStatus::Default,
+        ListedSkillEntry::Invalid(_) => MenuItemStatus::Disabled,
+    }
+}
+
 fn scan_choice_label(item: &SkillMatchData) -> String {
     format!(
         "{} [{}] [{}] [{}]",
@@ -3237,12 +3954,24 @@ fn scan_skill_actions(item: &SkillMatchData) -> [&'static str; 3] {
     [scan_primary_action(item), BACK_CHOICE, EXIT_CHOICE]
 }
 
+fn scan_menu_status(item: &SkillMatchData) -> MenuItemStatus {
+    match scan_match_status(&item.available, item.installed.as_ref()) {
+        STATUS_UPDATABLE => MenuItemStatus::Updatable,
+        STATUS_INSTALLED => MenuItemStatus::Installed,
+        _ => MenuItemStatus::Default,
+    }
+}
+
 fn installed_skill_actions(update_available: bool, remove_choice: &str) -> Vec<&str> {
     let mut actions = vec![remove_choice, BACK_CHOICE, EXIT_CHOICE];
     if update_available {
         actions.insert(0, UPDATE_CHOICE);
     }
     actions
+}
+
+fn invalid_installed_skill_actions(remove_choice: &str) -> Vec<&str> {
+    vec![remove_choice, BACK_CHOICE, EXIT_CHOICE]
 }
 
 fn action_menu_default(actions: &[&str]) -> usize {
@@ -3273,6 +4002,17 @@ fn menu_title_with_directory(title: String, directory: &Path) -> String {
     format!("{title} | Directory: {}", directory.display())
 }
 
+fn menu_title_for_destination(
+    title: String,
+    destinations: &[ResolvedDestination],
+    active_tab: usize,
+) -> String {
+    if destinations.len() <= 1 {
+        return menu_title_with_directory(title, &destinations[active_tab].path);
+    }
+    title
+}
+
 fn absolute_skill_path(skill: &SkillData) -> Option<PathBuf> {
     skill.path.as_deref().map(PathBuf::from)
 }
@@ -3283,6 +4023,56 @@ fn target_skill_path(skill: &SkillData, directory: &Path) -> PathBuf {
 
 fn no_skills_found_message(directory: &Path) -> String {
     format!("No skills found in directory {}", directory.display())
+}
+
+fn no_skills_found_message_anywhere() -> String {
+    "No skills found in any managed directory".to_string()
+}
+
+fn discover_installed_skills_report(directory: &Path) -> Result<InstalledSkillDiscoveryReport> {
+    if !directory.exists() {
+        return Ok(InstalledSkillDiscoveryReport::default());
+    }
+    if !directory.is_dir() {
+        bail!("{}", directory.display());
+    }
+
+    let mut children =
+        fs::read_dir(directory)?.collect::<std::result::Result<Vec<_>, std::io::Error>>()?;
+    children.sort_by_key(|entry| entry.file_name());
+
+    let mut report = InstalledSkillDiscoveryReport::default();
+    for child in children {
+        let child_path = child.path();
+        if !child.file_type()?.is_dir() {
+            continue;
+        }
+        match SkillData::from_dir_with_source_metadata(&child_path, &SkillSourceMetadata::default())
+        {
+            Ok(skill) => report.valid_skills.push(skill),
+            Err(error) => report.invalid_skills.push(InvalidInstalledSkill {
+                directory_name: child.file_name().to_string_lossy().to_string(),
+                path: child_path,
+                error: error.to_string(),
+            }),
+        }
+    }
+    Ok(report)
+}
+
+fn listed_skill_entries(report: InstalledSkillDiscoveryReport) -> Vec<ListedSkillEntry> {
+    let mut entries = report
+        .valid_skills
+        .into_iter()
+        .map(ListedSkillEntry::Valid)
+        .collect::<Vec<_>>();
+    entries.extend(
+        report
+            .invalid_skills
+            .into_iter()
+            .map(ListedSkillEntry::Invalid),
+    );
+    entries
 }
 
 fn downloadable_skill_label(item: &DownloadableSkillMatch) -> String {
@@ -3299,6 +4089,22 @@ fn downloadable_skill_actions(item: &DownloadableSkillMatch) -> Vec<&'static str
         STATUS_INSTALLABLE => vec![INSTALL_CHOICE, BACK_CHOICE, EXIT_CHOICE],
         STATUS_UPDATABLE => vec![UPDATE_CHOICE, REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE],
         _ => vec![REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE],
+    }
+}
+
+fn downloadable_skill_menu_status(item: &DownloadableSkillMatch) -> MenuItemStatus {
+    match item.status() {
+        STATUS_INSTALLED => MenuItemStatus::Installed,
+        STATUS_UPDATABLE => MenuItemStatus::Updatable,
+        _ => MenuItemStatus::Default,
+    }
+}
+
+fn skillsmp_search_menu_status(installed: Option<&SkillData>) -> MenuItemStatus {
+    if installed.is_some() {
+        MenuItemStatus::Installed
+    } else {
+        MenuItemStatus::Default
     }
 }
 
@@ -3353,7 +4159,8 @@ fn exit_menu_item(label: &str) -> MenuItemUi {
     MenuItemUi {
         label: EXIT_CHOICE.to_string(),
         preview_lines: vec![label.to_string()],
-        installed: false,
+        status: MenuItemStatus::Default,
+        selectable: true,
     }
 }
 
@@ -3428,6 +4235,24 @@ fn installed_skill_preview_lines(skill: &SkillData) -> Vec<String> {
     skill_preview_lines(skill, &[])
 }
 
+fn invalid_installed_skill_preview_lines(skill: &InvalidInstalledSkill) -> Vec<String> {
+    vec![
+        format!("Directory: {}", skill.directory_name),
+        format!("Status: invalid"),
+        format!("Path: {}", skill.path.display()),
+        String::new(),
+        "Error:".to_string(),
+        skill.error.clone(),
+    ]
+}
+
+fn listed_skill_preview_lines(entry: &ListedSkillEntry) -> Vec<String> {
+    match entry {
+        ListedSkillEntry::Valid(skill) => installed_skill_preview_lines(skill),
+        ListedSkillEntry::Invalid(skill) => invalid_installed_skill_preview_lines(skill),
+    }
+}
+
 fn skillsmp_search_preview_lines(
     skill: &SkillsMpSkill,
     installed: Option<&SkillData>,
@@ -3495,18 +4320,21 @@ fn installed_skillsmp_match(
 mod tests {
     use super::{
         APPLY_ALL_CHOICE, BACK_CHOICE, Cli, Commands, CreateAction, DownloadableSkillMatch,
-        EXIT_CHOICE, INSTALL_ALL_CHOICE, INSTALL_CHOICE, MenuAction, PendingSkillUpdate,
-        REMOVE_CHOICE, ScanDependencyArgs, TextBuffer, UPDATE_ALL_CHOICE, UPDATE_CHOICE,
-        absolute_path, action_menu_default, create_action, downloadable_skill_actions,
-        downloadable_skill_preview_lines, format_pending_update, installed_skill_actions,
-        installed_skill_preview_lines, installed_skillsmp_match, menu_action,
+        EXIT_CHOICE, INSTALL_ALL_CHOICE, INSTALL_CHOICE, MenuAction, MenuItemStatus, MenuItemUi,
+        PendingSkillUpdate, REMOVE_CHOICE, ScanDependencyArgs, TextBuffer, UPDATE_ALL_CHOICE,
+        UPDATE_CHOICE, absolute_path, action_menu_default, create_action,
+        downloadable_skill_actions, downloadable_skill_menu_status,
+        downloadable_skill_preview_lines, exit_menu_item, format_pending_update,
+        installed_skill_actions, installed_skill_preview_lines, installed_skillsmp_match,
+        menu_action, next_non_empty_tab_index, next_selectable_index, next_tab_index,
+        previous_non_empty_tab_index, previous_selectable_index, previous_tab_index,
         retained_multi_select_indices, scan_choice_label, scan_match_preview_lines,
         search_skill_label, skillsmp_search_preview_lines, skillsmp_search_status,
     };
     use crate::client::SkillsMpSkill;
     use crate::core::{
-        ProjectDependencyOrigin, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP, SkillData,
-        SkillMatchData,
+        NamedSelection, ProjectDependencyOrigin, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP,
+        SkillData, SkillMatchData,
     };
     use clap::Parser;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -3913,6 +4741,64 @@ mod tests {
     }
 
     #[test]
+    fn tab_navigation_skips_empty_tabs() {
+        let empty_flags = [false, true, false, true];
+
+        assert_eq!(next_non_empty_tab_index(0, &empty_flags), 2);
+        assert_eq!(next_non_empty_tab_index(2, &empty_flags), 0);
+        assert_eq!(previous_non_empty_tab_index(2, &empty_flags), 0);
+        assert_eq!(previous_non_empty_tab_index(0, &empty_flags), 2);
+    }
+
+    #[test]
+    fn tab_navigation_wraps_when_empty_tabs_are_allowed() {
+        assert_eq!(next_tab_index(0, 4), 1);
+        assert_eq!(next_tab_index(3, 4), 0);
+        assert_eq!(previous_tab_index(0, 4), 3);
+        assert_eq!(previous_tab_index(2, 4), 1);
+    }
+
+    #[test]
+    fn list_navigation_skips_non_selectable_invalid_entries() {
+        let items = vec![
+            MenuItemUi {
+                label: "python".to_string(),
+                preview_lines: Vec::new(),
+                status: MenuItemStatus::Default,
+                selectable: true,
+            },
+            MenuItemUi {
+                label: ".system".to_string(),
+                preview_lines: Vec::new(),
+                status: MenuItemStatus::Disabled,
+                selectable: false,
+            },
+            exit_menu_item("Exit list"),
+        ];
+
+        assert_eq!(next_selectable_index(&items, 0), 2);
+        assert_eq!(previous_selectable_index(&items, 2), 0);
+    }
+
+    #[test]
+    fn downloadable_skill_menu_status_marks_updatable_entries() {
+        let installed = installed_skill(None, Some("https://github.com/example/repo"));
+        let available = SkillData {
+            github_commit_sha: Some("fedcba98765432100123456789abcdef01234567".to_string()),
+            ..installed.clone()
+        };
+        let matched = DownloadableSkillMatch {
+            available,
+            installed: Some(installed),
+        };
+
+        assert_eq!(
+            downloadable_skill_menu_status(&matched),
+            MenuItemStatus::Updatable
+        );
+    }
+
+    #[test]
     fn downloadable_skill_actions_omit_update_when_versions_match() {
         let installed = installed_skill(None, Some("https://github.com/example/repo"));
         let available = installed.clone();
@@ -4004,11 +4890,30 @@ mod tests {
 
     #[test]
     fn scan_dependency_args_default_to_including_all_dependency_sources() {
-        let selection = ScanDependencyArgs::default().selection();
+        let selection = ScanDependencyArgs::default()
+            .selection()
+            .expect("default selection should succeed");
 
         assert!(selection.include_project_dependencies);
-        assert!(selection.include_dependency_groups);
-        assert!(selection.include_optional_dependencies);
+        assert_eq!(selection.dependency_groups, NamedSelection::All);
+        assert_eq!(selection.optional_dependencies, NamedSelection::All);
+    }
+
+    #[test]
+    fn scan_dependency_args_reject_conflicting_named_filters() {
+        let error = ScanDependencyArgs {
+            groups: vec!["dev".to_string()],
+            exclude_groups: vec!["docs".to_string()],
+            ..ScanDependencyArgs::default()
+        }
+        .selection()
+        .expect_err("conflicting group filters should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Include and exclude filters cannot be combined")
+        );
     }
 
     #[test]

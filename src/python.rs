@@ -1,7 +1,7 @@
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery};
 use crate::core::{
-    FileSystem, ProjectEnvironment, ScanDependencySelection, SkillData, SkillDirectoryFlavor,
-    SkillResourceData, SkillSourceMetadata,
+    FileSystem, NamedSelection, ProjectEnvironment, ScanDependencySelection, SkillData,
+    SkillDirectoryFlavor, SkillResourceData, SkillSourceMetadata,
     available_dependency_skill_in as rust_available_dependency_skill,
     available_dependency_skill_with_file_system as rust_available_dependency_skill_with_file_system,
     default_skills_directory as rust_default_skills_directory,
@@ -1347,15 +1347,17 @@ fn discover_venv_skills_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "scan_project", signature = (directory=None, pyproject_toml_path=None, venv_path=None, include_project_dependencies=true, include_dependency_groups=true, include_optional_dependencies=true, file_system=None))]
+#[pyo3(name = "scan_project", signature = (directory=None, pyproject_toml_path=None, venv_path=None, include_project_dependencies=true, dependency_groups=None, exclude_dependency_groups=None, optional_dependencies=None, exclude_optional_dependencies=None, file_system=None))]
 fn scan_project_py(
     py: Python<'_>,
     directory: Option<&Bound<'_, PyAny>>,
     pyproject_toml_path: Option<&Bound<'_, PyAny>>,
     venv_path: Option<&Bound<'_, PyAny>>,
     include_project_dependencies: bool,
-    include_dependency_groups: bool,
-    include_optional_dependencies: bool,
+    dependency_groups: Option<Vec<String>>,
+    exclude_dependency_groups: Option<Vec<String>>,
+    optional_dependencies: Option<Vec<String>>,
+    exclude_optional_dependencies: Option<Vec<String>>,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Vec<(PySkill, Option<PySkill>)>> {
     let environment = ProjectEnvironment::with_paths(
@@ -1370,8 +1372,13 @@ fn scan_project_py(
         Path::new(&default_directory_arg(venv_path, ".venv")?),
         ScanDependencySelection {
             include_project_dependencies,
-            include_dependency_groups,
-            include_optional_dependencies,
+            dependency_groups: NamedSelection::new(dependency_groups, exclude_dependency_groups)
+                .map_err(py_err)?,
+            optional_dependencies: NamedSelection::new(
+                optional_dependencies,
+                exclude_optional_dependencies,
+            )
+            .map_err(py_err)?,
         },
     );
     let matches = if let Some(file_system) = file_system {
@@ -1393,7 +1400,7 @@ fn scan_project_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "available_dependency_skill", signature = (installed, directory=None, pyproject_toml_path=None, venv_path=None, include_project_dependencies=true, include_dependency_groups=true, include_optional_dependencies=true, file_system=None))]
+#[pyo3(name = "available_dependency_skill", signature = (installed, directory=None, pyproject_toml_path=None, venv_path=None, include_project_dependencies=true, dependency_groups=None, exclude_dependency_groups=None, optional_dependencies=None, exclude_optional_dependencies=None, file_system=None))]
 fn available_dependency_skill_py(
     py: Python<'_>,
     installed: &PySkill,
@@ -1401,8 +1408,10 @@ fn available_dependency_skill_py(
     pyproject_toml_path: Option<&Bound<'_, PyAny>>,
     venv_path: Option<&Bound<'_, PyAny>>,
     include_project_dependencies: bool,
-    include_dependency_groups: bool,
-    include_optional_dependencies: bool,
+    dependency_groups: Option<Vec<String>>,
+    exclude_dependency_groups: Option<Vec<String>>,
+    optional_dependencies: Option<Vec<String>>,
+    exclude_optional_dependencies: Option<Vec<String>>,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Option<PySkill>> {
     let environment = ProjectEnvironment::with_paths(
@@ -1417,8 +1426,13 @@ fn available_dependency_skill_py(
         Path::new(&default_directory_arg(venv_path, ".venv")?),
         ScanDependencySelection {
             include_project_dependencies,
-            include_dependency_groups,
-            include_optional_dependencies,
+            dependency_groups: NamedSelection::new(dependency_groups, exclude_dependency_groups)
+                .map_err(py_err)?,
+            optional_dependencies: NamedSelection::new(
+                optional_dependencies,
+                exclude_optional_dependencies,
+            )
+            .map_err(py_err)?,
         },
     );
     let available = if let Some(file_system) = file_system {

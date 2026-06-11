@@ -1,9 +1,13 @@
+#[cfg(feature = "python-bindings")]
+use crate::core::GitHubContentItemData;
 use crate::core::{
-    GitHubContentItemData, GitHubFileBlobData, GitHubRepositorySnapshotData,
-    GitHubSkillLocationData, GitHubSnapshotFetcher,
+    GitHubFileBlobData, GitHubRepositorySnapshotData, GitHubSkillLocationData,
+    GitHubSnapshotFetcher,
 };
 use anyhow::{Context, Result, bail};
+#[cfg(feature = "python-bindings")]
 use base64::Engine;
+#[cfg(feature = "python-bindings")]
 use base64::engine::general_purpose::STANDARD;
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
@@ -148,6 +152,8 @@ pub struct SkillsMpSearchData {
     pub filters: SkillsMpFilters,
 }
 
+#[cfg(feature = "python-bindings")]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SkillsMpAiSearchData {
     #[serde(default)]
@@ -171,6 +177,8 @@ pub struct SkillsMpSearchApiResponse {
     pub meta: Option<SkillsMpMeta>,
 }
 
+#[cfg(feature = "python-bindings")]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillsMpAiSearchApiResponse {
     pub success: bool,
@@ -178,6 +186,8 @@ pub struct SkillsMpAiSearchApiResponse {
     pub meta: Option<SkillsMpMeta>,
 }
 
+#[cfg(feature = "python-bindings")]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct GitHubContentEntry {
     r#type: String,
@@ -186,6 +196,8 @@ struct GitHubContentEntry {
     html_url: Option<String>,
 }
 
+#[cfg(feature = "python-bindings")]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct GitHubFileContent {
     path: String,
@@ -260,6 +272,8 @@ impl SkillsMpClient {
         format!("{}{}", self.config.base_url().trim_end_matches('/'), path)
     }
 
+    #[cfg(feature = "python-bindings")]
+    #[allow(dead_code)]
     fn github_ref_params(&self, location: &GitHubSkillLocationData) -> Vec<(String, String)> {
         let mut params = Vec::new();
         if let Some(reference) = location.r#ref.as_ref() {
@@ -268,6 +282,8 @@ impl SkillsMpClient {
         params
     }
 
+    #[cfg(feature = "python-bindings")]
+    #[allow(dead_code)]
     fn github_contents_url(&self, location: &GitHubSkillLocationData, path: &str) -> String {
         let base = format!(
             "{}/repos/{}/{}/contents",
@@ -337,6 +353,8 @@ impl SkillsMpClient {
         )
     }
 
+    #[cfg(feature = "python-bindings")]
+    #[allow(dead_code)]
     pub fn ai_search(&self, q: &str) -> Result<SkillsMpAiSearchApiResponse> {
         self.get_json(
             &self.skillsmp_url("/skills/ai-search"),
@@ -345,6 +363,8 @@ impl SkillsMpClient {
         )
     }
 
+    #[cfg(feature = "python-bindings")]
+    #[allow(dead_code)]
     pub fn fetch_github_directory(
         &self,
         location: &GitHubSkillLocationData,
@@ -366,6 +386,8 @@ impl SkillsMpClient {
             .collect())
     }
 
+    #[cfg(feature = "python-bindings")]
+    #[allow(dead_code)]
     pub fn fetch_github_file(
         &self,
         location: &GitHubSkillLocationData,
@@ -442,6 +464,8 @@ impl GitHubSnapshotFetcher for SkillsMpClient {
     }
 }
 
+#[cfg(feature = "python-bindings")]
+#[allow(dead_code)]
 fn decode_github_file_content(file: &GitHubFileContent) -> Result<String> {
     let Some(content) = file.content.as_ref() else {
         bail!("GitHub file response for {} is missing content", file.path);
@@ -458,6 +482,8 @@ fn decode_github_file_content(file: &GitHubFileContent) -> Result<String> {
     String::from_utf8(decoded).map_err(Into::into)
 }
 
+#[cfg(feature = "python-bindings")]
+#[allow(dead_code)]
 fn extract_commit_sha_from_html_url(html_url: Option<&str>) -> Option<String> {
     let html_url = html_url?;
     let parts = html_url

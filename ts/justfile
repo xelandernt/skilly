@@ -5,6 +5,7 @@ _:
 # install TypeScript package dependencies
 install:
     npm ci
+    npm update
 
 # build the TypeScript launcher package
 build:

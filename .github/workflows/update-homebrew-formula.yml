@@ -1,9 +1,11 @@
 name: Update Homebrew Formula
 
 on:
-  release:
+  workflow_run:
+    workflows:
+      - Publish npm
     types:
-      - published
+      - completed
   workflow_dispatch:
     inputs:
       version:
@@ -15,40 +17,62 @@ permissions:
 
 jobs:
   update-formula:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'release')
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.event.repository.default_branch || github.event.workflow_run.head_branch }}
 
       - name: Resolve release version
         id: version
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ github.event_name == 'release' && github.event.release.tag_name || inputs.version }}"
+          version="${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event.workflow_run.display_title }}"
           if [[ -z "$version" ]]; then
             echo "Release version is required" >&2
             exit 1
           fi
           echo "value=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Compute source tarball checksum
-        id: checksum
+      - name: Download release checksum manifest
+        id: checksums
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
           set -euo pipefail
-          tarball_url="https://github.com/xelandernt/skilly/archive/refs/tags/${VERSION}.tar.gz"
-          checksum="$(curl -fsSL "$tarball_url" | shasum -a 256 | awk '{print $1}')"
-          echo "value=$checksum" >> "$GITHUB_OUTPUT"
+          checksum_url="https://github.com/xelandernt/skilly/releases/download/${VERSION}/skilly-sha256sums.txt"
+          curl -fsSL "$checksum_url" -o /tmp/skilly-sha256sums.txt
+          for target in \
+            x86_64-unknown-linux-gnu \
+            x86_64-apple-darwin \
+            aarch64-apple-darwin
+          do
+            checksum="$(awk '/skilly-'"${VERSION}"'-'"${target//\//\\/}"'\.tar\.gz$/ { print $1 }' /tmp/skilly-sha256sums.txt)"
+            if [[ -z "$checksum" ]]; then
+              echo "Missing checksum for $target" >&2
+              exit 1
+            fi
+            echo "${target}=${checksum}" >> "$GITHUB_OUTPUT"
+          done
 
       - name: Update Formula/skilly.rb
         env:
           VERSION: ${{ steps.version.outputs.value }}
-          CHECKSUM: ${{ steps.checksum.outputs.value }}
-        run: python3 scripts/update_homebrew_formula.py "$VERSION" "$CHECKSUM"
+          LINUX_X64_SHA256: ${{ steps.checksums.outputs.x86_64-unknown-linux-gnu }}
+          MACOS_X64_SHA256: ${{ steps.checksums.outputs.x86_64-apple-darwin }}
+          MACOS_ARM64_SHA256: ${{ steps.checksums.outputs.aarch64-apple-darwin }}
+        run: >
+          python3 scripts/update_homebrew_formula.py
+          "$VERSION"
+          "$LINUX_X64_SHA256"
+          "$MACOS_X64_SHA256"
+          "$MACOS_ARM64_SHA256"
 
       - name: Commit formula update
         shell: bash

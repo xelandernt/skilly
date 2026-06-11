@@ -114,6 +114,8 @@ pub struct GitHubSkillLocationData {
     pub url: String,
 }
 
+#[cfg(feature = "python-bindings")]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GitHubContentItemData {
     pub r#type: String,
@@ -207,6 +209,50 @@ impl ProjectDependencyOrigin {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NamedSelection {
+    All,
+    Include(BTreeSet<String>),
+    Exclude(BTreeSet<String>),
+}
+
+impl Default for NamedSelection {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
+impl NamedSelection {
+    pub fn new(include: Option<Vec<String>>, exclude: Option<Vec<String>>) -> Result<Self> {
+        match (include, exclude) {
+            (Some(_), Some(_)) => bail!("Include and exclude filters cannot be combined"),
+            (Some(include), None) => Ok(Self::Include(
+                include
+                    .into_iter()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect(),
+            )),
+            (None, Some(exclude)) => Ok(Self::Exclude(
+                exclude
+                    .into_iter()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect(),
+            )),
+            (None, None) => Ok(Self::All),
+        }
+    }
+
+    fn includes(&self, name: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Include(include) => include.contains(name),
+            Self::Exclude(exclude) => !exclude.contains(name),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectRequirementData {
     pub spec: String,
     pub origin: ProjectDependencyOrigin,
@@ -215,16 +261,16 @@ pub struct ProjectRequirementData {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanDependencySelection {
     pub include_project_dependencies: bool,
-    pub include_dependency_groups: bool,
-    pub include_optional_dependencies: bool,
+    pub dependency_groups: NamedSelection,
+    pub optional_dependencies: NamedSelection,
 }
 
 impl Default for ScanDependencySelection {
     fn default() -> Self {
         Self {
             include_project_dependencies: true,
-            include_dependency_groups: true,
-            include_optional_dependencies: true,
+            dependency_groups: NamedSelection::All,
+            optional_dependencies: NamedSelection::All,
         }
     }
 }
@@ -233,9 +279,11 @@ impl ScanDependencySelection {
     fn includes(&self, origin: &ProjectDependencyOrigin) -> bool {
         match origin {
             ProjectDependencyOrigin::Project => self.include_project_dependencies,
-            ProjectDependencyOrigin::DependencyGroup { .. } => self.include_dependency_groups,
-            ProjectDependencyOrigin::OptionalDependency { .. } => {
-                self.include_optional_dependencies
+            ProjectDependencyOrigin::DependencyGroup { group } => {
+                self.dependency_groups.includes(group)
+            }
+            ProjectDependencyOrigin::OptionalDependency { extra } => {
+                self.optional_dependencies.includes(extra)
             }
         }
     }
@@ -923,6 +971,8 @@ impl SkillData {
         Self::from_text_in(&NATIVE_FILE_SYSTEM, text, path, source_metadata)
     }
 
+    #[cfg(feature = "python-bindings")]
+    #[allow(dead_code)]
     pub fn from_file_with_source_metadata(
         path: &Path,
         source_metadata: &SkillSourceMetadata,
@@ -1113,6 +1163,8 @@ impl SkillData {
         self.source == SKILLY_SOURCE_SKILLSMP || self.skillsmp_id.is_some()
     }
 
+    #[cfg(feature = "python-bindings")]
+    #[allow(dead_code)]
     pub fn can_update(&self) -> bool {
         self.is_dependency() || self.github_url.is_some()
     }
@@ -1128,6 +1180,8 @@ pub fn scan_match_status(available: &SkillData, installed: Option<&SkillData>) -
     }
 }
 
+#[cfg(feature = "python-bindings")]
+#[allow(dead_code)]
 pub fn discover_installed_skills(directory: &Path) -> Result<Vec<SkillData>> {
     discover_installed_skills_in(&NATIVE_FILE_SYSTEM, directory)
 }
@@ -1847,9 +1901,10 @@ pub fn github_versions_match(installed: &SkillData, available: &SkillData) -> bo
 #[cfg(test)]
 mod tests {
     use super::{
-        ProjectDependencyOrigin, ScanDependencySelection, parse_project_requirement_entries,
-        parse_project_requirements,
+        NamedSelection, ProjectDependencyOrigin, ScanDependencySelection,
+        parse_project_requirement_entries, parse_project_requirements,
     };
+    use std::collections::BTreeSet;
 
     const PYPROJECT: &str = r#"
 [project]
@@ -1896,8 +1951,8 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             .filter(|requirement| {
                 ScanDependencySelection {
                     include_project_dependencies: false,
-                    include_dependency_groups: true,
-                    include_optional_dependencies: false,
+                    dependency_groups: NamedSelection::All,
+                    optional_dependencies: NamedSelection::Include(BTreeSet::new()),
                 }
                 .includes(&requirement.origin)
             })
@@ -1910,5 +1965,40 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
                     group: "dev".to_string(),
                 }
         }));
+    }
+
+    #[test]
+    fn scan_dependency_selection_can_include_named_groups_and_exclude_named_extras() {
+        let requirements =
+            parse_project_requirement_entries(PYPROJECT).expect("requirements should parse");
+
+        let selected = requirements
+            .into_iter()
+            .filter(|requirement| {
+                ScanDependencySelection {
+                    include_project_dependencies: true,
+                    dependency_groups: NamedSelection::Include(
+                        ["dev".to_string()].into_iter().collect(),
+                    ),
+                    optional_dependencies: NamedSelection::Exclude(
+                        ["docs".to_string()].into_iter().collect(),
+                    ),
+                }
+                .includes(&requirement.origin)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            selected
+                .into_iter()
+                .map(|requirement| requirement.spec)
+                .collect::<Vec<_>>(),
+            vec![
+                "base-pkg>=1".to_string(),
+                "shared-pkg>=1".to_string(),
+                "dev-pkg>=1".to_string(),
+                "shared-pkg>=1".to_string(),
+            ]
+        );
     }
 }

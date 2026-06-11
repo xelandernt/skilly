@@ -104,10 +104,10 @@ skills shipped by direct, development, and optional dependencies:
 uvx skilly scan
 ```
 
-Exclude dependency categories when needed:
+Filter named groups and extras when needed:
 
 ```shell
-uvx skilly scan --no-dependency-groups --no-optional-dependencies
+uvx skilly scan --group dev --exclude-extra docs
 ```
 
 ### Install GitHub Skills
@@ -200,7 +200,10 @@ from skilly import ProjectSettings, Skill, SkillRepository
 
 repository = SkillRepository(
     directory=Path(".agents/skills"),
-    project=ProjectSettings(include_dependency_groups=True),
+    project=ProjectSettings(
+        dependency_groups=("dev",),
+        optional_dependencies=("docs",),
+    ),
 )
 
 created = repository.install(

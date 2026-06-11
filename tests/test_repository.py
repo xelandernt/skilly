@@ -145,6 +145,70 @@ Body
     assert updates[0].available.package_version == "1.2.4"
 
 
+def test_repository_scan_project_filters_named_groups_and_extras(
+    tmp_path: Path,
+) -> None:
+    pyproject_toml = tmp_path / "pyproject.toml"
+    pyproject_toml.write_text(
+        """
+[project]
+name = "demo"
+version = "0.1.0"
+dependencies = ["base-pkg==1.0.0", "shared-pkg==1.0.0"]
+
+[project.optional-dependencies]
+docs = ["docs-pkg==1.0.0", "shared-pkg==1.0.0"]
+
+[dependency-groups]
+dev = ["dev-pkg==1.0.0", "shared-pkg==1.0.0"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    venv_path, site_packages = make_venv(tmp_path)
+    for package_name, skill_name in [
+        ("base-pkg", "base-skill"),
+        ("shared-pkg", "shared-skill"),
+        ("dev-pkg", "dev-skill"),
+        ("docs-pkg", "docs-skill"),
+    ]:
+        module_name = package_name.replace("-", "_")
+        skill_path = (
+            site_packages / f"{module_name}/.agents/skills/{skill_name}/SKILL.md"
+        )
+        write_skill(
+            skill_path,
+            f"""---
+name: {skill_name}
+description: Dependency skill.
+---
+Body
+""",
+        )
+        write_distribution(
+            site_packages=site_packages,
+            package_name=package_name,
+            package_version="1.0.0",
+            record_rows=[f"{module_name}/.agents/skills/{skill_name}/SKILL.md,,"],
+        )
+
+    matches = SkillRepository().scan_project(
+        project=ProjectSettings(
+            pyproject_toml_path=pyproject_toml,
+            venv_path=venv_path,
+            dependency_groups=("dev",),
+            exclude_optional_dependencies=("docs",),
+        )
+    )
+
+    assert [match.available.name for match in matches] == [
+        "base-skill",
+        "dev-skill",
+        "shared-skill",
+    ]
+
+
 def test_repository_available_update_detects_github_skill_update(
     tmp_path: Path,
     monkeypatch,

@@ -313,8 +313,10 @@ def scan_project(
     pyproject_toml_path: StrPath | None = ...,
     venv_path: StrPath | None = ...,
     include_project_dependencies: bool = ...,
-    include_dependency_groups: bool = ...,
-    include_optional_dependencies: bool = ...,
+    dependency_groups: list[str] | None = ...,
+    exclude_dependency_groups: list[str] | None = ...,
+    optional_dependencies: list[str] | None = ...,
+    exclude_optional_dependencies: list[str] | None = ...,
     file_system: FileSystem | None = ...,
 ) -> list[tuple[Skill, Skill | None]]: ...
 def available_dependency_skill(
@@ -323,8 +325,10 @@ def available_dependency_skill(
     pyproject_toml_path: StrPath | None = ...,
     venv_path: StrPath | None = ...,
     include_project_dependencies: bool = ...,
-    include_dependency_groups: bool = ...,
-    include_optional_dependencies: bool = ...,
+    dependency_groups: list[str] | None = ...,
+    exclude_dependency_groups: list[str] | None = ...,
+    optional_dependencies: list[str] | None = ...,
+    exclude_optional_dependencies: list[str] | None = ...,
     file_system: FileSystem | None = ...,
 ) -> Skill | None: ...
 def parse_github_skill_url(github_url: str) -> GitHubSkillLocationData: ...

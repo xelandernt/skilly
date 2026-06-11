@@ -41,8 +41,15 @@ def test_run_cli_scan_help_describes_options(capfd) -> None:
     assert "Scan dependency-provided skills from pyproject.toml and .venv" in output
     assert "Directory where skilly installs managed skills" in output
     assert "Ignore [project].dependencies while scanning" in output
-    assert "Ignore [dependency-groups] while scanning" in output
-    assert "Ignore [project.optional-dependencies] while scanning" in output
+    assert "Include only the named [dependency-groups] entry" in output
+    assert "Exclude the named [project.optional-dependencies] extra" in output
+
+
+def test_run_cli_scan_rejects_conflicting_named_filters(capfd) -> None:
+    exit_code = run_cli(["scan", "--group", "dev", "--exclude-group", "docs"])
+
+    assert exit_code == 1
+    assert "Include and exclude filters cannot be combined" in capfd.readouterr().err
 
 
 def test_run_cli_skillsmp_search_help_describes_options(capfd) -> None:
@@ -140,6 +147,25 @@ def test_run_cli_list_prints_plain_output_without_terminal(
     assert "sample-skill" in capfd.readouterr().out
 
 
+def test_run_cli_list_reports_invalid_child_directory_without_failing(
+    tmp_path: Path, capfd
+) -> None:
+    SkillRepository().install(
+        Skill("sample-skill", "Installed skill."),
+        directory=tmp_path,
+    )
+    invalid_dir = tmp_path / ".system"
+    invalid_dir.mkdir()
+    (invalid_dir / "SKILL.md").write_text("not valid frontmatter\n", encoding="utf-8")
+
+    exit_code = run_cli(["list", "--directory", str(tmp_path)])
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "sample-skill" in output
+    assert ".system: invalid [invalid]" in output
+
+
 def test_run_cli_list_reports_empty_directory(tmp_path: Path, capfd) -> None:
     exit_code = run_cli(["list", "--directory", str(tmp_path)])
 
@@ -168,6 +194,24 @@ def test_native_cli_list_prints_plain_output_without_terminal(tmp_path: Path) ->
 
     assert result.returncode == 0
     assert "sample-skill" in result.stdout
+
+
+def test_native_cli_list_reports_invalid_child_directory_without_failing(
+    tmp_path: Path,
+) -> None:
+    SkillRepository().install(
+        Skill("sample-skill", "Installed skill."),
+        directory=tmp_path,
+    )
+    invalid_dir = tmp_path / ".system"
+    invalid_dir.mkdir()
+    (invalid_dir / "SKILL.md").write_text("not valid frontmatter\n", encoding="utf-8")
+
+    result = run_native_cli("list", "--directory", str(tmp_path))
+
+    assert result.returncode == 0
+    assert "sample-skill" in result.stdout
+    assert ".system: invalid [invalid]" in result.stdout
 
 
 def test_native_cli_list_reports_empty_directory(tmp_path: Path) -> None:

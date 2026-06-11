@@ -6,7 +6,7 @@ on:
       - published
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   cli:
@@ -51,11 +51,61 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  release-assets:
+    name: Publish CLI release assets
+    runs-on: ubuntu-22.04
+    needs: [cli]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: dist/cli-artifacts
+      - name: Package release archives
+        shell: bash
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release-assets
+
+          package_tarball() {
+            local triple="$1"
+            local binary_name="$2"
+            local archive="dist/release-assets/skilly-${VERSION}-${triple}.tar.gz"
+            tar -C "dist/cli-artifacts/cli-${triple}" -czf "$archive" "$binary_name"
+          }
+
+          package_zip() {
+            local triple="$1"
+            local binary_name="$2"
+            local archive="dist/release-assets/skilly-${VERSION}-${triple}.zip"
+            (
+              cd "dist/cli-artifacts/cli-${triple}"
+              zip -q "$GITHUB_WORKSPACE/$archive" "$binary_name"
+            )
+          }
+
+          package_tarball x86_64-unknown-linux-gnu skilly
+          package_tarball x86_64-apple-darwin skilly
+          package_tarball aarch64-apple-darwin skilly
+          package_zip x86_64-pc-windows-msvc skilly.exe
+
+          (
+            cd dist/release-assets
+            sha256sum * > skilly-sha256sums.txt
+          )
+      - name: Upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.event.release.tag_name }}
+        run: gh release upload "$VERSION" dist/release-assets/* --clobber
+
   publish:
     name: Publish to npm
     environment: publish
     runs-on: ubuntu-22.04
-    needs: [cli]
+    needs: [cli, release-assets]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
