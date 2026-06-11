@@ -10,7 +10,7 @@ use crate::cli::tui::{
     DownloadableSkillMatch, InstalledSkillDiscoveryReport, InvalidInstalledSkill, ListedSkillEntry,
     MenuItemStatus, MenuItemUi, MenuUi, MultiSelectMenuResult, MultiSelectResult, SelectMenuResult,
     TerminalSession, is_interactive_terminal, multi_select_menu, parse_metadata, run_configure_tui,
-    run_create_tui, select_menu, show_loading_message,
+    run_create_tui, run_file_viewer, select_menu, show_loading_message,
 };
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery, SkillsMpSkill};
 use crate::config::SkillyConfig;
@@ -33,6 +33,7 @@ pub(crate) const EXIT_CHOICE: &str = "exit";
 pub(crate) const INSTALL_CHOICE: &str = "install";
 pub(crate) const REMOVE_CHOICE: &str = "remove";
 pub(crate) const UPDATE_CHOICE: &str = "update";
+pub(crate) const VIEW_FILES_CHOICE: &str = "view files";
 pub(crate) const APPLY_ALL_CHOICE: &str = "apply selected";
 pub(crate) const INSTALL_ALL_CHOICE: &str = "install selected";
 pub(crate) const UPDATE_ALL_CHOICE: &str = "update selected";
@@ -840,6 +841,9 @@ fn download_selected_skills(
                     match actions[action_index] {
                         BACK_CHOICE => continue,
                         EXIT_CHOICE => break,
+                        VIEW_FILES_CHOICE => {
+                            run_file_viewer(&mut session, &selected.available)?;
+                        }
                         INSTALL_CHOICE => {
                             let installed =
                                 selected.available.install_to(directory, None, overwrite)?;
@@ -1050,8 +1054,8 @@ fn run_list(
             println!("{}", no_skills_found_message_anywhere());
             break;
         }
-        if active_tab >= destinations.len() {
-            active_tab = 0;
+        if active_tab >= destinations.len() || empty_flags[active_tab] {
+            active_tab = pick_best_list_tab(&destinations, &empty_flags);
         }
 
         let directory = &destinations[active_tab].path;
@@ -1156,6 +1160,9 @@ fn run_list(
                             {
                                 BACK_CHOICE => continue,
                                 EXIT_CHOICE => break,
+                                VIEW_FILES_CHOICE => {
+                                    run_file_viewer(&mut session, &selected)?;
+                                }
                                 UPDATE_CHOICE => {
                                     remember_status(
                                         &mut messages,
@@ -1174,6 +1181,7 @@ fn run_list(
                                 }
                                 _ => {}
                             },
+                            // ----- installed skill action menu end -----
                         }
                     }
                     ListedSkillEntry::Invalid(selected) => {
@@ -2233,9 +2241,9 @@ fn scan_menu_status(item: &SkillMatchData) -> MenuItemStatus {
 }
 
 fn installed_skill_actions(update_available: bool, remove_choice: &str) -> Vec<&str> {
-    let mut actions = vec![remove_choice, BACK_CHOICE, EXIT_CHOICE];
+    let mut actions = vec![VIEW_FILES_CHOICE, remove_choice, BACK_CHOICE, EXIT_CHOICE];
     if update_available {
-        actions.insert(0, UPDATE_CHOICE);
+        actions.insert(1, UPDATE_CHOICE);
     }
     actions
 }
@@ -2252,6 +2260,7 @@ fn action_menu_default(actions: &[&str]) -> usize {
                 *action,
                 INSTALL_CHOICE
                     | UPDATE_CHOICE
+                    | VIEW_FILES_CHOICE
                     | APPLY_ALL_CHOICE
                     | INSTALL_ALL_CHOICE
                     | UPDATE_ALL_CHOICE
@@ -2297,6 +2306,15 @@ fn no_skills_found_message(directory: &Path) -> String {
 
 fn no_skills_found_message_anywhere() -> String {
     "No skills found in any managed directory".to_string()
+}
+
+fn pick_best_list_tab(destinations: &[ResolvedDestination], empty_flags: &[bool]) -> usize {
+    for (i, dest) in destinations.iter().enumerate() {
+        if !empty_flags[i] && dest.label.contains("local") {
+            return i;
+        }
+    }
+    first_non_empty_tab(empty_flags)
 }
 
 fn discover_installed_skills_report(directory: &Path) -> Result<InstalledSkillDiscoveryReport> {
@@ -2356,9 +2374,17 @@ fn downloadable_skill_label(item: &DownloadableSkillMatch) -> String {
 
 fn downloadable_skill_actions(item: &DownloadableSkillMatch) -> Vec<&'static str> {
     match item.status() {
-        STATUS_INSTALLABLE => vec![INSTALL_CHOICE, BACK_CHOICE, EXIT_CHOICE],
-        STATUS_UPDATABLE => vec![UPDATE_CHOICE, REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE],
-        _ => vec![REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE],
+        STATUS_INSTALLABLE => vec![INSTALL_CHOICE, VIEW_FILES_CHOICE, BACK_CHOICE, EXIT_CHOICE],
+        STATUS_UPDATABLE => {
+            vec![
+                UPDATE_CHOICE,
+                VIEW_FILES_CHOICE,
+                REMOVE_CHOICE,
+                BACK_CHOICE,
+                EXIT_CHOICE,
+            ]
+        }
+        _ => vec![VIEW_FILES_CHOICE, REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE],
     }
 }
 
@@ -2623,8 +2649,8 @@ mod tests {
     };
     use super::{
         APPLY_ALL_CHOICE, BACK_CHOICE, EXIT_CHOICE, INSTALL_ALL_CHOICE, INSTALL_CHOICE,
-        PendingSkillUpdate, REMOVE_CHOICE, UPDATE_ALL_CHOICE, UPDATE_CHOICE, action_menu_default,
-        downloadable_skill_actions, downloadable_skill_menu_status,
+        PendingSkillUpdate, REMOVE_CHOICE, UPDATE_ALL_CHOICE, UPDATE_CHOICE, VIEW_FILES_CHOICE,
+        action_menu_default, downloadable_skill_actions, downloadable_skill_menu_status,
         downloadable_skill_preview_lines, exit_menu_item, format_pending_update,
         installed_skill_actions, installed_skill_preview_lines, installed_skillsmp_match,
         retained_multi_select_indices, scan_choice_label, scan_match_preview_lines,
@@ -2990,11 +3016,17 @@ mod tests {
     fn installed_skill_actions_only_include_update_when_available() {
         assert_eq!(
             installed_skill_actions(false, REMOVE_CHOICE),
-            vec![REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE]
+            vec![VIEW_FILES_CHOICE, REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE]
         );
         assert_eq!(
             installed_skill_actions(true, REMOVE_CHOICE),
-            vec![UPDATE_CHOICE, REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE]
+            vec![
+                VIEW_FILES_CHOICE,
+                UPDATE_CHOICE,
+                REMOVE_CHOICE,
+                BACK_CHOICE,
+                EXIT_CHOICE
+            ]
         );
     }
 
@@ -3108,7 +3140,7 @@ mod tests {
 
         assert_eq!(
             downloadable_skill_actions(&matched),
-            vec![REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE]
+            vec![VIEW_FILES_CHOICE, REMOVE_CHOICE, BACK_CHOICE, EXIT_CHOICE]
         );
     }
 
@@ -3249,5 +3281,302 @@ mod tests {
                 .iter()
                 .any(|line| line == "  - optional dependency: docs")
         );
+    }
+
+    // --- file viewer tests ---
+
+    use super::tui::{
+        FileViewEntry, build_file_tree, compute_visible, file_viewer_move_selection_down,
+        file_viewer_move_selection_up,
+    };
+    use crate::core::SkillResourceData;
+    use std::collections::HashSet;
+
+    fn resource(path: &str, content: &str) -> SkillResourceData {
+        SkillResourceData {
+            relative_path: path.to_string(),
+            kind: "other".to_string(),
+            content: content.to_string(),
+        }
+    }
+
+    #[test]
+    fn file_tree_always_has_skill_md_first() {
+        let skill = SkillData {
+            content: "# Title\n\nBody".to_string(),
+            resources: vec![],
+            ..installed_skill(None, None)
+        };
+
+        let tree = build_file_tree(&skill);
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].name, "SKILL.md");
+        assert_eq!(tree[0].content, "# Title\n\nBody");
+        assert_eq!(tree[0].depth, 0);
+        assert!(!tree[0].is_dir);
+    }
+
+    #[test]
+    fn file_tree_builds_flat_resources() {
+        let skill = SkillData {
+            content: "Body".to_string(),
+            resources: vec![
+                resource("README.md", "readme content"),
+                resource("setup.py", "setup content"),
+            ],
+            ..installed_skill(None, None)
+        };
+
+        let tree = build_file_tree(&skill);
+        assert_eq!(tree.len(), 3);
+        // SKILL.md first
+        assert_eq!(tree[0].name, "SKILL.md");
+        assert_eq!(tree[0].depth, 0);
+        // Then files in sorted order
+        assert_eq!(tree[1].name, "README.md");
+        assert_eq!(tree[1].depth, 0);
+        assert_eq!(tree[1].content, "readme content");
+        assert!(!tree[1].is_dir);
+        assert_eq!(tree[2].name, "setup.py");
+        assert_eq!(tree[2].depth, 0);
+    }
+
+    #[test]
+    fn file_tree_creates_directory_entries() {
+        let skill = SkillData {
+            content: "Body".to_string(),
+            resources: vec![
+                resource("scripts/run.py", "print('hello')"),
+                resource("references/api.md", "# API"),
+            ],
+            ..installed_skill(None, None)
+        };
+
+        let tree = build_file_tree(&skill);
+        // Alphabetical: references/ before scripts/
+        // SKILL.md, references/, api.md, scripts/, run.py
+        assert_eq!(tree.len(), 5);
+
+        assert_eq!(tree[0].name, "SKILL.md");
+        assert_eq!(tree[0].depth, 0);
+        assert!(!tree[0].is_dir);
+
+        assert_eq!(tree[1].name, "references");
+        assert_eq!(tree[1].depth, 0);
+        assert!(tree[1].is_dir);
+        assert_eq!(tree[1].relative_path, "references/");
+
+        assert_eq!(tree[2].name, "api.md");
+        assert_eq!(tree[2].depth, 1);
+        assert!(!tree[2].is_dir);
+
+        assert_eq!(tree[3].name, "scripts");
+        assert_eq!(tree[3].depth, 0);
+        assert!(tree[3].is_dir);
+
+        assert_eq!(tree[4].name, "run.py");
+        assert_eq!(tree[4].depth, 1);
+        assert!(!tree[4].is_dir);
+    }
+
+    #[test]
+    fn file_tree_handles_nested_directories() {
+        let skill = SkillData {
+            content: "Body".to_string(),
+            resources: vec![
+                resource("assets/icons/logo.svg", "<svg></svg>"),
+                resource("scripts/sub/helper.py", "# helper"),
+            ],
+            ..installed_skill(None, None)
+        };
+
+        let tree = build_file_tree(&skill);
+        // Order: SKILL.md, assets/, icons/, logo.svg, scripts/, sub/, helper.py
+        let paths: Vec<&str> = tree.iter().map(|e| e.relative_path.as_str()).collect();
+
+        assert!(paths[1].starts_with("assets"));
+        assert!(paths[2] == "assets/icons/");
+        assert!(paths[3] == "assets/icons/logo.svg");
+        assert!(paths[4].starts_with("scripts"));
+        assert!(paths[5] == "scripts/sub/");
+        assert!(paths[6] == "scripts/sub/helper.py");
+
+        // Check depths
+        assert_eq!(tree[1].depth, 0); // assets/
+        assert_eq!(tree[2].depth, 1); // assets/icons/
+        assert_eq!(tree[3].depth, 2); // logo.svg
+        assert_eq!(tree[4].depth, 0); // scripts/
+        assert_eq!(tree[5].depth, 1); // scripts/sub/
+        assert_eq!(tree[6].depth, 2); // helper.py
+    }
+
+    #[test]
+    fn file_tree_multiple_dirs_sorted() {
+        let skill = SkillData {
+            content: "Body".to_string(),
+            resources: vec![
+                resource("z/back/file.txt", "back"),
+                resource("a/front/file.txt", "front"),
+            ],
+            ..installed_skill(None, None)
+        };
+
+        let tree = build_file_tree(&skill);
+        // Should be sorted: a/... first, then z/...
+        assert_eq!(tree[1].name, "a");
+        // Find z dir somewhere after a
+        let z_pos = tree.iter().position(|e| e.name == "z").unwrap();
+        let a_pos = tree.iter().position(|e| e.name == "a").unwrap();
+        assert!(a_pos < z_pos);
+    }
+
+    #[test]
+    fn compute_visible_shows_all_when_nothing_collapsed() {
+        let skill = SkillData {
+            content: "Body".to_string(),
+            resources: vec![
+                resource("scripts/run.py", "print('hello')"),
+                resource("references/api.md", "# API"),
+            ],
+            ..installed_skill(None, None)
+        };
+
+        let tree = build_file_tree(&skill);
+        let collapsed = HashSet::new();
+        let visible = compute_visible(&tree, &collapsed);
+
+        assert_eq!(visible.len(), tree.len());
+    }
+
+    #[test]
+    fn compute_visible_hides_children_of_collapsed_dir() {
+        let skill = SkillData {
+            content: "Body".to_string(),
+            resources: vec![
+                resource("scripts/run.py", "print('hello')"),
+                resource("scripts/helper.py", "# helper"),
+                resource("references/api.md", "# API"),
+            ],
+            ..installed_skill(None, None)
+        };
+
+        let tree = build_file_tree(&skill);
+        // Alphabetical: references/ before scripts/
+        // 0=SKILL.md, 1=references/, 2=api.md, 3=scripts/, 4=run.py, 5=helper.py
+
+        let mut collapsed = HashSet::new();
+        collapsed.insert("scripts/".to_string());
+
+        let visible = compute_visible(&tree, &collapsed);
+        let visible_paths: Vec<&str> = visible
+            .iter()
+            .map(|&i| tree[i].relative_path.as_str())
+            .collect();
+
+        // scripts/ children (run.py, helper.py) should be hidden
+        assert!(visible_paths.contains(&"SKILL.md"));
+        assert!(visible_paths.contains(&"references/"));
+        assert!(visible_paths.contains(&"references/api.md"));
+        assert!(visible_paths.contains(&"scripts/"));
+        assert!(!visible_paths.contains(&"scripts/run.py"));
+        assert!(!visible_paths.contains(&"scripts/helper.py"));
+    }
+
+    #[test]
+    fn compute_visible_hides_nested_children() {
+        let skill = SkillData {
+            content: "Body".to_string(),
+            resources: vec![
+                resource("a/b/c/file.txt", "deep"),
+                resource("a/other.txt", "other"),
+            ],
+            ..installed_skill(None, None)
+        };
+
+        let tree = build_file_tree(&skill);
+        // SKILL.md, a/, b/, c/, file.txt, other.txt
+        let mut collapsed = HashSet::new();
+        collapsed.insert("a/".to_string());
+
+        let visible = compute_visible(&tree, &collapsed);
+        let visible_paths: Vec<&str> = visible
+            .iter()
+            .map(|&i| tree[i].relative_path.as_str())
+            .collect();
+
+        // a/ is visible but all descendants (b/, c/, file.txt, other.txt) are hidden
+        assert!(visible_paths.contains(&"SKILL.md"));
+        assert!(visible_paths.contains(&"a/"));
+        assert!(!visible_paths.contains(&"a/b/"));
+        assert!(!visible_paths.contains(&"a/b/c/"));
+        assert!(!visible_paths.contains(&"a/b/c/file.txt"));
+        assert!(!visible_paths.contains(&"a/other.txt"));
+    }
+
+    #[test]
+    fn file_viewer_move_selection_navigates_visible_only() {
+        // Tree: 0=SKILL.md, 1=references/, 2=api.md, 3=scripts/, 4=run.py
+        // (alphabetical: references/ before scripts/)
+        let skill = SkillData {
+            content: "B".to_string(),
+            resources: vec![
+                resource("scripts/run.py", "x"),
+                resource("references/api.md", "x"),
+            ],
+            ..installed_skill(None, None)
+        };
+        let tree = build_file_tree(&skill);
+
+        let mut collapsed = HashSet::new();
+        collapsed.insert("scripts/".to_string());
+
+        let visible = compute_visible(&tree, &collapsed);
+        // visible: [0=SKILL.md, 1=references/, 2=api.md, 3=scripts/]
+
+        // Down from SKILL.md (0) -> references/ (1)
+        assert_eq!(file_viewer_move_selection_down(&visible, 0), 1);
+        // Down from references/ (1) -> api.md (2)
+        assert_eq!(file_viewer_move_selection_down(&visible, 1), 2);
+        // Down from api.md (2) -> scripts/ (3)
+        assert_eq!(file_viewer_move_selection_down(&visible, 2), 3);
+        // Down at end -> stays
+        assert_eq!(file_viewer_move_selection_down(&visible, 3), 3);
+
+        // Up from scripts/ (3) -> api.md (2)
+        assert_eq!(file_viewer_move_selection_up(&visible, 3), 2);
+        // Up from api.md (2) -> references/ (1)
+        assert_eq!(file_viewer_move_selection_up(&visible, 2), 1);
+        // Up from references/ (1) -> SKILL.md (0)
+        assert_eq!(file_viewer_move_selection_up(&visible, 1), 0);
+        // Up at start -> stays
+        assert_eq!(file_viewer_move_selection_up(&visible, 0), 0);
+    }
+
+    #[test]
+    fn file_viewer_move_selection_handles_current_becoming_hidden() {
+        let skill = SkillData {
+            content: "B".to_string(),
+            resources: vec![
+                resource("scripts/run.py", "x"),
+                resource("references/api.md", "x"),
+            ],
+            ..installed_skill(None, None)
+        };
+        let tree = build_file_tree(&skill);
+        // 0=SKILL.md, 1=references/, 2=api.md, 3=scripts/, 4=run.py
+
+        let mut collapsed = HashSet::new();
+        collapsed.insert("scripts/".to_string());
+
+        let visible = compute_visible(&tree, &collapsed);
+        // visible: [0, 1, 2, 3]
+
+        // Moving down from run.py (4, hidden) should go to next visible: scripts/ (3 is the next visible? Actually 4 is hidden, so find first visible at or after 4)
+        // No visible at or after 4, so should wrap to the first: 0
+        // But looking at the function: visible.iter().find(|&&i| i >= current) - no match for >= 4, so unwrap_or(*visible.last() = 3)
+        assert_eq!(file_viewer_move_selection_down(&visible, 4), 3);
+        // Moving up from run.py (4, hidden) should find first visible >= 4: actually none, but then return first visible
+        // Wait: visible.iter().find(|&&i| i >= current) -> no match -> unwrap_or(visible[0]) -> 0
+        assert_eq!(file_viewer_move_selection_up(&visible, 4), 3);
     }
 }

@@ -36,8 +36,7 @@ Manage [Agent Skills](https://agentskills.io/specification) from the command lin
 
 ### Python
 ```shell
-uvx skilly --help           # run on-the-fly
-pip install skilly          # or install persistently
+uvx skilly --help
 ```
 
 ### Node
