@@ -56,6 +56,7 @@ jobs:
     runs-on: ubuntu-22.04
     needs: [cli]
     steps:
+      - uses: actions/checkout@v6
       - uses: actions/download-artifact@v4
         with:
           pattern: cli-*
@@ -97,6 +98,7 @@ jobs:
       - name: Upload release assets
         shell: bash
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ github.event.release.tag_name }}
         run: gh release upload "$VERSION" dist/release-assets/* --clobber
