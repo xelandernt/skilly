@@ -52,6 +52,82 @@ def test_run_cli_scan_rejects_conflicting_named_filters(capfd) -> None:
     assert "Include and exclude filters cannot be combined" in capfd.readouterr().err
 
 
+def test_run_cli_scan_accepts_multiple_extra_flags(capfd) -> None:
+    exit_code = run_cli(
+        [
+            "scan",
+            "--extra",
+            "dev",
+            "--extra",
+            "docs",
+            "--directory",
+            "/tmp/skilly-test-multi-extra",
+        ]
+    )
+
+    assert exit_code == 0
+    assert (
+        "Include and exclude filters cannot be combined" not in capfd.readouterr().err
+    )
+
+
+def test_run_cli_scan_accepts_multiple_group_flags(capfd) -> None:
+    exit_code = run_cli(
+        [
+            "scan",
+            "--group",
+            "dev",
+            "--group",
+            "test",
+            "--directory",
+            "/tmp/skilly-test-multi-group",
+        ]
+    )
+
+    assert exit_code == 0
+    assert (
+        "Include and exclude filters cannot be combined" not in capfd.readouterr().err
+    )
+
+
+def test_run_cli_scan_accepts_multiple_exclude_extra_flags(capfd) -> None:
+    exit_code = run_cli(
+        [
+            "scan",
+            "--exclude-extra",
+            "docs",
+            "--exclude-extra",
+            "lint",
+            "--directory",
+            "/tmp/skilly-test-multi-exclude-extra",
+        ]
+    )
+
+    assert exit_code == 0
+    assert (
+        "Include and exclude filters cannot be combined" not in capfd.readouterr().err
+    )
+
+
+def test_run_cli_scan_accepts_multiple_exclude_group_flags(capfd) -> None:
+    exit_code = run_cli(
+        [
+            "scan",
+            "--exclude-group",
+            "dev",
+            "--exclude-group",
+            "test",
+            "--directory",
+            "/tmp/skilly-test-multi-exclude-group",
+        ]
+    )
+
+    assert exit_code == 0
+    assert (
+        "Include and exclude filters cannot be combined" not in capfd.readouterr().err
+    )
+
+
 def test_run_cli_skillsmp_search_help_describes_options(capfd) -> None:
     exit_code = run_cli(["skillsmp", "search", "--help"])
 
