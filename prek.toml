@@ -65,4 +65,11 @@ hooks = [
     language = "system",
     pass_filenames = false
     },
+    {
+    id = "ts-lint",
+    name = "ts lint",
+    entry = "just ts lint",
+    language = "system",
+    pass_filenames = false
+    }
 ]

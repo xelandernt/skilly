@@ -2,47 +2,51 @@
 _:
     @just --list
 
-# install TypeScript package dependencies
+# install dependencies
 install:
     npm ci
     npm update
 
-# build the TypeScript launcher package
+# lint typescript
+lint:
+    npx @biomejs/biome check --write --unsafe .
+
+# build app
 build:
     npm run build
 
-# test the TypeScript launcher package
+# run tests
 test:
     npm test
 
-# type check the TypeScript launcher package
+# run typechecker
 typecheck:
     npm run typecheck
 
-# stage the local release binary into the TypeScript package
+# stage the local release binary
 stage-local-binary:
     uv run --no-sync cargo build --release --no-default-features --bin skilly
     npm run stage-local-binary
 
-# pack the TypeScript launcher package
+# pack the package
 pack:
     npm pack .
 
-# publish the TypeScript launcher package locally
+# publish package locally
 publish: install test stage-local-binary
     #!/usr/bin/env bash
     set -euo pipefail
     trap 'rm -rf vendor' EXIT
     npm publish .
 
-# dry-run the local TypeScript launcher publish flow
+# dry-run publish flow
 publish-dry-run: install test stage-local-binary
     #!/usr/bin/env bash
     set -euo pipefail
     trap 'rm -rf vendor' EXIT
     npm publish . --dry-run
 
-# smoke test the packaged TypeScript launcher
+# smoke test
 smoke: install test stage-local-binary
     #!/usr/bin/env bash
     set -euo pipefail

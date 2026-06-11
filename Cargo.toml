@@ -1,6 +1,6 @@
 [package]
 name = "skilly"
-version = "0.0.28"
+version = "0.0.29"
 edition = "2024"
 description = "Manage agent skills — create, install, scan, and update skills for AI coding agents"
 repository = "https://github.com/anomalyco/skilly"

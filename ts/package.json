@@ -1,34 +1,35 @@
 {
-  "name": "@xelandernt/skilly",
-  "version": "0.0.28",
-  "description": "Native npm launcher for the skilly CLI.",
-  "license": "MIT",
-  "bin": {
-    "skilly": "dist/src/bin/skilly.js"
-  },
-  "type": "commonjs",
-  "files": [
-    "README.md",
-    "dist/src/bin",
-    "dist/src/lib",
-    "vendor"
-  ],
-  "engines": {
-    "node": ">=18"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "stage-local-binary": "npm run build && node ./dist/scripts/stage-local-binary.js",
-    "sync-readme": "node ./dist/scripts/sync-readme.js",
-    "test": "npm run build && node --test ./dist/test/targets.test.js ./dist/test/launcher.test.js",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "prepack": "npm run build && npm run sync-readme"
-  },
-  "devDependencies": {
-    "@types/node": "^22.16.5",
-    "typescript": "^5.8.3"
-  }
+	"name": "@xelandernt/skilly",
+	"version": "0.0.29",
+	"description": "Native npm launcher for the skilly CLI.",
+	"license": "MIT",
+	"bin": {
+		"skilly": "dist/src/bin/skilly.js"
+	},
+	"type": "commonjs",
+	"files": [
+		"README.md",
+		"dist/src/bin",
+		"dist/src/lib",
+		"vendor"
+	],
+	"engines": {
+		"node": ">=18"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"stage-local-binary": "npm run build && node ./dist/scripts/stage-local-binary.js",
+		"sync-readme": "node ./dist/scripts/sync-readme.js",
+		"test": "npm run build && node --test ./dist/test/targets.test.js ./dist/test/launcher.test.js",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"prepack": "npm run build && npm run sync-readme"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.16",
+		"@types/node": "^22.16.5",
+		"typescript": "^5.8.3"
+	}
 }

@@ -37,7 +37,7 @@ hook:
 unhook:
     uv run prek uninstall
 
-# bump version and install (default: patch)
+# bump version and install
 bump component="patch":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -66,7 +66,7 @@ bump component="patch":
         sed -i "s/\"version\": \".*\"/\"version\": \"${new_version}\"/" "$package_json"
     fi
 
-    @just install
+    just install
 
 # publish project on pypi
 publish:
