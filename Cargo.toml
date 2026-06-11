@@ -25,6 +25,17 @@ tar = "0.4"
 toml = "0.8"
 url = "2.5"
 
+[lints.clippy]
+correctness = "deny"
+suspicious = "warn"
+style = "warn"
+complexity = "warn"
+perf = "warn"
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
 [features]
 default = []
 python-bindings = ["dep:pyo3"]

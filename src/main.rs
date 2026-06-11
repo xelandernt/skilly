@@ -1,3 +1,5 @@
+//! Skilly CLI binary.
+
 mod cli;
 mod client;
 mod core;

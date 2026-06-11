@@ -43,6 +43,7 @@ pub const MAX_COMPATIBILITY_LENGTH: usize = 500;
 
 static TEMPORARY_DIRECTORY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Target agent directory convention.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SkillDirectoryFlavor {
     #[default]
@@ -52,6 +53,7 @@ pub enum SkillDirectoryFlavor {
     Copilot,
 }
 
+/// Resolve the skills directory path for a given agent flavor and scope.
 pub fn skills_directory(flavor: SkillDirectoryFlavor, global: bool) -> Result<PathBuf> {
     let relative = match (flavor, global) {
         (SkillDirectoryFlavor::Agents, _) => DEFAULT_SKILLS_PATH,
@@ -70,6 +72,7 @@ pub fn skills_directory(flavor: SkillDirectoryFlavor, global: bool) -> Result<Pa
     Ok(home.join(relative))
 }
 
+/// Resolve the default skills directory, respecting the `SKILLY_DIRECTORY` env var.
 pub fn default_skills_directory() -> Result<PathBuf> {
     if let Some(directory) = env::var_os(SKILLY_DIRECTORY_ENV_VAR) {
         return absolute_path(Path::new(&directory));
@@ -100,6 +103,7 @@ fn expand_home_path(path: &Path) -> Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
+/// Bundled resource file (script, reference, or asset) within a skill.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillResourceData {
     pub relative_path: String,
@@ -108,6 +112,7 @@ pub struct SkillResourceData {
     pub content: String,
 }
 
+/// Parsed GitHub skill location: owner, repo, ref, path, and the original URL.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GitHubSkillLocationData {
     pub owner: String,
@@ -127,6 +132,7 @@ pub struct GitHubContentItemData {
     pub commit_sha: Option<String>,
 }
 
+/// A single file blob retrieved from a GitHub repository snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GitHubFileBlobData {
     pub path: String,
@@ -135,6 +141,7 @@ pub struct GitHubFileBlobData {
     pub commit_sha: Option<String>,
 }
 
+/// Full snapshot of a GitHub repository: ref, commit SHA, and file tree.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GitHubRepositorySnapshotData {
     #[serde(rename = "ref")]
@@ -143,6 +150,7 @@ pub struct GitHubRepositorySnapshotData {
     pub files: BTreeMap<String, GitHubFileBlobData>,
 }
 
+/// Complete skill model: frontmatter, body, resources, and source provenance.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillData {
     pub name: String,
@@ -168,6 +176,7 @@ pub struct SkillData {
     pub skillsmp_id: Option<String>,
 }
 
+/// Pairing of an available skill, its installed counterpart, and dependency origins.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillMatchData {
     pub available: SkillData,
@@ -176,6 +185,7 @@ pub struct SkillMatchData {
     pub dependency_origins: Vec<ProjectDependencyOrigin>,
 }
 
+/// Source provenance for a skill: which channel installed it and tracking metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct SkillSourceMetadata {
     pub source: Option<String>,
@@ -186,6 +196,7 @@ pub struct SkillSourceMetadata {
     pub skillsmp_id: Option<String>,
 }
 
+/// Which part of a project produced a given dependency requirement.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ProjectDependencyOrigin {
     Project,
@@ -376,6 +387,7 @@ impl SkillSourceMetadata {
     }
 }
 
+/// Environment paths and dependency selection for a project scan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectEnvironment {
     pub directory: PathBuf,
@@ -411,12 +423,14 @@ impl ProjectEnvironment {
     }
 }
 
+/// Distribution metadata (name + optional version) read from a `.dist-info` directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DistributionInfo {
     pub name: String,
     pub version: Option<String>,
 }
 
+/// Fetch a full snapshot (files + metadata) from a GitHub repository location.
 pub trait GitHubSnapshotFetcher {
     fn fetch_github_snapshot(
         &self,
@@ -424,6 +438,7 @@ pub trait GitHubSnapshotFetcher {
     ) -> Result<GitHubRepositorySnapshotData>;
 }
 
+/// Abstract filesystem for pluggable backends (native, in-memory, remote).
 pub trait FileSystem {
     fn read_file(&self, path: &Path) -> Result<String>;
     fn write_file(&self, path: &Path, content: &str) -> Result<()>;
@@ -436,6 +451,7 @@ pub trait FileSystem {
     fn resolve(&self, path: &Path) -> Result<PathBuf>;
 }
 
+/// Native (std::fs) filesystem implementation.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeFileSystem;
@@ -665,6 +681,8 @@ fn infer_source(metadata: &BTreeMap<String, String>) -> String {
     SKILLY_UNKNOWN_SOURCE.to_string()
 }
 
+#[must_use]
+#[inline]
 pub fn classify_resource_kind(relative_path: &str) -> String {
     match relative_path.split('/').next() {
         Some("scripts") => RESOURCE_KIND_SCRIPT.to_string(),
@@ -773,7 +791,7 @@ fn write_text_file_in(
         file_system.make_dir(parent, true, true)?;
     }
     if file_system.exists(path)? && !overwrite {
-        bail!("Refusing to overwrite existing file: {}", path.display());
+        bail!("refusing to overwrite existing file: {}", path.display());
     }
     file_system.write_file(path, content)?;
     Ok(())
@@ -792,7 +810,7 @@ fn validate_skill_name(name: &str) -> Result<()> {
         Ok(())
     } else {
         bail!(
-            "Invalid skill name {name:?}: use 1-64 lowercase letters, numbers, and single hyphens"
+            "invalid skill name {name:?}: use 1-64 lowercase letters, numbers, and single hyphens"
         )
     }
 }
@@ -820,7 +838,7 @@ fn validate_install_paths(skill: &SkillData, skill_name: Option<&str>) -> Result
     for resource in &skill.resources {
         validate_resource_path(&resource.relative_path)?;
         if !seen.insert(resource.relative_path.to_ascii_lowercase()) {
-            bail!("Duplicate resource path: {}", resource.relative_path);
+            bail!("duplicate resource path: {}", resource.relative_path);
         }
     }
     Ok(())
@@ -829,11 +847,11 @@ fn validate_install_paths(skill: &SkillData, skill_name: Option<&str>) -> Result
 fn temporary_sibling(path: &Path) -> Result<PathBuf> {
     let parent = path
         .parent()
-        .ok_or_else(|| anyhow!("Skill destination has no parent: {}", path.display()))?;
+        .ok_or_else(|| anyhow!("skill destination has no parent: {}", path.display()))?;
     let name = path
         .file_name()
         .and_then(|value| value.to_str())
-        .ok_or_else(|| anyhow!("Skill destination has no valid name: {}", path.display()))?;
+        .ok_or_else(|| anyhow!("skill destination has no valid name: {}", path.display()))?;
     let id = TEMPORARY_DIRECTORY_COUNTER.fetch_add(1, Ordering::Relaxed);
     Ok(parent.join(format!(".{name}.skilly-tmp-{}-{id}", std::process::id())))
 }
@@ -874,10 +892,11 @@ fn find_skill_markdown_path_in(file_system: &dyn FileSystem, path: &Path) -> Res
 }
 
 impl SkillData {
+    /// Validate skill name, description length, and compatibility length.
     pub fn validate(&self) -> Result<()> {
         validate_skill_name(&self.name)?;
         if self.description.is_empty() || self.description.len() > MAX_DESCRIPTION_LENGTH {
-            bail!("Skill description must contain 1-{MAX_DESCRIPTION_LENGTH} characters");
+            bail!("skill description must contain 1-{MAX_DESCRIPTION_LENGTH} characters");
         }
         if self
             .compatibility
@@ -885,7 +904,7 @@ impl SkillData {
             .is_some_and(|value| value.is_empty() || value.len() > MAX_COMPATIBILITY_LENGTH)
         {
             bail!(
-                "Skill compatibility must contain 1-{MAX_COMPATIBILITY_LENGTH} characters when provided"
+                "skill compatibility must contain 1-{MAX_COMPATIBILITY_LENGTH} characters when provided"
             );
         }
         Ok(())
@@ -945,6 +964,7 @@ impl SkillData {
         })
     }
 
+    /// Parse a skill from text content, with optional filesystem for resource discovery.
     pub fn from_text_in(
         file_system: &dyn FileSystem,
         text: &str,
@@ -963,6 +983,7 @@ impl SkillData {
         Ok(skill)
     }
 
+    /// Parse a skill from text content via the native filesystem.
     pub fn from_text(
         text: &str,
         path: Option<&Path>,
@@ -971,6 +992,7 @@ impl SkillData {
         Self::from_text_in(&NATIVE_FILE_SYSTEM, text, path, source_metadata)
     }
 
+    /// Load a skill from a SKILL.md file via the native filesystem.
     #[cfg(feature = "python-bindings")]
     #[allow(dead_code)]
     pub fn from_file_with_source_metadata(
@@ -980,6 +1002,7 @@ impl SkillData {
         Self::from_file_with_source_metadata_in(&NATIVE_FILE_SYSTEM, path, source_metadata)
     }
 
+    /// Load a skill from a SKILL.md file, discovering bundled resources.
     pub fn from_file_with_source_metadata_in(
         file_system: &dyn FileSystem,
         path: &Path,
@@ -989,6 +1012,7 @@ impl SkillData {
         Self::from_text_in(file_system, &text, Some(path), source_metadata)
     }
 
+    /// Discover a SKILL.md inside a directory and load the skill.
     pub fn from_dir_with_source_metadata(
         path: &Path,
         source_metadata: &SkillSourceMetadata,
@@ -996,6 +1020,7 @@ impl SkillData {
         Self::from_dir_with_source_metadata_in(&NATIVE_FILE_SYSTEM, path, source_metadata)
     }
 
+    /// Discover a SKILL.md inside a directory and load the skill via a custom filesystem.
     pub fn from_dir_with_source_metadata_in(
         file_system: &dyn FileSystem,
         path: &Path,
@@ -1005,6 +1030,8 @@ impl SkillData {
         Self::from_file_with_source_metadata_in(file_system, &skill_path, source_metadata)
     }
 
+    /// Render the skill as a SKILL.md string with frontmatter and body.
+    #[must_use]
     pub fn render(&self, metadata_override: Option<&BTreeMap<String, String>>) -> String {
         let mut combined_metadata = self.metadata.clone();
         if let Some(metadata_override) = metadata_override {
@@ -1045,6 +1072,7 @@ impl SkillData {
         }
     }
 
+    /// Write the skill to disk (native filesystem), returning the installed skill.
     pub fn install_to(
         &self,
         directory: &Path,
@@ -1054,10 +1082,12 @@ impl SkillData {
         self.install_to_in(&NATIVE_FILE_SYSTEM, directory, skill_name, overwrite)
     }
 
+    /// Atomically replace an existing skill on disk, via the native filesystem.
     pub fn replace_to(&self, directory: &Path, skill_name: Option<&str>) -> Result<Self> {
         self.replace_to_in(&NATIVE_FILE_SYSTEM, directory, skill_name)
     }
 
+    /// Write the skill to disk via a custom filesystem, returning the installed skill.
     pub fn install_to_in(
         &self,
         file_system: &dyn FileSystem,
@@ -1073,6 +1103,7 @@ impl SkillData {
         self.write_to_root_in(file_system, &root, overwrite)
     }
 
+    /// Atomically replace an existing skill on disk via a custom filesystem.
     pub fn replace_to_in(
         &self,
         file_system: &dyn FileSystem,
@@ -1095,6 +1126,8 @@ impl SkillData {
         Self::from_dir_with_source_metadata_in(file_system, &root, &SkillSourceMetadata::default())
     }
 
+    /// Build the full metadata map including the managed-by marker and source tracking.
+    #[must_use]
     pub fn managed_metadata(&self) -> BTreeMap<String, String> {
         let mut metadata = self.metadata.clone();
         metadata.insert(
@@ -1106,6 +1139,8 @@ impl SkillData {
         metadata
     }
 
+    /// Extract source provenance as a [`SkillSourceMetadata`] struct.
+    #[must_use]
     pub fn source_metadata(&self) -> SkillSourceMetadata {
         SkillSourceMetadata {
             source: Some(self.source.clone()),
@@ -1117,6 +1152,8 @@ impl SkillData {
         }
     }
 
+    /// Return the on-disk directory name for this skill.
+    #[must_use]
     pub fn directory_name(&self) -> String {
         self.path
             .as_deref()
@@ -1126,6 +1163,8 @@ impl SkillData {
             .to_string()
     }
 
+    /// Return `name==version` if both package fields are set, otherwise just the name.
+    #[must_use]
     pub fn package_reference(&self) -> Option<String> {
         match (&self.package_name, &self.package_version) {
             (Some(name), Some(version)) if !version.is_empty() => {
@@ -1136,6 +1175,9 @@ impl SkillData {
         }
     }
 
+    /// Check whether two skills refer to the same logical skill, matching by
+    /// package name, GitHub URL, or name.
+    #[must_use]
     pub fn matches(&self, other: &Self) -> bool {
         if let (Some(package_name), Some(other_package_name)) =
             (&self.package_name, &other.package_name)
@@ -1148,6 +1190,9 @@ impl SkillData {
         self.name == other.name
     }
 
+    /// Returns `true` when the skill carries the skilly-managed metadata marker.
+    #[must_use]
+    #[inline]
     pub fn is_installed(&self) -> bool {
         self.metadata
             .get(SKILLY_MANAGED_METADATA_KEY)
@@ -1155,21 +1200,33 @@ impl SkillData {
             .unwrap_or(false)
     }
 
+    /// Returns `true` when the skill source is a dependency install.
+    #[must_use]
+    #[inline]
     pub fn is_dependency(&self) -> bool {
         self.source == SKILLY_SOURCE_DEPENDENCY
     }
 
+    /// Returns `true` when the skill is sourced from SkillsMP.
+    #[must_use]
+    #[inline]
     pub fn is_skillsmp(&self) -> bool {
         self.source == SKILLY_SOURCE_SKILLSMP || self.skillsmp_id.is_some()
     }
 
+    /// Returns `true` when the skill has a known update source (dependency or GitHub).
     #[cfg(feature = "python-bindings")]
     #[allow(dead_code)]
+    #[must_use]
+    #[inline]
     pub fn can_update(&self) -> bool {
         self.is_dependency() || self.github_url.is_some()
     }
 }
 
+/// Return a status string for a scan match: `installed`, `installable`, or `updatable`.
+#[must_use]
+#[inline]
 pub fn scan_match_status(available: &SkillData, installed: Option<&SkillData>) -> &'static str {
     match installed {
         None => STATUS_INSTALLABLE,
@@ -1230,7 +1287,7 @@ pub fn remove_skill_in(
         .path
         .as_ref()
         .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("Installed skill has no directory: {name}"))?;
+        .ok_or_else(|| anyhow!("installed skill has no directory: {name}"))?;
     file_system.remove_tree(&skill_directory)?;
     Ok(skill)
 }
@@ -1251,9 +1308,9 @@ pub fn require_installed_skill_in(
         .filter(|skill| skill.name == name)
         .collect::<Vec<_>>();
     match matches.len() {
-        0 => bail!("Installed skill not found: {name}"),
+        0 => bail!("installed skill not found: {name}"),
         1 => Ok(matches[0].clone()),
-        _ => bail!("Multiple installed skills match name: {name}"),
+        _ => bail!("multiple installed skills match name: {name}"),
     }
 }
 
@@ -1325,6 +1382,9 @@ pub fn read_distribution_info_in(
     Ok(name.map(|name| DistributionInfo { name, version }))
 }
 
+/// Check whether an installed path (from a RECORD file) points to a skilly skill directory.
+#[must_use]
+#[inline]
 pub fn is_skill_record(installed_path: &str) -> bool {
     let normalized = installed_path.replace('\\', "/");
     let parts = normalized.split('/').collect::<Vec<_>>();
@@ -1579,6 +1639,9 @@ pub fn project_requirements_in(
     parse_project_requirements(&text, include_dev, include_extras)
 }
 
+/// Extract the package name from a pip requirement spec.
+#[must_use]
+#[inline]
 pub fn requirement_name(spec: &str) -> Option<String> {
     let trimmed = spec.trim_start();
     let mut name = String::new();
@@ -1620,6 +1683,8 @@ fn project_skill_matches_in(
     )
 }
 
+/// Find an installed skill that matches the available skill.
+#[must_use]
 pub fn match_installed(
     installed_skills: &[SkillData],
     available_skill: &SkillData,
@@ -1688,11 +1753,15 @@ pub fn available_dependency_skill_with_file_system(
         .find(|skill| skill.matches(installed_skill)))
 }
 
+/// Parse a GitHub URL into a structured skill location.
+///
+/// Supports `https://github.com/<owner>/<repo>` and
+/// `https://github.com/<owner>/<repo>/tree/<ref>/<path>`.
 pub fn parse_github_skill_url(github_url: &str) -> Result<GitHubSkillLocationData> {
     let parsed = Url::parse(github_url)?;
     if parsed.host_str() != Some("github.com") {
         bail!(
-            "Unsupported GitHub URL host: {}",
+            "unsupported GitHub URL host: {}",
             parsed.host_str().unwrap_or_default()
         );
     }
@@ -1716,12 +1785,12 @@ pub fn parse_github_skill_url(github_url: &str) -> Result<GitHubSkillLocationDat
     if parts.len() >= 3 {
         if parts[2] != "tree" {
             bail!(
-                "GitHub skill URLs must look like https://github.com/<owner>/<repo> or https://github.com/<owner>/<repo>/tree/<ref>/<path>"
+                "github skill URLs must look like https://github.com/<owner>/<repo> or https://github.com/<owner>/<repo>/tree/<ref>/<path>"
             );
         }
         if parts.len() < 4 {
             bail!(
-                "GitHub tree URLs must include a ref like https://github.com/<owner>/<repo>/tree/<ref>"
+                "github tree URLs must include a ref like https://github.com/<owner>/<repo>/tree/<ref>"
             );
         }
         ref_name = Some(parts[3].clone());
@@ -1739,6 +1808,8 @@ pub fn parse_github_skill_url(github_url: &str) -> Result<GitHubSkillLocationDat
     })
 }
 
+/// Build a GitHub tree URL from a location, path, and optional ref.
+#[must_use]
 pub fn build_github_skill_url(
     location: &GitHubSkillLocationData,
     path: &str,
@@ -1754,6 +1825,8 @@ pub fn build_github_skill_url(
     resolved_ref.map(|value| format!("{base_url}/tree/{value}/{path}"))
 }
 
+/// Find all skill directories (containing SKILL.md) in a set of GitHub files.
+#[must_use]
 pub fn find_github_skill_dirs(
     files: &BTreeMap<String, GitHubFileBlobData>,
     root: &str,
@@ -1858,7 +1931,7 @@ pub fn discover_github_skills<F: GitHubSnapshotFetcher>(
     let skill_dirs = find_github_skill_dirs(&snapshot.files, &location.path);
     let single_skill = skill_dirs.len() == 1;
     if skill_dirs.is_empty() {
-        bail!("No SKILL.md found at {github_url}");
+        bail!("no SKILL.md found at {github_url}");
     }
     if skillsmp_id.is_some() && !single_skill {
         bail!("SkillsMP metadata can only be attached to a single skill");
@@ -1893,6 +1966,9 @@ fn skill_dirs_len_eq_location(location_path: &str, skill_dir: &str) -> bool {
     (location_path == "." && skill_dir == ".") || location_path == skill_dir
 }
 
+/// Check whether installed and available GitHub skills share the same commit SHA.
+#[must_use]
+#[inline]
 pub fn github_versions_match(installed: &SkillData, available: &SkillData) -> bool {
     installed.github_commit_sha.is_some()
         && installed.github_commit_sha == available.github_commit_sha

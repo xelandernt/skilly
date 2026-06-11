@@ -518,6 +518,7 @@ impl FileSystem for PythonFileSystem {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn skill_from_text_impl(
     text: &str,
     path: Option<&Bound<'_, PyAny>>,
@@ -553,6 +554,7 @@ fn skill_from_text_impl(
     Ok(PySkill::from_data(skill))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn skill_from_file_impl(
     py: Python<'_>,
     path: &Bound<'_, PyAny>,
@@ -590,6 +592,7 @@ fn skill_from_file_impl(
     Ok(PySkill::from_data(skill))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn skill_from_dir_impl(
     py: Python<'_>,
     path: &Bound<'_, PyAny>,
@@ -627,6 +630,7 @@ fn skill_from_dir_impl(
     Ok(PySkill::from_data(skill))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn discover_github_skills_impl(
     py: Python<'_>,
     github_url: String,
@@ -1343,6 +1347,7 @@ fn discover_venv_skills_py(
 
 #[pyfunction]
 #[pyo3(name = "scan_project", signature = (directory=None, pyproject_toml_path=None, venv_path=None, include_project_dependencies=true, dependency_groups=None, exclude_dependency_groups=None, optional_dependencies=None, exclude_optional_dependencies=None, file_system=None))]
+#[allow(clippy::too_many_arguments)]
 fn scan_project_py(
     py: Python<'_>,
     directory: Option<&Bound<'_, PyAny>>,
@@ -1396,6 +1401,7 @@ fn scan_project_py(
 
 #[pyfunction]
 #[pyo3(name = "available_dependency_skill", signature = (installed, directory=None, pyproject_toml_path=None, venv_path=None, include_project_dependencies=true, dependency_groups=None, exclude_dependency_groups=None, optional_dependencies=None, exclude_optional_dependencies=None, file_system=None))]
+#[allow(clippy::too_many_arguments)]
 fn available_dependency_skill_py(
     py: Python<'_>,
     installed: &PySkill,
