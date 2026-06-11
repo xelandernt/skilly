@@ -15,6 +15,7 @@ pub const CLAUDE_SKILLS_PATH: &str = ".claude/skills";
 pub const CODEX_SKILLS_PATH: &str = ".codex/skills";
 pub const COPILOT_LOCAL_SKILLS_PATH: &str = ".github/skills";
 pub const COPILOT_GLOBAL_SKILLS_PATH: &str = ".copilot/skills";
+pub const SKILLY_DIRECTORY_ENV_VAR: &str = "SKILLY_DIRECTORY";
 pub const RESOURCE_KIND_SCRIPT: &str = "script";
 pub const RESOURCE_KIND_REFERENCE: &str = "reference";
 pub const RESOURCE_KIND_ASSET: &str = "asset";
@@ -64,6 +65,36 @@ pub fn skills_directory(flavor: SkillDirectoryFlavor, global: bool) -> Result<Pa
         .map(PathBuf::from)
         .ok_or_else(|| anyhow!("Could not determine the user home directory"))?;
     Ok(home.join(relative))
+}
+
+pub fn default_skills_directory() -> Result<PathBuf> {
+    if let Some(directory) = env::var_os(SKILLY_DIRECTORY_ENV_VAR) {
+        return absolute_path(Path::new(&directory));
+    }
+    Ok(PathBuf::from(DEFAULT_SKILLS_PATH))
+}
+
+fn absolute_path(path: &Path) -> Result<PathBuf> {
+    let expanded = expand_home_path(path)?;
+    if expanded.is_absolute() {
+        return Ok(expanded);
+    }
+    Ok(env::current_dir()?.join(expanded))
+}
+
+fn expand_home_path(path: &Path) -> Result<PathBuf> {
+    let value = path.to_string_lossy();
+    if value == "~" || value.starts_with("~/") {
+        let home = env::var_os("HOME")
+            .or_else(|| env::var_os("USERPROFILE"))
+            .ok_or_else(|| anyhow!("Could not determine the user home directory"))?;
+        let home = PathBuf::from(home);
+        if value == "~" {
+            return Ok(home);
+        }
+        return Ok(home.join(value.trim_start_matches("~/")));
+    }
+    Ok(path.to_path_buf())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

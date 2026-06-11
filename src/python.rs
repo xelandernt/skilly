@@ -4,6 +4,7 @@ use crate::core::{
     SkillResourceData, SkillSourceMetadata,
     available_dependency_skill_in as rust_available_dependency_skill,
     available_dependency_skill_with_file_system as rust_available_dependency_skill_with_file_system,
+    default_skills_directory as rust_default_skills_directory,
     discover_github_skills as rust_discover_github_skills,
     discover_installed_skills as rust_discover_installed_skills,
     discover_installed_skills_in as rust_discover_installed_skills_in,
@@ -1290,6 +1291,10 @@ fn skill_install_to_py(
 #[pyfunction]
 #[pyo3(name = "resolve_skills_directory", signature = (agent="agents", global_=false))]
 fn resolve_skills_directory_py(py: Python<'_>, agent: &str, global_: bool) -> PyResult<Py<PyAny>> {
+    if agent == "agents" && !global_ {
+        let directory = rust_default_skills_directory().map_err(py_err)?;
+        return py_path(py, &directory.to_string_lossy());
+    }
     let flavor = match agent {
         "agents" => SkillDirectoryFlavor::Agents,
         "claude" => SkillDirectoryFlavor::Claude,

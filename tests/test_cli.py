@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import subprocess
 
@@ -10,11 +11,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def run_native_cli(
-    *args: str, cwd: Path | None = None
+    *args: str, cwd: Path | None = None, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["cargo", "run", "--quiet", "--", *args],
         cwd=cwd or REPO_ROOT,
+        env=env,
         capture_output=True,
         text=True,
         check=False,
@@ -175,11 +177,47 @@ def test_native_cli_list_reports_empty_directory(tmp_path: Path) -> None:
     assert f"No skills found in directory {tmp_path}" in result.stdout
 
 
+def test_native_cli_uses_environment_default_directory(tmp_path: Path) -> None:
+    SkillRepository().install(
+        Skill("sample-skill", "Installed skill."),
+        directory=tmp_path,
+    )
+
+    env = {**os.environ, "SKILLY_DIRECTORY": str(tmp_path)}
+    result = run_native_cli("list", env=env)
+
+    assert result.returncode == 0
+    assert "sample-skill" in result.stdout
+
+
+def test_native_cli_explicit_directory_overrides_environment_default(
+    tmp_path: Path,
+) -> None:
+    explicit_directory = tmp_path / "explicit-skills"
+    SkillRepository().install(
+        Skill("sample-skill", "Installed skill."),
+        directory=explicit_directory,
+    )
+
+    env = {**os.environ, "SKILLY_DIRECTORY": str(tmp_path)}
+    result = run_native_cli("list", "--directory", str(explicit_directory), env=env)
+
+    assert result.returncode == 0
+    assert "sample-skill" in result.stdout
+
+
 def test_resolve_skills_directory_supports_local_agent_flavors() -> None:
     assert resolve_skills_directory() == Path(".agents/skills")
     assert resolve_skills_directory("claude") == Path(".claude/skills")
     assert resolve_skills_directory("codex") == Path(".codex/skills")
     assert resolve_skills_directory("copilot") == Path(".github/skills")
+
+
+def test_resolve_skills_directory_uses_environment_default(monkeypatch) -> None:
+    monkeypatch.setenv("SKILLY_DIRECTORY", "~/custom-skills")
+
+    assert resolve_skills_directory() == Path.home() / "custom-skills"
+    assert resolve_skills_directory("claude") == Path(".claude/skills")
 
 
 def test_resolve_skills_directory_supports_global_agent_flavors() -> None:

@@ -3,9 +3,9 @@ use crate::core::{
     ProjectDependencyOrigin, ProjectEnvironment, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP,
     SKILLY_UNKNOWN_SOURCE, STATUS_INSTALLABLE, STATUS_INSTALLED, STATUS_UPDATABLE,
     ScanDependencySelection, SkillData, SkillDirectoryFlavor, SkillMatchData,
-    available_dependency_skill_in, dependency_updates_in, discover_github_skills,
-    discover_installed_skills, github_versions_match, project_requirements, remove_skill,
-    scan_match_status, scan_project_in, skills_directory,
+    available_dependency_skill_in, default_skills_directory, dependency_updates_in,
+    discover_github_skills, discover_installed_skills, github_versions_match, project_requirements,
+    remove_skill, scan_match_status, scan_project_in, skills_directory,
 };
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
@@ -330,7 +330,7 @@ impl DestinationArgs {
         } else if self.copilot {
             SkillDirectoryFlavor::Copilot
         } else {
-            SkillDirectoryFlavor::Agents
+            return default_skills_directory();
         };
         absolute_path(&skills_directory(flavor, self.global)?)
     }

@@ -138,6 +138,17 @@ Management commands accept the same destination options:
 
 Without destination options, `skilly` uses `.agents/skills`.
 
+Set `SKILLY_DIRECTORY` to change that default without passing `--directory`
+every time:
+
+```shell
+export SKILLY_DIRECTORY="$HOME/.config/skilly/skills"
+skilly list
+```
+
+`--directory`, `--local`, `--global`, `--claude`, `--codex`, and `--copilot`
+override `SKILLY_DIRECTORY` when provided explicitly.
+
 ```shell
 uvx skilly download https://github.com/example/project --global --codex
 uvx skilly list --local --claude
@@ -151,7 +162,7 @@ to your home directory.
 
 | Flags                | Resolved destination                                                      |
 |----------------------|---------------------------------------------------------------------------|
-| _none_               | `.agents/skills`                                                          |
+| _none_               | `SKILLY_DIRECTORY` when set, otherwise `.agents/skills`                   |
 | `--local`            | `.agents/skills`                                                          |
 | `--global`           | `~/.agents/skills`                                                        |
 | `--claude`           | `.claude/skills`                                                          |
