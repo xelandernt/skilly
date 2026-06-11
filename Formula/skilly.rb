@@ -1,9 +1,9 @@
 class Skilly < Formula
   desc "Manage agent skills"
   homepage "https://github.com/xelandernt/skilly"
-  version "0.0.25"
-  url "https://github.com/xelandernt/skilly/archive/refs/tags/0.0.25.tar.gz"
-  sha256 "9973f3fe0b28a14eaf12619b17095f713336644a66351e010454dfa02987c57f"
+  version "0.0.26"
+  url "https://github.com/xelandernt/skilly/archive/refs/tags/0.0.26.tar.gz"
+  sha256 "54c787dbc4af45ba6436a526c7616c94b0126847803ecb44dd177e51a758fbcd"
   license "MIT"
 
   livecheck do
