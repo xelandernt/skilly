@@ -663,18 +663,15 @@ fn relax_frontmatter_lines(lines: &[String]) -> String {
                 return line.clone();
             };
             let trimmed_value = suffix.trim_start();
-            if trimmed_value.is_empty()
-                || !trimmed_value.contains(": ")
-                || !should_quote_relaxed_yaml_scalar(trimmed_value)
-            {
+            if trimmed_value.is_empty() || !should_quote_relaxed_yaml_scalar(trimmed_value) {
+                return line.clone();
+            }
+            let quoted = format_scalar(trimmed_value);
+            if quoted == trimmed_value {
                 return line.clone();
             }
             let indentation = suffix.len() - trimmed_value.len();
-            format!(
-                "{prefix}:{}{}",
-                " ".repeat(indentation),
-                format_scalar(trimmed_value)
-            )
+            format!("{prefix}:{}{}", " ".repeat(indentation), quoted)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -859,6 +856,7 @@ fn format_scalar(value: &str) -> String {
         || value.contains('\n')
         || value.contains('\r')
         || value.contains('"')
+        || value.starts_with('@')
     {
         serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
     } else {
@@ -1767,14 +1765,14 @@ pub fn project_requirements_in(
     parse_project_requirements(&text, include_dev, include_extras)
 }
 
-/// Extract the package name from a pip requirement spec.
+/// Extract the package name from a pip or npm requirement spec.
 #[must_use]
 #[inline]
 pub fn requirement_name(spec: &str) -> Option<String> {
     let trimmed = spec.trim_start();
     let mut name = String::new();
     for character in trimmed.chars() {
-        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '@' | '/') {
             name.push(character);
         } else {
             break;

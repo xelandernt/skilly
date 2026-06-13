@@ -10,7 +10,7 @@
 
 Manage [Agent Skills](https://agentskills.io/specification) from the command line or Python.
 
-`skilly` creates specification-compliant skills, installs skills from GitHub or Python dependencies, and keeps managed skills up to date.
+`skilly` creates specification-compliant skills, installs skills from GitHub, Python, or Node dependencies, and keeps managed skills up to date.
 
 ## Table of Contents
 
@@ -62,17 +62,14 @@ brew install xelandernt/skilly/skilly
 ## Quick Start
 
 ```shell
-uvx skilly scan                       # Find skills from Python dependencies
-uvx skilly download <github-url>      # Install skills from GitHub
-uvx skilly list                       # Browse installed skills
-uvx skilly update                     # Preview available updates
+uvx skilly --help
 ```
 
 ## CLI Commands
 
 | Command | Purpose |
 |---------|---------|
-| `scan` | Find skills provided by the project's Python dependencies |
+| `scan` | Find skills provided by Python and Node project dependencies |
 | `download <github-url>` | Install one or more skills from GitHub |
 | `list` | Browse, update, or remove installed skills |
 | `update` | Preview available updates; `--yes` applies all |
@@ -102,17 +99,24 @@ Existing skills are rejected unless `--overwrite` is passed.
 
 ### Install Dependency Skills
 
-`skilly scan` reads `pyproject.toml` and the project's `.venv`, then surfaces skills shipped by dependencies:
+`skilly scan` discovers skills shipped by your project's dependencies across two ecosystems:
+
+- **Python** — reads `pyproject.toml` and scans the project's `.venv` for packages that bundle skills in a `skills/` directory.
+- **Node** — reads `package.json` (`dependencies`, `devDependencies`, `optionalDependencies`) and scans `node_modules/` for packages that bundle skills in a `skills/` directory.
 
 ```shell
 uvx skilly scan
 ```
 
-Include or exclude specific extras and dependency groups (flags are repeatable):
+Both ecosystems are scanned by default whenever the corresponding manifest and package directory exist. Results are shown with their source (e.g. `node:dependencies`, `python:project`) and status (`installable`, `installed`, `updatable`).
+
+Include or exclude specific Python extras and dependency groups:
 
 ```shell
 uvx skilly scan --group dev --group test --exclude-extra docs
+uvx skilly scan --no-project-dependencies         # skip [project].dependencies
 ```
+
 
 ### Install GitHub Skills
 
@@ -235,11 +239,34 @@ for match in repository.scan_project():
 Stateless discovery functions for one-shot reads:
 
 ```python
-from skilly import discover_installed_skills, discover_venv_skills
+from skilly import (
+    discover_installed_skills,
+    discover_node_modules_skills,
+    discover_venv_skills,
+)
 
 installed = discover_installed_skills()
-dependency_skills = discover_venv_skills()
+python_skills = discover_venv_skills()
+node_skills = discover_node_modules_skills()
 ```
+
+`ProjectSettings` accepts a `NodeProjectSettings` to control node scanning:
+
+```python
+from skilly import NodeProjectSettings, ProjectSettings, SkillRepository
+
+repository = SkillRepository(
+    directory=Path(".agents/skills"),
+    project=ProjectSettings(
+        node=NodeProjectSettings(
+            include_dependencies=True,
+            include_dev_dependencies=False,
+        ),
+    ),
+)
+```
+
+Set `node=None` to skip node ecosystem scanning entirely.
 
 SkillsMP client with typed results:
 

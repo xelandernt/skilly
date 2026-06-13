@@ -374,20 +374,9 @@ fn run_scan(
         return Ok(());
     }
 
-    let actionable = matches
-        .into_iter()
-        .filter(|item| {
-            scan_match_status(&item.available, item.installed.as_ref()) != STATUS_INSTALLED
-        })
-        .collect::<Vec<_>>();
-    if actionable.is_empty() {
-        println!("All discovered dependency skills are already installed");
-        return Ok(());
-    }
     if !is_interactive_terminal() {
-        println!("Dependency skills requiring action:");
-        for item in actionable {
-            println!("{}", scan_choice_label(&item));
+        for item in &matches {
+            println!("{}", scan_choice_label(item));
         }
         return Ok(());
     }
@@ -405,7 +394,7 @@ fn run_scan(
     let mut checked_indices = vec![Vec::<usize>::new(); destinations.len()];
 
     loop {
-        let actionables_by_tab = destinations
+        let all_matches_by_tab = destinations
             .iter()
             .map(|destination| {
                 let environment = ProjectEnvironment::with_paths(
@@ -414,21 +403,12 @@ fn run_scan(
                     Path::new(".venv"),
                     dependency_selection.clone(),
                 );
-                Ok(scan_project_in(&environment)?
-                    .into_iter()
-                    .filter(|item| {
-                        scan_match_status(&item.available, item.installed.as_ref())
-                            != STATUS_INSTALLED
-                    })
-                    .collect::<Vec<_>>())
+                scan_project_in(&environment)
             })
             .collect::<Result<Vec<_>>>()?;
-        let empty_flags = actionables_by_tab
-            .iter()
-            .map(Vec::is_empty)
-            .collect::<Vec<_>>();
-        if empty_flags.iter().all(|is_empty| *is_empty) {
-            println!("All discovered dependency skills are already installed");
+        let all_empty = all_matches_by_tab.iter().all(Vec::is_empty);
+        if all_empty {
+            println!("No dependency skills found in pyproject.toml and .venv");
             break;
         }
         if active_tab >= destinations.len() {
@@ -436,9 +416,9 @@ fn run_scan(
         }
 
         let directory = &destinations[active_tab].path;
-        let actionable = &actionables_by_tab[active_tab];
-        let selectable_count = actionable.len();
-        let mut items = actionable
+        let all_matches = &all_matches_by_tab[active_tab];
+        let selectable_count = all_matches.len();
+        let mut items = all_matches
             .iter()
             .map(|item| MenuItemUi {
                 label: scan_choice_label(item),
@@ -447,6 +427,7 @@ fn run_scan(
                 selectable: true,
             })
             .collect::<Vec<_>>();
+        let exit_index = items.len();
         items.push(exit_menu_item("Exit scan"));
 
         let result = multi_select_menu(
@@ -483,11 +464,11 @@ fn run_scan(
             MultiSelectMenuResult::Selection(result) => match result {
                 MultiSelectResult::Single(index) => {
                     checked_indices[active_tab].clear();
-                    if index == selectable_count {
+                    if index == exit_index {
                         break;
                     }
                     selected_indices[active_tab] = index;
-                    let selected = actionable[index].clone();
+                    let selected = all_matches[index].clone();
                     let actions = scan_skill_actions(&selected);
                     let action_index = select_menu(
                         &mut session,
@@ -555,7 +536,7 @@ fn run_scan(
                         .copied()
                         .unwrap_or(selected_indices[active_tab]);
                     let selected: Vec<SkillMatchData> =
-                        indices.iter().map(|&i| actionable[i].clone()).collect();
+                        indices.iter().map(|&i| all_matches[i].clone()).collect();
                     let preview_names = selected
                         .iter()
                         .map(|item| item.available.name.clone())
@@ -2221,16 +2202,12 @@ fn scan_dependency_label(origins: &[ProjectDependencyOrigin]) -> String {
         .join(", ")
 }
 
-fn scan_primary_action(item: &SkillMatchData) -> &'static str {
-    if item.installed.is_some() {
-        UPDATE_CHOICE
-    } else {
-        INSTALL_CHOICE
+fn scan_skill_actions(item: &SkillMatchData) -> Vec<&'static str> {
+    match scan_match_status(&item.available, item.installed.as_ref()) {
+        STATUS_UPDATABLE => vec![UPDATE_CHOICE, BACK_CHOICE, EXIT_CHOICE],
+        STATUS_INSTALLED => vec![BACK_CHOICE, EXIT_CHOICE],
+        _ => vec![INSTALL_CHOICE, BACK_CHOICE, EXIT_CHOICE],
     }
-}
-
-fn scan_skill_actions(item: &SkillMatchData) -> [&'static str; 3] {
-    [scan_primary_action(item), BACK_CHOICE, EXIT_CHOICE]
 }
 
 fn scan_menu_status(item: &SkillMatchData) -> MenuItemStatus {
@@ -3287,7 +3264,7 @@ mod tests {
     // --- file viewer tests ---
 
     use super::tui::{
-        FileViewEntry, build_file_tree, compute_visible, file_viewer_move_selection_down,
+        build_file_tree, compute_visible, file_viewer_move_selection_down,
         file_viewer_move_selection_up,
     };
     use crate::core::SkillResourceData;

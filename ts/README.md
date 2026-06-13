@@ -1,85 +1,91 @@
-[NPM](https://img.shields.io/npm/v/%40xelandernt%2Fskilly)
+[![npm](https://img.shields.io/npm/v/%40xelandernt%2Fskilly)](https://www.npmjs.com/package/@xelandernt/skilly)
+[![pypi](https://img.shields.io/pypi/v/skilly)](https://pypi.org/project/skilly/)
+[![pyrefly](https://img.shields.io/endpoint?url=https://pyrefly.org/badge.json)](https://github.com/facebook/pyrefly)
+[![GitHub stars](https://img.shields.io/github/stars/xelandernt/skilly)](https://github.com/xelandernt/skilly/stargazers)
+[![npm Downloads](https://img.shields.io/npm/dm/%40xelandernt%2Fskilly)](https://www.npmjs.com/package/@xelandernt/skilly)
+[![PyPI Downloads](https://static.pepy.tech/badge/skilly/month)](https://pepy.tech/projects/skilly)
+[![License](https://img.shields.io/github/license/xelandernt/skilly)](https://github.com/xelandernt/skilly/blob/main/LICENSE)
 
 # skilly
 
-Manage [Agent Skills](https://agentskills.io/specification) from the command line
-or Python.
+Manage [Agent Skills](https://agentskills.io/specification) from the command line or Python.
 
-`skilly` creates specification-compliant skills, installs skills from GitHub or
-Python dependencies, and keeps managed skills up to date.
+`skilly` creates specification-compliant skills, installs skills from GitHub, Python, or Node dependencies, and keeps managed skills up to date.
+
+## Table of Contents
+
+- [Installation](#installation)
+  - [Python](#python)
+  - [Node](#node)
+  - [Homebrew](#homebrew)
+  - [Info](#info)
+- [Quick Start](#quick-start)
+- [CLI Commands](#cli-commands)
+  - [Create Skills](#create-skills)
+  - [Install Dependency Skills](#install-dependency-skills)
+  - [Install GitHub Skills](#install-github-skills)
+  - [Destinations](#destinations)
+  - [Configure Destinations](#configure-destinations)
+  - [GitHub Authentication](#github-authentication)
+- [Python API](#python-api)
+- [Development](#development)
+- [License](#license)
 
 ## Installation
 
-Run with `uvx`:
+
+### Python
 ```shell
 uvx skilly --help
-
 ```
 
-Run with `npx`:
+### Node
 ```shell
 npx @xelandernt/skilly --help
 ```
 
-Install the native CLI with Homebrew from this repository's tap:
 
+### Homebrew
 ```shell
 brew tap xelandernt/skilly https://github.com/xelandernt/skilly
 brew install xelandernt/skilly/skilly
 ```
 
-Homebrew installs the CLI only. Install the Python package when you need the
-import surface as well:
+### Info
 
-```shell
-pip install skilly
-```
-
-The npm package ships the same native Rust CLI behind the executable name
-`skilly`. The current npm support matrix is macOS arm64/x64, Linux x64
-(glibc), and Windows x64.
+| Method        | Ships                                                                                                |
+|---------------|------------------------------------------------------------------------------------------------------|
+| `uvx` / `pip` | Python package with import surface + CLI (pre-built wheels: Linux x64, macOS arm64/x64, Windows x64) |
+| `npx`         | Native Rust CLI (macOS arm64/x64, Linux x64 glibc, Windows x64)                                      |
+| `brew`        | Native Rust CLI (macOS arm64/x64, Linux x64)                                                         |
 
 ## Quick Start
 
-Scan the current Python project for skills shipped by its dependencies:
-
 ```shell
-uvx skilly scan
-```
-
-Download a skill from GitHub:
-
-```shell
-uvx skilly download https://github.com/example/project/tree/main/skills/code-review
-```
-
-Inspect installed skills:
-
-```shell
-uvx skilly list
+uvx skilly scan                       # Find skills from Python and Node dependencies
+uvx skilly download <github-url>      # Install skills from GitHub
+uvx skilly list                       # Browse installed skills
+uvx skilly update                     # Preview available updates
 ```
 
 ## CLI Commands
 
 | Command | Purpose |
-| --- | --- |
-| `uvx skilly scan` | Find skills provided by the project's Python dependencies. |
-| `uvx skilly download <github-url>` | Install one or more skills from GitHub. |
-| `uvx skilly list` | Browse, update, or remove installed skills. |
-| `uvx skilly update` | Preview available updates; add `--yes` to apply all updates. |
-| `uvx skilly remove <name>` | Remove an installed skill by directory name. |
-| `uvx skilly skillsmp search <query>` | Search SkillsMP and install a selected result. |
-| `uvx skilly create` | Create a valid skill through a terminal wizard or explicit options. |
+|---------|---------|
+| `scan` | Find skills provided by Python and Node project dependencies |
+| `download <github-url>` | Install one or more skills from GitHub |
+| `list` | Browse, update, or remove installed skills |
+| `update` | Preview available updates; `--yes` applies all |
+| `remove <name>` | Remove an installed skill by directory name |
+| `skillsmp search <query>` | Search SkillsMP and install a selected result |
+| `create` | Create a valid skill through a terminal wizard or explicit options |
+| `configure` | Set which directories skilly manages via TUI or CLI flags |
 
-Use `uvx skilly <command> --help` for all options.
+Run `skilly <command> --help` for all options.
 
 ### Create Skills
 
-Interactive terminals open a full-screen editor for the required and optional
-Agent Skills fields. `Ctrl+S` creates the skill, `Ctrl+X` cancels, and `Enter`
-in the multi-line editors inserts real line breaks.
-
-For scripts and automation, provide the required name and description:
+Interactive terminals open a full-screen editor. `Ctrl+S` creates the skill, `Ctrl+X` cancels.
 
 ```shell
 uvx skilly create deployment-checks \
@@ -92,23 +98,29 @@ Run the deployment checklist and report blockers." \
   --yes
 ```
 
-Existing skills are rejected by default. Use `--overwrite` to replace one
-atomically. See `uvx skilly create --help` for the complete contract.
+Existing skills are rejected unless `--overwrite` is passed.
 
 ### Install Dependency Skills
 
-`uvx skilly scan` reads `pyproject.toml` and the project's `.venv`, then offers
-skills shipped by direct, development, and optional dependencies:
+`skilly scan` discovers skills shipped by your project's dependencies across two ecosystems:
+
+- **Python** — reads `pyproject.toml` and scans the project's `.venv` for packages that bundle skills in a `skills/` directory.
+- **Node** — reads `package.json` (`dependencies`, `devDependencies`, `optionalDependencies`) and scans `node_modules/` for packages that bundle skills in a `skills/` directory.
 
 ```shell
 uvx skilly scan
 ```
 
-Filter named groups and extras when needed:
+Both ecosystems are scanned by default whenever the corresponding manifest and package directory exist. Results are shown with their source (e.g. `node:dependencies`, `python:project`) and status (`installable`, `installed`, `updatable`).
+
+Include or exclude specific Python extras and dependency groups:
 
 ```shell
-uvx skilly scan --group dev --exclude-extra docs
+uvx skilly scan --group dev --group test --exclude-extra docs
+uvx skilly scan --no-project-dependencies         # skip [project].dependencies
 ```
+
+For finer Node control and path overrides, use the [Python API](#python-api).
 
 ### Install GitHub Skills
 
@@ -116,86 +128,96 @@ uvx skilly scan --group dev --exclude-extra docs
 uvx skilly download https://github.com/example/project
 ```
 
-When a repository contains multiple skills, select one or install all:
+When a repository contains multiple skills:
 
 ```shell
-uvx skilly download https://github.com/example/project --skill-name code-review
 uvx skilly download https://github.com/example/project --all
+uvx skilly download https://github.com/example/project --skill-name code-review
 ```
 
 ### Destinations
 
-Management commands accept the same destination options:
+All management commands accept the same destination options:
 
-| Option | Destination |
-| --- | --- |
-| `--local` | Project-local skills directory. |
-| `--global` | User-global skills directory. |
-| `--claude` | Claude skills directory. |
-| `--codex` | Codex skills directory. |
-| `--copilot` | GitHub Copilot skills directory. |
-| `--directory <path>` | Explicit directory; overrides all other destination options. |
+```shell
+uvx skilly list --local        # .agents/skills
+uvx skilly list --global       # ~/.agents/skills
+uvx skilly list --claude       # .claude/skills
+uvx skilly list --codex        # .codex/skills
+uvx skilly list --copilot      # .github/skills (local), ~/.copilot/skills (global)
+uvx skilly list --directory ~/custom     # Explicit directory
+```
 
-Without destination options, `skilly` uses `.agents/skills`.
+| Flags                | Resolved destination                                  |
+|----------------------|-------------------------------------------------------|
+| _none_               | `SKILLY_DIRECTORY` if set, otherwise `.agents/skills` |
+| `--local`            | `.agents/skills`                                      |
+| `--global`           | `~/.agents/skills`                                    |
+| `--claude`           | `.claude/skills`                                      |
+| `--claude --global`  | `~/.claude/skills`                                    |
+| `--codex`            | `.codex/skills`                                       |
+| `--codex --global`   | `~/.codex/skills`                                     |
+| `--copilot`          | `.github/skills`                                      |
+| `--copilot --global` | `~/.copilot/skills`                                   |
+| `--directory <path>` | That directory (after `~` expansion)                  |
 
-Set `SKILLY_DIRECTORY` to change that default without passing `--directory`
-every time:
+Set a default destination:
 
 ```shell
 export SKILLY_DIRECTORY="$HOME/.config/skilly/skills"
-skilly list
 ```
 
-`--directory`, `--local`, `--global`, `--claude`, `--codex`, and `--copilot`
-override `SKILLY_DIRECTORY` when provided explicitly.
+`--directory` overrides all other destination options and `SKILLY_DIRECTORY`.
+
+### Configure Destinations
+
+`skilly configure` lets you choose which directories skilly should manage. Interactive terminals open a two-tab TUI (Global / Local). Non-interactive runs accept flags.
 
 ```shell
-uvx skilly download https://github.com/example/project --global --codex
-uvx skilly list --local --claude
+uvx skilly configure                 # Open the TUI
+uvx skilly configure --show          # Print current config as TOML
+uvx skilly configure --reset         # Restore defaults
 ```
 
-#### Destination Mapping
+Add or remove custom directories:
 
-`skilly` resolves destination paths before use. Relative paths become absolute
-from the current working directory, and `--directory "~/.copilot"` expands `~`
-to your home directory.
+```shell
+uvx skilly configure --add-global /opt/skills
+uvx skilly configure --add-local .project/skills
+uvx skilly configure --remove-global /opt/skills
+uvx skilly configure --remove-local .project/skills
+```
 
-| Flags                | Resolved destination                                                      |
-|----------------------|---------------------------------------------------------------------------|
-| _none_               | `SKILLY_DIRECTORY` when set, otherwise `.agents/skills`                   |
-| `--local`            | `.agents/skills`                                                          |
-| `--global`           | `~/.agents/skills`                                                        |
-| `--claude`           | `.claude/skills`                                                          |
-| `--claude --global`  | `~/.claude/skills`                                                        |
-| `--codex`            | `.codex/skills`                                                           |
-| `--codex --global`   | `~/.codex/skills`                                                         |
-| `--copilot`          | `.github/skills`                                                          |
-| `--copilot --global` | `~/.copilot/skills`                                                       |
-| `--directory <path>` | Exactly that directory, after `~` expansion and absolute-path resolution. |
+Enable or disable built-in destinations (valid keys: `agents_global`, `agents_local`, `claude_global`, `claude_local`, `codex_global`, `codex_local`, `copilot_global`, `copilot_local`):
 
-`--directory` overrides `--local`, `--global`, `--claude`, `--codex`, and
-`--copilot`.
+```shell
+uvx skilly configure --enable agents_global --disable copilot_global
+```
+
+Configuration is stored in `~/.skilly.toml`:
+
+```toml
+enabled_builtin = ["agents_global", "agents_local", ...]
+custom_global_dirs = []
+custom_local_dirs = []
+```
 
 ### GitHub Authentication
 
-Authenticated requests have higher GitHub API rate limits. Use the first
-available token:
+Set a token for higher API rate limits (first available wins: `SKILLY_GITHUB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`):
 
 ```shell
 export SKILLY_GITHUB_TOKEN=ghp_your_token
-# or GITHUB_TOKEN / GH_TOKEN
 ```
 
-GitHub-fetching commands also accept `--github-token`.
+All GitHub-fetching commands also accept `--github-token`.
 
 ## Python API
 
-`SkillRepository` is the stateful management interface. Bind a destination,
-project settings, or custom filesystem once and reuse it:
+`SkillRepository` bundles a directory and project settings for stateful workflows:
 
 ```python
 from pathlib import Path
-
 from skilly import ProjectSettings, Skill, SkillRepository
 
 repository = SkillRepository(
@@ -206,7 +228,7 @@ repository = SkillRepository(
     ),
 )
 
-created = repository.install(
+repository.install(
     Skill(
         name="code-review",
         description="Review code for correctness and maintainability.",
@@ -218,17 +240,39 @@ for match in repository.scan_project():
     print(match.available.name, match.status)
 ```
 
-Use focused discovery functions when no repository state is needed:
+Stateless discovery functions for one-shot reads:
 
 ```python
-from skilly import discover_installed_skills, discover_venv_skills
+from skilly import (
+    discover_installed_skills,
+    discover_node_modules_skills,
+    discover_venv_skills,
+)
 
 installed = discover_installed_skills()
-dependency_skills = discover_venv_skills()
+python_skills = discover_venv_skills()
+node_skills = discover_node_modules_skills()
 ```
 
-The SkillsMP client returns typed results directly. Async methods expose the
-same result types without blocking the event loop:
+`ProjectSettings` accepts a `NodeProjectSettings` to control node scanning:
+
+```python
+from skilly import NodeProjectSettings, ProjectSettings, SkillRepository
+
+repository = SkillRepository(
+    directory=Path(".agents/skills"),
+    project=ProjectSettings(
+        node=NodeProjectSettings(
+            include_dependencies=True,
+            include_dev_dependencies=False,
+        ),
+    ),
+)
+```
+
+Set `node=None` to skip node ecosystem scanning entirely.
+
+SkillsMP client with typed results:
 
 ```python
 from skilly.skillsmp import ClientSettings, SkillsMp, SkillsMpSearchQuery
@@ -240,28 +284,11 @@ print(result.data.skills[0].github_url)
 
 ## Development
 
-Install development dependencies and the editable extension:
-
 ```shell
-just install
-```
-
-Run the required quality gates:
-
-```shell
-just lint
-just test
-just typecheck
-```
-
-The TypeScript launcher package also has dedicated helpers:
-
-```shell
-just ts::build
-just ts::test
-just ts::typecheck
-just ts::smoke
-just ts::publish-dry-run
+just install      # Install dev dependencies + editable extension
+just lint         # Run linters
+just test         # Run tests
+just typecheck    # Run type checkers
 ```
 
 ## License
