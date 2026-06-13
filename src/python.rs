@@ -8,6 +8,8 @@ use crate::core::{
     discover_github_skills as rust_discover_github_skills,
     discover_installed_skills as rust_discover_installed_skills,
     discover_installed_skills_in as rust_discover_installed_skills_in,
+    discover_node_modules_skills as rust_discover_node_modules_skills,
+    discover_node_modules_skills_in as rust_discover_node_modules_skills_in,
     discover_venv_skills as rust_discover_venv_skills,
     discover_venv_skills_in as rust_discover_venv_skills_in,
     github_versions_match as rust_github_versions_match,
@@ -368,6 +370,7 @@ fn skill_source_metadata(
     github_url: Option<String>,
     github_commit_sha: Option<String>,
     skillsmp_id: Option<String>,
+    package_ecosystem: Option<core::PackageEcosystem>,
 ) -> SkillSourceMetadata {
     SkillSourceMetadata {
         source,
@@ -376,6 +379,7 @@ fn skill_source_metadata(
         github_url,
         github_commit_sha,
         skillsmp_id,
+        package_ecosystem,
     }
 }
 
@@ -528,6 +532,7 @@ fn skill_from_text_impl(
     github_url: Option<String>,
     github_commit_sha: Option<String>,
     skillsmp_id: Option<String>,
+    package_ecosystem: Option<String>,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
     let source_metadata = skill_source_metadata(
@@ -537,6 +542,11 @@ fn skill_from_text_impl(
         github_url,
         github_commit_sha,
         skillsmp_id,
+        package_ecosystem.as_deref().and_then(|s| match s {
+            "python" => Some(core::PackageEcosystem::Python),
+            "node" => Some(core::PackageEcosystem::Node),
+            _ => None,
+        }),
     );
     let path = optional_path_arg(path)?;
     let skill = if let Some(file_system) = file_system {
@@ -564,6 +574,7 @@ fn skill_from_file_impl(
     github_url: Option<String>,
     github_commit_sha: Option<String>,
     skillsmp_id: Option<String>,
+    package_ecosystem: Option<String>,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
     let path = py_fspath_string(path)?;
@@ -574,6 +585,11 @@ fn skill_from_file_impl(
         github_url,
         github_commit_sha,
         skillsmp_id,
+        package_ecosystem.as_deref().and_then(|s| match s {
+            "python" => Some(core::PackageEcosystem::Python),
+            "node" => Some(core::PackageEcosystem::Node),
+            _ => None,
+        }),
     );
     let skill = if let Some(file_system) = file_system {
         let file_system = PythonFileSystem::new(file_system);
@@ -602,6 +618,7 @@ fn skill_from_dir_impl(
     github_url: Option<String>,
     github_commit_sha: Option<String>,
     skillsmp_id: Option<String>,
+    package_ecosystem: Option<String>,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
     let path = py_fspath_string(path)?;
@@ -612,6 +629,11 @@ fn skill_from_dir_impl(
         github_url,
         github_commit_sha,
         skillsmp_id,
+        package_ecosystem.as_deref().and_then(|s| match s {
+            "python" => Some(core::PackageEcosystem::Python),
+            "node" => Some(core::PackageEcosystem::Node),
+            _ => None,
+        }),
     );
     let skill = if let Some(file_system) = file_system {
         let file_system = PythonFileSystem::new(file_system);
@@ -721,7 +743,8 @@ impl PySkill {
         package_version=None,
         github_url=None,
         github_commit_sha=None,
-        skillsmp_id=None
+        skillsmp_id=None,
+        package_ecosystem=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -741,6 +764,7 @@ impl PySkill {
         github_url: Option<String>,
         github_commit_sha: Option<String>,
         skillsmp_id: Option<String>,
+        package_ecosystem: Option<String>,
     ) -> PyResult<Self> {
         Ok(Self {
             inner: SkillData {
@@ -760,6 +784,11 @@ impl PySkill {
                 github_url,
                 github_commit_sha,
                 skillsmp_id,
+                package_ecosystem: package_ecosystem.as_deref().and_then(|s| match s {
+                    "python" => Some(core::PackageEcosystem::Python),
+                    "node" => Some(core::PackageEcosystem::Node),
+                    _ => None,
+                }),
             },
         })
     }
@@ -774,6 +803,7 @@ impl PySkill {
         github_url=None,
         github_commit_sha=None,
         skillsmp_id=None,
+        package_ecosystem=None,
         file_system=None
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -787,6 +817,7 @@ impl PySkill {
         github_url: Option<String>,
         github_commit_sha: Option<String>,
         skillsmp_id: Option<String>,
+        package_ecosystem: Option<String>,
         file_system: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         skill_from_text_impl(
@@ -798,6 +829,7 @@ impl PySkill {
             github_url,
             github_commit_sha,
             skillsmp_id,
+            package_ecosystem,
             file_system,
         )
     }
@@ -811,6 +843,7 @@ impl PySkill {
         github_url=None,
         github_commit_sha=None,
         skillsmp_id=None,
+        package_ecosystem=None,
         file_system=None
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -824,6 +857,7 @@ impl PySkill {
         github_url: Option<String>,
         github_commit_sha: Option<String>,
         skillsmp_id: Option<String>,
+        package_ecosystem: Option<String>,
         file_system: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         skill_from_file_impl(
@@ -835,6 +869,7 @@ impl PySkill {
             github_url,
             github_commit_sha,
             skillsmp_id,
+            package_ecosystem,
             file_system,
         )
     }
@@ -848,6 +883,7 @@ impl PySkill {
         github_url=None,
         github_commit_sha=None,
         skillsmp_id=None,
+        package_ecosystem=None,
         file_system=None
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -861,6 +897,7 @@ impl PySkill {
         github_url: Option<String>,
         github_commit_sha: Option<String>,
         skillsmp_id: Option<String>,
+        package_ecosystem: Option<String>,
         file_system: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         skill_from_dir_impl(
@@ -872,6 +909,7 @@ impl PySkill {
             github_url,
             github_commit_sha,
             skillsmp_id,
+            package_ecosystem,
             file_system,
         )
     }
@@ -987,6 +1025,14 @@ impl PySkill {
     #[getter]
     fn skillsmp_id(&self) -> Option<String> {
         self.inner.skillsmp_id.clone()
+    }
+
+    #[getter]
+    fn package_ecosystem(&self) -> Option<String> {
+        self.inner.package_ecosystem.map(|eco| match eco {
+            core::PackageEcosystem::Python => "python".to_string(),
+            core::PackageEcosystem::Node => "node".to_string(),
+        })
     }
 
     #[getter]
@@ -1166,6 +1212,7 @@ impl PySkill {
     source=None,
     package_name=None,
     package_version=None,
+    package_ecosystem=None,
     github_url=None,
     github_commit_sha=None,
     skillsmp_id=None,
@@ -1178,6 +1225,7 @@ fn skill_from_text_py(
     source: Option<String>,
     package_name: Option<String>,
     package_version: Option<String>,
+    package_ecosystem: Option<String>,
     github_url: Option<String>,
     github_commit_sha: Option<String>,
     skillsmp_id: Option<String>,
@@ -1192,6 +1240,7 @@ fn skill_from_text_py(
         github_url,
         github_commit_sha,
         skillsmp_id,
+        package_ecosystem,
         file_system,
     )
 }
@@ -1202,6 +1251,7 @@ fn skill_from_text_py(
     source=None,
     package_name=None,
     package_version=None,
+    package_ecosystem=None,
     github_url=None,
     github_commit_sha=None,
     skillsmp_id=None,
@@ -1214,6 +1264,7 @@ fn skill_from_file_py(
     source: Option<String>,
     package_name: Option<String>,
     package_version: Option<String>,
+    package_ecosystem: Option<String>,
     github_url: Option<String>,
     github_commit_sha: Option<String>,
     skillsmp_id: Option<String>,
@@ -1228,6 +1279,7 @@ fn skill_from_file_py(
         github_url,
         github_commit_sha,
         skillsmp_id,
+        package_ecosystem,
         file_system,
     )
 }
@@ -1238,6 +1290,7 @@ fn skill_from_file_py(
     source=None,
     package_name=None,
     package_version=None,
+    package_ecosystem=None,
     github_url=None,
     github_commit_sha=None,
     skillsmp_id=None,
@@ -1250,6 +1303,7 @@ fn skill_from_dir_py(
     source: Option<String>,
     package_name: Option<String>,
     package_version: Option<String>,
+    package_ecosystem: Option<String>,
     github_url: Option<String>,
     github_commit_sha: Option<String>,
     skillsmp_id: Option<String>,
@@ -1264,6 +1318,7 @@ fn skill_from_dir_py(
         github_url,
         github_commit_sha,
         skillsmp_id,
+        package_ecosystem,
         file_system,
     )
 }
@@ -1346,7 +1401,33 @@ fn discover_venv_skills_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "scan_project", signature = (directory=None, pyproject_toml_path=None, venv_path=None, include_project_dependencies=true, dependency_groups=None, exclude_dependency_groups=None, optional_dependencies=None, exclude_optional_dependencies=None, file_system=None))]
+#[pyo3(name = "discover_node_modules_skills", signature = (path=None, file_system=None))]
+fn discover_node_modules_skills_py(
+    py: Python<'_>,
+    path: Option<&Bound<'_, PyAny>>,
+    file_system: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Vec<PySkill>> {
+    let path = default_directory_arg(path, "node_modules")?;
+    let skills = if let Some(file_system) = file_system {
+        let file_system = PythonFileSystem::new(file_system);
+        rust_discover_node_modules_skills_in(&file_system, Path::new(&path)).map_err(py_err)?
+    } else {
+        py.allow_threads(|| rust_discover_node_modules_skills(Path::new(&path)))
+            .map_err(py_err)?
+    };
+    Ok(skills.into_iter().map(PySkill::from_data).collect())
+}
+
+#[pyfunction]
+#[pyo3(name = "scan_project", signature = (
+    directory=None,
+    pyproject_toml_path=None, venv_path=None,
+    include_project_dependencies=true, dependency_groups=None, exclude_dependency_groups=None,
+    optional_dependencies=None, exclude_optional_dependencies=None,
+    package_json_path=None, node_modules_path=None,
+    include_node_dependencies=true, include_node_dev_dependencies=true, include_node_optional_dependencies=true,
+    file_system=None
+))]
 #[allow(clippy::too_many_arguments)]
 fn scan_project_py(
     py: Python<'_>,
@@ -1358,19 +1439,30 @@ fn scan_project_py(
     exclude_dependency_groups: Option<Vec<String>>,
     optional_dependencies: Option<Vec<String>>,
     exclude_optional_dependencies: Option<Vec<String>>,
+    package_json_path: Option<&Bound<'_, PyAny>>,
+    node_modules_path: Option<&Bound<'_, PyAny>>,
+    include_node_dependencies: bool,
+    include_node_dev_dependencies: bool,
+    include_node_optional_dependencies: bool,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Vec<(PySkill, Option<PySkill>)>> {
-    let environment = ProjectEnvironment::with_paths(
-        Path::new(&default_directory_arg(
-            directory,
-            core::DEFAULT_SKILLS_PATH,
-        )?),
-        Path::new(&default_directory_arg(
+    let directory_arg = default_directory_arg(directory, core::DEFAULT_SKILLS_PATH)?;
+    let environment = ProjectEnvironment {
+        directory: PathBuf::from(&directory_arg),
+        pyproject_toml_path: PathBuf::from(&default_directory_arg(
             pyproject_toml_path,
             "pyproject.toml",
         )?),
-        Path::new(&default_directory_arg(venv_path, ".venv")?),
-        ScanDependencySelection {
+        venv_path: PathBuf::from(&default_directory_arg(venv_path, ".venv")?),
+        package_json_path: PathBuf::from(&default_directory_arg(
+            package_json_path,
+            "package.json",
+        )?),
+        node_modules_path: PathBuf::from(&default_directory_arg(
+            node_modules_path,
+            "node_modules",
+        )?),
+        dependency_selection: ScanDependencySelection {
             include_project_dependencies,
             dependency_groups: NamedSelection::new(dependency_groups, exclude_dependency_groups)
                 .map_err(py_err)?,
@@ -1379,8 +1471,11 @@ fn scan_project_py(
                 exclude_optional_dependencies,
             )
             .map_err(py_err)?,
+            include_node_dependencies,
+            include_node_dev_dependencies,
+            include_node_optional_dependencies,
         },
-    );
+    };
     let matches = if let Some(file_system) = file_system {
         let file_system = PythonFileSystem::new(file_system);
         rust_scan_project_with_file_system(&file_system, &environment).map_err(py_err)?
@@ -1400,7 +1495,16 @@ fn scan_project_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "available_dependency_skill", signature = (installed, directory=None, pyproject_toml_path=None, venv_path=None, include_project_dependencies=true, dependency_groups=None, exclude_dependency_groups=None, optional_dependencies=None, exclude_optional_dependencies=None, file_system=None))]
+#[pyo3(name = "available_dependency_skill", signature = (
+    installed,
+    directory=None,
+    pyproject_toml_path=None, venv_path=None,
+    include_project_dependencies=true, dependency_groups=None, exclude_dependency_groups=None,
+    optional_dependencies=None, exclude_optional_dependencies=None,
+    package_json_path=None, node_modules_path=None,
+    include_node_dependencies=true, include_node_dev_dependencies=true, include_node_optional_dependencies=true,
+    file_system=None
+))]
 #[allow(clippy::too_many_arguments)]
 fn available_dependency_skill_py(
     py: Python<'_>,
@@ -1413,19 +1517,30 @@ fn available_dependency_skill_py(
     exclude_dependency_groups: Option<Vec<String>>,
     optional_dependencies: Option<Vec<String>>,
     exclude_optional_dependencies: Option<Vec<String>>,
+    package_json_path: Option<&Bound<'_, PyAny>>,
+    node_modules_path: Option<&Bound<'_, PyAny>>,
+    include_node_dependencies: bool,
+    include_node_dev_dependencies: bool,
+    include_node_optional_dependencies: bool,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Option<PySkill>> {
-    let environment = ProjectEnvironment::with_paths(
-        Path::new(&default_directory_arg(
-            directory,
-            core::DEFAULT_SKILLS_PATH,
-        )?),
-        Path::new(&default_directory_arg(
+    let directory_arg = default_directory_arg(directory, core::DEFAULT_SKILLS_PATH)?;
+    let environment = ProjectEnvironment {
+        directory: PathBuf::from(&directory_arg),
+        pyproject_toml_path: PathBuf::from(&default_directory_arg(
             pyproject_toml_path,
             "pyproject.toml",
         )?),
-        Path::new(&default_directory_arg(venv_path, ".venv")?),
-        ScanDependencySelection {
+        venv_path: PathBuf::from(&default_directory_arg(venv_path, ".venv")?),
+        package_json_path: PathBuf::from(&default_directory_arg(
+            package_json_path,
+            "package.json",
+        )?),
+        node_modules_path: PathBuf::from(&default_directory_arg(
+            node_modules_path,
+            "node_modules",
+        )?),
+        dependency_selection: ScanDependencySelection {
             include_project_dependencies,
             dependency_groups: NamedSelection::new(dependency_groups, exclude_dependency_groups)
                 .map_err(py_err)?,
@@ -1434,8 +1549,11 @@ fn available_dependency_skill_py(
                 exclude_optional_dependencies,
             )
             .map_err(py_err)?,
+            include_node_dependencies,
+            include_node_dev_dependencies,
+            include_node_optional_dependencies,
         },
-    );
+    };
     let available = if let Some(file_system) = file_system {
         let file_system = PythonFileSystem::new(file_system);
         rust_available_dependency_skill_with_file_system(
@@ -1717,6 +1835,7 @@ fn python_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(resolve_skills_directory_py, m)?)?;
     m.add_function(wrap_pyfunction!(discover_installed_skills_py, m)?)?;
     m.add_function(wrap_pyfunction!(discover_venv_skills_py, m)?)?;
+    m.add_function(wrap_pyfunction!(discover_node_modules_skills_py, m)?)?;
     m.add_function(wrap_pyfunction!(scan_project_py, m)?)?;
     m.add_function(wrap_pyfunction!(available_dependency_skill_py, m)?)?;
     m.add_function(wrap_pyfunction!(parse_github_skill_url_py, m)?)?;

@@ -34,6 +34,7 @@ class SkillOrigin:
     source: str | None = None
     package_name: str | None = None
     package_version: str | None = None
+    package_ecosystem: str | None = None
     github_url: str | None = None
     github_commit_sha: str | None = None
     skillsmp_id: str | None = None
@@ -146,6 +147,14 @@ def discover_venv_skills(
     file_system: FileSystem | None = None,
 ) -> list[Skill]:
     return bridge.discover_venv_skills(path, file_system=file_system)
+
+
+def discover_node_modules_skills(
+    path: Path | None = None,
+    *,
+    file_system: FileSystem | None = None,
+) -> list[Skill]:
+    return bridge.discover_node_modules_skills(path, file_system=file_system)
 
 
 def discover_github_skills(

@@ -329,6 +329,7 @@ fn run_create(directory: &Path, mut options: CreateOptions) -> Result<()> {
         github_url: None,
         github_commit_sha: None,
         skillsmp_id: None,
+        package_ecosystem: None,
     };
     skill.validate()?;
 
@@ -2658,8 +2659,8 @@ mod tests {
     };
     use crate::client::SkillsMpSkill;
     use crate::core::{
-        NamedSelection, ProjectDependencyOrigin, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP,
-        SkillData, SkillMatchData,
+        NamedSelection, ProjectDependencyOrigin, SKILLY_SOURCE_DEPENDENCY, SKILLY_SOURCE_GITHUB,
+        SKILLY_SOURCE_SKILLSMP, SkillData, SkillMatchData,
     };
     use clap::Parser;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -2689,6 +2690,7 @@ mod tests {
             github_url: github_url.map(str::to_string),
             github_commit_sha: Some("0123456789abcdef0123456789abcdef01234567".to_string()),
             skillsmp_id: skillsmp_id.map(str::to_string),
+            package_ecosystem: None,
         }
     }
 
@@ -2696,7 +2698,7 @@ mod tests {
         SkillMatchData {
             available: SkillData {
                 name: "python".to_string(),
-                description: "Dependency skill".to_string(),
+                description: "Available skill".to_string(),
                 path: None,
                 content: "Body".to_string(),
                 license: None,
@@ -2705,12 +2707,13 @@ mod tests {
                 allowed_tools: None,
                 resources: Vec::new(),
                 resource_warnings: Vec::new(),
-                source: "dependency".to_string(),
-                package_name: Some("sample-pkg".to_string()),
-                package_version: Some("1.2.4".to_string()),
+                source: SKILLY_SOURCE_DEPENDENCY.to_string(),
+                package_name: Some("ruff".to_string()),
+                package_version: Some("0.12.0".to_string()),
                 github_url: None,
                 github_commit_sha: None,
                 skillsmp_id: None,
+                package_ecosystem: None,
             },
             installed: None,
             dependency_origins: origins,
@@ -3196,6 +3199,7 @@ mod tests {
                     ),
                     github_commit_sha: None,
                     skillsmp_id: None,
+                    package_ecosystem: None,
                 },
                 installed: Some(installed_skill(None, None)),
             },
@@ -3250,11 +3254,11 @@ mod tests {
     #[test]
     fn scan_choice_label_and_preview_include_dependency_origins() {
         let item = dependency_match(vec![
-            ProjectDependencyOrigin::Project,
-            ProjectDependencyOrigin::DependencyGroup {
+            ProjectDependencyOrigin::PythonProject,
+            ProjectDependencyOrigin::PythonDependencyGroup {
                 group: "dev".to_string(),
             },
-            ProjectDependencyOrigin::OptionalDependency {
+            ProjectDependencyOrigin::PythonOptionalDependency {
                 extra: "docs".to_string(),
             },
         ]);
@@ -3264,22 +3268,19 @@ mod tests {
 
         assert_eq!(
             label,
-            "python [sample-pkg==1.2.4] [project, group:dev, extra:docs] [installable]"
+            "python [ruff==0.12.0] [python:project, python:group:dev, python:extra:docs] [installable]"
+        );
+        assert!(preview.iter().any(|line| line
+            == "Dependency Sources: python:project, python:group:dev, python:extra:docs"));
+        assert!(
+            preview
+                .iter()
+                .any(|line| line == "  - python dependency group: dev")
         );
         assert!(
             preview
                 .iter()
-                .any(|line| line == "Dependency Sources: project, group:dev, extra:docs")
-        );
-        assert!(
-            preview
-                .iter()
-                .any(|line| line == "  - dependency group: dev")
-        );
-        assert!(
-            preview
-                .iter()
-                .any(|line| line == "  - optional dependency: docs")
+                .any(|line| line == "  - python optional dependency: docs")
         );
     }
 

@@ -4,10 +4,13 @@ from pathlib import Path, PurePosixPath
 
 from skilly import (
     FileSystem,
+    NodeProjectSettings,
     ProjectSettings,
+    PythonProjectSettings,
     Skill,
     SkillRepository,
     SkillResource,
+    discover_node_modules_skills,
     discover_venv_skills,
 )
 
@@ -451,3 +454,314 @@ def test_repository_replace_removes_stale_resources_with_custom_file_system() ->
         file_system.exists(Path(".agents/skills/sample-skill/references/stale.md"))
         is False
     )
+
+
+# ── Node discovery with custom file system ────────────────────────────────
+
+
+def test_get_node_modules_skills_supports_custom_file_system() -> None:
+    file_system = InMemoryFileSystem(cwd=Path("/virtual/project"))
+    file_system.seed_file(
+        Path("node_modules/sample-pkg/package.json"),
+        '{"name": "sample-pkg", "version": "2.0.0"}',
+    )
+    file_system.seed_file(
+        Path("node_modules/sample-pkg/skills/sample-skill/SKILL.md"),
+        """---
+name: sample-skill
+description: Node dependency skill.
+---
+Body
+""",
+    )
+
+    skills = discover_node_modules_skills(file_system=file_system)
+
+    assert [skill.name for skill in skills] == ["sample-skill"]
+    assert skills[0].package_name == "sample-pkg"
+    assert skills[0].package_version == "2.0.0"
+    assert skills[0].package_ecosystem == "node"
+    assert skills[0].source == "dependency"
+    assert skills[0].path == Path(
+        "/virtual/project/node_modules/sample-pkg/skills/sample-skill"
+    )
+
+
+def test_get_node_modules_skills_supports_scoped_packages() -> None:
+    file_system = InMemoryFileSystem(cwd=Path("/virtual/project"))
+    file_system.seed_file(
+        Path("node_modules/@scope/my-pkg/package.json"),
+        '{"name": "@scope/my-pkg", "version": "1.1.0"}',
+    )
+    file_system.seed_file(
+        Path("node_modules/@scope/my-pkg/skills/scoped-skill/SKILL.md"),
+        """---
+name: scoped-skill
+description: Skill from scoped package.
+---
+Body
+""",
+    )
+
+    skills = discover_node_modules_skills(file_system=file_system)
+
+    assert len(skills) == 1
+    assert skills[0].name == "scoped-skill"
+    assert skills[0].package_name == "@scope/my-pkg"
+    assert skills[0].package_reference() == "@scope/my-pkg@1.1.0"
+
+
+def test_get_node_modules_skills_handles_multiple_packages() -> None:
+    file_system = InMemoryFileSystem(cwd=Path("/virtual/project"))
+    file_system.seed_file(
+        Path("node_modules/pkg-a/package.json"),
+        '{"name": "pkg-a", "version": "1.0.0"}',
+    )
+    file_system.seed_file(
+        Path("node_modules/pkg-a/skills/skill-a/SKILL.md"),
+        """---
+name: skill-a
+description: Skill A.
+---
+Body
+""",
+    )
+    file_system.seed_file(
+        Path("node_modules/pkg-b/package.json"),
+        '{"name": "pkg-b", "version": "2.0.0"}',
+    )
+    file_system.seed_file(
+        Path("node_modules/pkg-b/skills/skill-b/SKILL.md"),
+        """---
+name: skill-b
+description: Skill B.
+---
+Body
+""",
+    )
+
+    skills = discover_node_modules_skills(file_system=file_system)
+
+    assert [skill.name for skill in skills] == ["skill-a", "skill-b"]
+
+
+def test_get_node_modules_skills_skips_missing_package_json() -> None:
+    file_system = InMemoryFileSystem(cwd=Path("/virtual/project"))
+    file_system.seed_file(
+        Path("node_modules/no-metadata/skills/some-skill/SKILL.md"),
+        """---
+name: some-skill
+description: Skill without package metadata.
+---
+Body
+""",
+    )
+
+    skills = discover_node_modules_skills(file_system=file_system)
+
+    assert skills == []
+
+
+def test_get_node_modules_skills_skips_missing_skills_directory() -> None:
+    file_system = InMemoryFileSystem(cwd=Path("/virtual/project"))
+    file_system.seed_file(
+        Path("node_modules/plain-pkg/package.json"),
+        '{"name": "plain-pkg", "version": "3.0.0"}',
+    )
+
+    skills = discover_node_modules_skills(file_system=file_system)
+
+    assert skills == []
+
+
+def test_get_node_modules_skills_skips_malformed_skill() -> None:
+    file_system = InMemoryFileSystem(cwd=Path("/virtual/project"))
+    file_system.seed_file(
+        Path("node_modules/bad-pkg/package.json"),
+        '{"name": "bad-pkg", "version": "0.1.0"}',
+    )
+    file_system.seed_file(
+        Path("node_modules/bad-pkg/skills/broken-skill/SKILL.md"),
+        "not valid frontmatter\n",
+    )
+
+    skills = discover_node_modules_skills(file_system=file_system)
+
+    assert skills == []
+
+
+def test_get_node_modules_skills_loads_resources() -> None:
+    file_system = InMemoryFileSystem(cwd=Path("/virtual/project"))
+    file_system.seed_file(
+        Path("node_modules/resource-pkg/package.json"),
+        '{"name": "resource-pkg", "version": "4.0.0"}',
+    )
+    file_system.seed_file(
+        Path("node_modules/resource-pkg/skills/resource-skill/SKILL.md"),
+        """---
+name: resource-skill
+description: Skill with resources.
+---
+Body
+""",
+    )
+    file_system.seed_file(
+        Path("node_modules/resource-pkg/skills/resource-skill/scripts/run.py"),
+        "print('hello')\n",
+    )
+    file_system.seed_file(
+        Path("node_modules/resource-pkg/skills/resource-skill/references/REFERENCE.md"),
+        "# Reference\n",
+    )
+
+    skills = discover_node_modules_skills(file_system=file_system)
+
+    assert len(skills) == 1
+    assert [r.relative_path.as_posix() for r in skills[0].resources] == [
+        "references/REFERENCE.md",
+        "scripts/run.py",
+    ]
+
+
+def test_get_node_modules_skills_supports_posix_custom_file_system() -> None:
+    file_system = CrossHostPosixFileSystem(cwd=PurePosixPath("/virtual/project"))
+    file_system.seed_file(
+        PurePosixPath("/virtual/project/node_modules/my-pkg/package.json"),
+        '{"name": "my-pkg", "version": "5.0.0"}',
+    )
+    file_system.seed_file(
+        PurePosixPath(
+            "/virtual/project/node_modules/my-pkg/skills/posix-skill/SKILL.md"
+        ),
+        """---
+name: posix-skill
+description: Cross-host skill.
+---
+Body
+""",
+    )
+
+    skills = discover_node_modules_skills(file_system=file_system)
+
+    assert [skill.name for skill in skills] == ["posix-skill"]
+
+
+def test_scan_project_node_only_with_custom_file_system() -> None:
+    file_system = InMemoryFileSystem(cwd=Path("/virtual/project"))
+    file_system.seed_file(
+        Path("package.json"),
+        '{"dependencies": {"my-pkg": "1.0.0"}}',
+    )
+    file_system.seed_file(
+        Path("node_modules/my-pkg/package.json"),
+        '{"name": "my-pkg", "version": "1.0.0"}',
+    )
+    file_system.seed_file(
+        Path("node_modules/my-pkg/skills/node-skill/SKILL.md"),
+        """---
+name: node-skill
+description: Node project dependency skill.
+---
+Body
+""",
+    )
+
+    matches = SkillRepository(
+        project=ProjectSettings(
+            python=None,
+            node=NodeProjectSettings(),
+        ),
+        file_system=file_system,
+    ).project_skills()
+
+    assert [skill.name for skill in matches] == ["node-skill"]
+
+
+def test_scan_project_mixed_ecosystems_with_custom_file_system() -> None:
+    file_system = InMemoryFileSystem(cwd=Path("/virtual/project"))
+    # Python setup
+    file_system.seed_file(
+        Path("pyproject.toml"),
+        """
+[project]
+name = "demo"
+version = "0.1.0"
+dependencies = ["sample-pkg==1.2.3"]
+""".strip()
+        + "\n",
+    )
+    file_system.seed_file(
+        Path(
+            ".venv/lib/python3.13/site-packages/sample_pkg/.agents/skills/python-skill/SKILL.md"
+        ),
+        """---
+name: python-skill
+description: Python skill.
+---
+Body
+""",
+    )
+    file_system.seed_file(
+        Path(".venv/lib/python3.13/site-packages/sample-pkg-1.2.3.dist-info/METADATA"),
+        "Metadata-Version: 2.4\nName: sample-pkg\nVersion: 1.2.3\n",
+    )
+    file_system.seed_file(
+        Path(".venv/lib/python3.13/site-packages/sample-pkg-1.2.3.dist-info/RECORD"),
+        "sample_pkg/.agents/skills/python-skill/SKILL.md,,\n",
+    )
+    # Node setup
+    file_system.seed_file(
+        Path("package.json"),
+        '{"dependencies": {"node-pkg": "2.0.0"}}',
+    )
+    file_system.seed_file(
+        Path("node_modules/node-pkg/package.json"),
+        '{"name": "node-pkg", "version": "2.0.0"}',
+    )
+    file_system.seed_file(
+        Path("node_modules/node-pkg/skills/node-skill/SKILL.md"),
+        """---
+name: node-skill
+description: Node skill.
+---
+Body
+""",
+    )
+
+    matches = SkillRepository(
+        project=ProjectSettings(),
+        file_system=file_system,
+    ).project_skills()
+
+    assert [skill.name for skill in matches] == ["python-skill", "node-skill"]
+
+
+def test_scan_project_node_disabled_skips_node_ecosystem() -> None:
+    file_system = InMemoryFileSystem(cwd=Path("/virtual/project"))
+    file_system.seed_file(
+        Path("package.json"),
+        '{"dependencies": {"node-pkg": "2.0.0"}}',
+    )
+    file_system.seed_file(
+        Path("node_modules/node-pkg/package.json"),
+        '{"name": "node-pkg", "version": "2.0.0"}',
+    )
+    file_system.seed_file(
+        Path("node_modules/node-pkg/skills/node-skill/SKILL.md"),
+        """---
+name: node-skill
+description: Node skill.
+---
+Body
+""",
+    )
+
+    matches = SkillRepository(
+        project=ProjectSettings(
+            python=PythonProjectSettings(),
+            node=None,
+        ),
+        file_system=file_system,
+    ).project_skills()
+
+    assert matches == []

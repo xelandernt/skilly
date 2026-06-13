@@ -529,6 +529,7 @@ impl CreateFormState {
             github_url: None,
             github_commit_sha: None,
             skillsmp_id: None,
+            package_ecosystem: None,
         };
         skill.validate()?;
         if !self.overwrite && self.target_path(directory).exists() {
@@ -572,6 +573,7 @@ impl CreateFormState {
             github_url: None,
             github_commit_sha: None,
             skillsmp_id: None,
+            package_ecosystem: None,
         })
     }
 

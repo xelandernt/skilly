@@ -49,6 +49,9 @@ class SkillOriginSource(Protocol):
     def package_version(self) -> str | None: ...
 
     @property
+    def package_ecosystem(self) -> str | None: ...
+
+    @property
     def github_url(self) -> str | None: ...
 
     @property
@@ -69,6 +72,7 @@ class SkillOriginKwargs(TypedDict):
     source: str | None
     package_name: str | None
     package_version: str | None
+    package_ecosystem: str | None
     github_url: str | None
     github_commit_sha: str | None
     skillsmp_id: str | None
@@ -96,6 +100,7 @@ def skill_origin_kwargs(origin: SkillOriginSource | None) -> SkillOriginKwargs:
             "source": None,
             "package_name": None,
             "package_version": None,
+            "package_ecosystem": None,
             "github_url": None,
             "github_commit_sha": None,
             "skillsmp_id": None,
@@ -104,6 +109,7 @@ def skill_origin_kwargs(origin: SkillOriginSource | None) -> SkillOriginKwargs:
         "source": origin.source,
         "package_name": origin.package_name,
         "package_version": origin.package_version,
+        "package_ecosystem": origin.package_ecosystem,
         "github_url": origin.github_url,
         "github_commit_sha": origin.github_commit_sha,
         "skillsmp_id": origin.skillsmp_id,
@@ -116,6 +122,7 @@ def skill_metadata_kwargs(
     source: str | None = None,
     package_name: str | None = None,
     package_version: str | None = None,
+    package_ecosystem: str | None = None,
     github_url: str | None = None,
     github_commit_sha: str | None = None,
     skillsmp_id: str | None = None,
@@ -129,6 +136,9 @@ def skill_metadata_kwargs(
         "package_version": package_version
         if package_version is not None
         else origin_kwargs["package_version"],
+        "package_ecosystem": package_ecosystem
+        if package_ecosystem is not None
+        else origin_kwargs["package_ecosystem"],
         "github_url": github_url
         if github_url is not None
         else origin_kwargs["github_url"],
@@ -148,6 +158,7 @@ def skill_from_text(
     source: str | None = None,
     package_name: str | None = None,
     package_version: str | None = None,
+    package_ecosystem: str | None = None,
     github_url: str | None = None,
     github_commit_sha: str | None = None,
     skillsmp_id: str | None = None,
@@ -161,6 +172,7 @@ def skill_from_text(
             source=source,
             package_name=package_name,
             package_version=package_version,
+            package_ecosystem=package_ecosystem,
             github_url=github_url,
             github_commit_sha=github_commit_sha,
             skillsmp_id=skillsmp_id,
@@ -175,6 +187,7 @@ def skill_from_file(
     source: str | None = None,
     package_name: str | None = None,
     package_version: str | None = None,
+    package_ecosystem: str | None = None,
     github_url: str | None = None,
     github_commit_sha: str | None = None,
     skillsmp_id: str | None = None,
@@ -187,6 +200,7 @@ def skill_from_file(
             source=source,
             package_name=package_name,
             package_version=package_version,
+            package_ecosystem=package_ecosystem,
             github_url=github_url,
             github_commit_sha=github_commit_sha,
             skillsmp_id=skillsmp_id,
@@ -201,6 +215,7 @@ def skill_from_dir(
     source: str | None = None,
     package_name: str | None = None,
     package_version: str | None = None,
+    package_ecosystem: str | None = None,
     github_url: str | None = None,
     github_commit_sha: str | None = None,
     skillsmp_id: str | None = None,
@@ -213,6 +228,7 @@ def skill_from_dir(
             source=source,
             package_name=package_name,
             package_version=package_version,
+            package_ecosystem=package_ecosystem,
             github_url=github_url,
             github_commit_sha=github_commit_sha,
             skillsmp_id=skillsmp_id,
@@ -263,6 +279,13 @@ def discover_venv_skills(
     return _core.discover_venv_skills(path, file_system=file_system)
 
 
+def discover_node_modules_skills(
+    path: StrPath | None = None,
+    file_system: FileSystem | None = None,
+) -> list[Skill]:
+    return _core.discover_node_modules_skills(path, file_system=file_system)
+
+
 def scan_project(
     directory: StrPath | None = None,
     pyproject_toml_path: StrPath | None = None,
@@ -272,6 +295,11 @@ def scan_project(
     exclude_dependency_groups: list[str] | None = None,
     optional_dependencies: list[str] | None = None,
     exclude_optional_dependencies: list[str] | None = None,
+    package_json_path: StrPath | None = None,
+    node_modules_path: StrPath | None = None,
+    include_node_dependencies: bool = True,
+    include_node_dev_dependencies: bool = True,
+    include_node_optional_dependencies: bool = True,
     file_system: FileSystem | None = None,
 ) -> list[tuple[Skill, Skill | None]]:
     return _core.scan_project(
@@ -283,6 +311,11 @@ def scan_project(
         exclude_dependency_groups=exclude_dependency_groups,
         optional_dependencies=optional_dependencies,
         exclude_optional_dependencies=exclude_optional_dependencies,
+        package_json_path=package_json_path,
+        node_modules_path=node_modules_path,
+        include_node_dependencies=include_node_dependencies,
+        include_node_dev_dependencies=include_node_dev_dependencies,
+        include_node_optional_dependencies=include_node_optional_dependencies,
         file_system=file_system,
     )
 
@@ -297,6 +330,11 @@ def available_dependency_skill(
     exclude_dependency_groups: list[str] | None = None,
     optional_dependencies: list[str] | None = None,
     exclude_optional_dependencies: list[str] | None = None,
+    package_json_path: StrPath | None = None,
+    node_modules_path: StrPath | None = None,
+    include_node_dependencies: bool = True,
+    include_node_dev_dependencies: bool = True,
+    include_node_optional_dependencies: bool = True,
     file_system: FileSystem | None = None,
 ) -> Skill | None:
     return _core.available_dependency_skill(
@@ -309,6 +347,11 @@ def available_dependency_skill(
         exclude_dependency_groups=exclude_dependency_groups,
         optional_dependencies=optional_dependencies,
         exclude_optional_dependencies=exclude_optional_dependencies,
+        package_json_path=package_json_path,
+        node_modules_path=node_modules_path,
+        include_node_dependencies=include_node_dependencies,
+        include_node_dev_dependencies=include_node_dev_dependencies,
+        include_node_optional_dependencies=include_node_optional_dependencies,
         file_system=file_system,
     )
 

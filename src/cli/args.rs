@@ -66,7 +66,9 @@ pub(crate) enum Commands {
         #[command(flatten)]
         destination: DestinationArgs,
     },
-    #[command(about = "Scan dependency-provided skills from pyproject.toml and .venv.")]
+    #[command(
+        about = "Scan dependency-provided skills from pyproject.toml/.venv and package.json/node_modules."
+    )]
     Scan {
         #[command(flatten)]
         destination: DestinationArgs,
@@ -236,6 +238,9 @@ impl ScanDependencyArgs {
                 (!self.extras.is_empty()).then_some(self.extras),
                 (!self.exclude_extras.is_empty()).then_some(self.exclude_extras),
             )?,
+            include_node_dependencies: true,
+            include_node_dev_dependencies: true,
+            include_node_optional_dependencies: true,
         })
     }
 }

@@ -36,10 +36,19 @@ pub const SKILLY_GITHUB_COMMIT_SHA_METADATA_KEY: &str = "skilly-github-commit-sh
 pub const SKILLY_SKILLSMP_ID_METADATA_KEY: &str = "skilly-skillsmp-id";
 pub const SKILLY_DEPENDENCY_PACKAGE_NAME_METADATA_KEY: &str = "skilly-package-name";
 pub const SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY: &str = "skilly-package-version";
+pub const SKILLY_PACKAGE_ECOSYSTEM_METADATA_KEY: &str = "skilly-package-ecosystem";
+pub const PACKAGE_ECOSYSTEM_PYTHON: &str = "python";
+pub const PACKAGE_ECOSYSTEM_NODE: &str = "node";
 
 pub const STATUS_INSTALLED: &str = "installed";
 pub const STATUS_INSTALLABLE: &str = "installable";
 pub const STATUS_UPDATABLE: &str = "updatable";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum PackageEcosystem {
+    Python,
+    Node,
+}
 
 pub const MAX_DESCRIPTION_LENGTH: usize = 1024;
 pub const MAX_COMPATIBILITY_LENGTH: usize = 500;
@@ -178,6 +187,7 @@ pub struct SkillData {
     pub github_url: Option<String>,
     pub github_commit_sha: Option<String>,
     pub skillsmp_id: Option<String>,
+    pub package_ecosystem: Option<PackageEcosystem>,
 }
 
 /// Pairing of an available skill, its installed counterpart, and dependency origins.
@@ -198,33 +208,45 @@ pub struct SkillSourceMetadata {
     pub github_url: Option<String>,
     pub github_commit_sha: Option<String>,
     pub skillsmp_id: Option<String>,
+    pub package_ecosystem: Option<PackageEcosystem>,
 }
 
 /// Which part of a project produced a given dependency requirement.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum ProjectDependencyOrigin {
-    Project,
-    DependencyGroup { group: String },
-    OptionalDependency { extra: String },
+    PythonProject,
+    PythonDependencyGroup { group: String },
+    PythonOptionalDependency { extra: String },
+    NodeDependencies,
+    NodeDevDependencies,
+    NodeOptionalDependencies,
 }
 
 impl ProjectDependencyOrigin {
     #[must_use]
     pub fn scan_label(&self) -> String {
         match self {
-            Self::Project => "project".to_string(),
-            Self::DependencyGroup { group } => format!("group:{group}"),
-            Self::OptionalDependency { extra } => format!("extra:{extra}"),
+            Self::PythonProject => "python:project".to_string(),
+            Self::PythonDependencyGroup { group } => format!("python:group:{group}"),
+            Self::PythonOptionalDependency { extra } => format!("python:extra:{extra}"),
+            Self::NodeDependencies => "node:dependencies".to_string(),
+            Self::NodeDevDependencies => "node:devDependencies".to_string(),
+            Self::NodeOptionalDependencies => "node:optionalDependencies".to_string(),
         }
     }
 
     #[must_use]
     pub fn detail_label(&self) -> String {
         match self {
-            Self::Project => "project dependency".to_string(),
-            Self::DependencyGroup { group } => format!("dependency group: {group}"),
-            Self::OptionalDependency { extra } => format!("optional dependency: {extra}"),
+            Self::PythonProject => "python project dependency".to_string(),
+            Self::PythonDependencyGroup { group } => format!("python dependency group: {group}"),
+            Self::PythonOptionalDependency { extra } => {
+                format!("python optional dependency: {extra}")
+            }
+            Self::NodeDependencies => "node runtime dependency".to_string(),
+            Self::NodeDevDependencies => "node development dependency".to_string(),
+            Self::NodeOptionalDependencies => "node optional dependency".to_string(),
         }
     }
 }
@@ -279,6 +301,9 @@ pub struct ScanDependencySelection {
     pub include_project_dependencies: bool,
     pub dependency_groups: NamedSelection,
     pub optional_dependencies: NamedSelection,
+    pub include_node_dependencies: bool,
+    pub include_node_dev_dependencies: bool,
+    pub include_node_optional_dependencies: bool,
 }
 
 impl Default for ScanDependencySelection {
@@ -287,6 +312,9 @@ impl Default for ScanDependencySelection {
             include_project_dependencies: true,
             dependency_groups: NamedSelection::All,
             optional_dependencies: NamedSelection::All,
+            include_node_dependencies: true,
+            include_node_dev_dependencies: true,
+            include_node_optional_dependencies: true,
         }
     }
 }
@@ -294,12 +322,17 @@ impl Default for ScanDependencySelection {
 impl ScanDependencySelection {
     fn includes(&self, origin: &ProjectDependencyOrigin) -> bool {
         match origin {
-            ProjectDependencyOrigin::Project => self.include_project_dependencies,
-            ProjectDependencyOrigin::DependencyGroup { group } => {
+            ProjectDependencyOrigin::PythonProject => self.include_project_dependencies,
+            ProjectDependencyOrigin::PythonDependencyGroup { group } => {
                 self.dependency_groups.includes(group)
             }
-            ProjectDependencyOrigin::OptionalDependency { extra } => {
+            ProjectDependencyOrigin::PythonOptionalDependency { extra } => {
                 self.optional_dependencies.includes(extra)
+            }
+            ProjectDependencyOrigin::NodeDependencies => self.include_node_dependencies,
+            ProjectDependencyOrigin::NodeDevDependencies => self.include_node_dev_dependencies,
+            ProjectDependencyOrigin::NodeOptionalDependencies => {
+                self.include_node_optional_dependencies
             }
         }
     }
@@ -313,6 +346,7 @@ impl SkillSourceMetadata {
         github_url: Option<&str>,
         github_commit_sha: Option<&str>,
         skillsmp_id: Option<&str>,
+        package_ecosystem: Option<PackageEcosystem>,
     ) -> Self {
         Self {
             source: source.map(str::to_string),
@@ -321,6 +355,7 @@ impl SkillSourceMetadata {
             github_url: github_url.map(str::to_string),
             github_commit_sha: github_commit_sha.map(str::to_string),
             skillsmp_id: skillsmp_id.map(str::to_string),
+            package_ecosystem,
         }
     }
 
@@ -343,6 +378,9 @@ impl SkillSourceMetadata {
         }
         if self.skillsmp_id.is_none() {
             self.skillsmp_id = metadata.get(SKILLY_SKILLSMP_ID_METADATA_KEY).cloned();
+        }
+        if self.package_ecosystem.is_none() {
+            self.package_ecosystem = infer_package_ecosystem(metadata);
         }
     }
 
@@ -373,6 +411,15 @@ impl SkillSourceMetadata {
                 package_version.clone(),
             );
         }
+        if let Some(package_ecosystem) = self.package_ecosystem {
+            metadata.insert(
+                SKILLY_PACKAGE_ECOSYSTEM_METADATA_KEY.to_string(),
+                match package_ecosystem {
+                    PackageEcosystem::Python => PACKAGE_ECOSYSTEM_PYTHON.to_string(),
+                    PackageEcosystem::Node => PACKAGE_ECOSYSTEM_NODE.to_string(),
+                },
+            );
+        }
         if let Some(github_url) = self.github_url.as_ref() {
             metadata.insert(
                 SKILLY_GITHUB_URL_METADATA_KEY.to_string(),
@@ -400,6 +447,8 @@ pub struct ProjectEnvironment {
     pub directory: PathBuf,
     pub pyproject_toml_path: PathBuf,
     pub venv_path: PathBuf,
+    pub package_json_path: PathBuf,
+    pub node_modules_path: PathBuf,
     pub dependency_selection: ScanDependencySelection,
 }
 
@@ -409,6 +458,8 @@ impl Default for ProjectEnvironment {
             directory: PathBuf::from(DEFAULT_SKILLS_PATH),
             pyproject_toml_path: PathBuf::from("pyproject.toml"),
             venv_path: PathBuf::from(".venv"),
+            package_json_path: PathBuf::from("package.json"),
+            node_modules_path: PathBuf::from("node_modules"),
             dependency_selection: ScanDependencySelection::default(),
         }
     }
@@ -426,6 +477,8 @@ impl ProjectEnvironment {
             directory: directory.to_path_buf(),
             pyproject_toml_path: pyproject_toml_path.to_path_buf(),
             venv_path: venv_path.to_path_buf(),
+            package_json_path: PathBuf::from("package.json"),
+            node_modules_path: PathBuf::from("node_modules"),
             dependency_selection,
         }
     }
@@ -693,6 +746,17 @@ fn infer_source(metadata: &BTreeMap<String, String>) -> String {
         return SKILLY_SOURCE_GITHUB.to_string();
     }
     SKILLY_UNKNOWN_SOURCE.to_string()
+}
+
+fn infer_package_ecosystem(metadata: &BTreeMap<String, String>) -> Option<PackageEcosystem> {
+    if let Some(eco) = metadata.get(SKILLY_PACKAGE_ECOSYSTEM_METADATA_KEY) {
+        return match eco.as_str() {
+            PACKAGE_ECOSYSTEM_PYTHON => Some(PackageEcosystem::Python),
+            PACKAGE_ECOSYSTEM_NODE => Some(PackageEcosystem::Node),
+            _ => None,
+        };
+    }
+    None
 }
 
 #[must_use]
@@ -967,6 +1031,13 @@ impl SkillData {
         let mut source_metadata = source_metadata.clone();
         source_metadata.apply_missing_from_metadata(&metadata);
         let source = source_metadata.resolved_source(&metadata);
+        let package_ecosystem = source_metadata.package_ecosystem.or_else(|| {
+            if source == SKILLY_SOURCE_DEPENDENCY {
+                Some(PackageEcosystem::Python)
+            } else {
+                None
+            }
+        });
 
         Ok(Self {
             name: required_string_field(&parsed, "name")?,
@@ -987,6 +1058,7 @@ impl SkillData {
             github_url: source_metadata.github_url.clone(),
             github_commit_sha: source_metadata.github_commit_sha.clone(),
             skillsmp_id: source_metadata.skillsmp_id.clone(),
+            package_ecosystem,
         })
     }
 
@@ -1191,6 +1263,7 @@ impl SkillData {
             github_url: self.github_url.clone(),
             github_commit_sha: self.github_commit_sha.clone(),
             skillsmp_id: self.skillsmp_id.clone(),
+            package_ecosystem: self.package_ecosystem,
         }
     }
 
@@ -1208,11 +1281,18 @@ impl SkillData {
     /// Return `name==version` if both package fields are set, otherwise just the name.
     #[must_use]
     pub fn package_reference(&self) -> Option<String> {
-        match (&self.package_name, &self.package_version) {
-            (Some(name), Some(version)) if !version.is_empty() => {
+        match (
+            &self.package_name,
+            &self.package_version,
+            self.package_ecosystem,
+        ) {
+            (Some(name), Some(version), Some(PackageEcosystem::Node)) if !version.is_empty() => {
+                Some(format!("{name}@{version}"))
+            }
+            (Some(name), Some(version), _) if !version.is_empty() => {
                 Some(format!("{name}=={version}"))
             }
-            (Some(name), _) => Some(name.clone()),
+            (Some(name), _, _) => Some(name.clone()),
             _ => None,
         }
     }
@@ -1224,7 +1304,8 @@ impl SkillData {
         if let (Some(package_name), Some(other_package_name)) =
             (&self.package_name, &other.package_name)
         {
-            return (package_name, &self.name) == (other_package_name, &other.name);
+            return (self.package_ecosystem, package_name, &self.name)
+                == (other.package_ecosystem, other_package_name, &other.name);
         }
         if let (Some(github_url), Some(other_github_url)) = (&self.github_url, &other.github_url) {
             return github_url == other_github_url;
@@ -1449,11 +1530,13 @@ pub fn resolve_record_path(site_packages: &Path, installed_path: &str) -> PathBu
 fn sort_dependency_skills(skills: &mut [SkillData]) {
     skills.sort_by(|left, right| {
         (
+            left.package_ecosystem,
             left.package_name.as_deref().unwrap_or(""),
             left.package_version.as_deref().unwrap_or(""),
             left.name.as_str(),
         )
             .cmp(&(
+                right.package_ecosystem,
                 right.package_name.as_deref().unwrap_or(""),
                 right.package_version.as_deref().unwrap_or(""),
                 right.name.as_str(),
@@ -1510,6 +1593,7 @@ pub fn discover_venv_skills_in(
                     None,
                     None,
                     None,
+                    Some(PackageEcosystem::Python),
                 ),
             ) {
                 skills.push(skill);
@@ -1547,7 +1631,7 @@ fn parse_project_requirement_entries(text: &str) -> Result<Vec<ProjectRequiremen
         parsed
             .get("project")
             .and_then(|value| value.get("dependencies")),
-        ProjectDependencyOrigin::Project,
+        ProjectDependencyOrigin::PythonProject,
     );
 
     if let Some(groups) = parsed
@@ -1557,7 +1641,7 @@ fn parse_project_requirement_entries(text: &str) -> Result<Vec<ProjectRequiremen
         for (group_name, values) in groups {
             dependencies.extend(collect_project_requirement_values(
                 Some(values),
-                ProjectDependencyOrigin::DependencyGroup {
+                ProjectDependencyOrigin::PythonDependencyGroup {
                     group: group_name.clone(),
                 },
             ));
@@ -1572,7 +1656,7 @@ fn parse_project_requirement_entries(text: &str) -> Result<Vec<ProjectRequiremen
         for (extra_name, values) in extras {
             dependencies.extend(collect_project_requirement_values(
                 Some(values),
-                ProjectDependencyOrigin::OptionalDependency {
+                ProjectDependencyOrigin::PythonOptionalDependency {
                     extra: extra_name.clone(),
                 },
             ));
@@ -1595,9 +1679,10 @@ fn select_project_requirement_entries(
     requirements
         .into_iter()
         .filter(|requirement| match &requirement.origin {
-            ProjectDependencyOrigin::Project => true,
-            ProjectDependencyOrigin::DependencyGroup { group } => selected.contains(group),
-            ProjectDependencyOrigin::OptionalDependency { extra } => selected.contains(extra),
+            ProjectDependencyOrigin::PythonProject => true,
+            ProjectDependencyOrigin::PythonDependencyGroup { group } => selected.contains(group),
+            ProjectDependencyOrigin::PythonOptionalDependency { extra } => selected.contains(extra),
+            _ => false,
         })
         .collect()
 }
@@ -1698,32 +1783,277 @@ pub fn requirement_name(spec: &str) -> Option<String> {
     if name.is_empty() { None } else { Some(name) }
 }
 
+fn validate_node_package_name(name: &str) -> Result<()> {
+    if name.is_empty() || name.contains("..") || name.contains('\\') {
+        bail!("invalid node package name: {name:?}");
+    }
+    let valid = name
+        .split('/')
+        .all(|part| !part.is_empty() && part != "." && part != ".." && !part.contains('\\'));
+    if !valid {
+        bail!("invalid node package name: {name:?}");
+    }
+    Ok(())
+}
+
+fn parse_node_dependency_entries(text: &str) -> Result<Vec<ProjectRequirementData>> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(text).map_err(|error| anyhow!("invalid package.json: {error}"))?;
+
+    let mut dependencies = Vec::new();
+
+    if let Some(deps) = parsed.get("dependencies").and_then(|v| v.as_object()) {
+        for (name, _version) in deps {
+            validate_node_package_name(name)?;
+            dependencies.push(ProjectRequirementData {
+                spec: name.to_string(),
+                origin: ProjectDependencyOrigin::NodeDependencies,
+            });
+        }
+    }
+
+    if let Some(deps) = parsed.get("devDependencies").and_then(|v| v.as_object()) {
+        for (name, _version) in deps {
+            validate_node_package_name(name)?;
+            dependencies.push(ProjectRequirementData {
+                spec: name.to_string(),
+                origin: ProjectDependencyOrigin::NodeDevDependencies,
+            });
+        }
+    }
+
+    if let Some(deps) = parsed
+        .get("optionalDependencies")
+        .and_then(|v| v.as_object())
+    {
+        for (name, _version) in deps {
+            validate_node_package_name(name)?;
+            dependencies.push(ProjectRequirementData {
+                spec: name.to_string(),
+                origin: ProjectDependencyOrigin::NodeOptionalDependencies,
+            });
+        }
+    }
+
+    Ok(dependencies)
+}
+
+fn scan_node_requirements_in(
+    file_system: &dyn FileSystem,
+    package_json_path: &Path,
+    selection: &ScanDependencySelection,
+) -> Result<Vec<ProjectRequirementData>> {
+    if !file_system.exists(package_json_path)? {
+        return Ok(Vec::new());
+    }
+    let text = file_system.read_file(package_json_path)?;
+    Ok(filter_scan_requirement_entries(
+        parse_node_dependency_entries(&text)?,
+        selection,
+    ))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NodePackageInfo {
+    name: String,
+    version: String,
+}
+
+#[cfg(feature = "python-bindings")]
+pub fn discover_node_modules_skills(node_modules_path: &Path) -> Result<Vec<SkillData>> {
+    discover_node_modules_skills_in(&NATIVE_FILE_SYSTEM, node_modules_path)
+}
+
+pub fn discover_node_modules_skills_in(
+    file_system: &dyn FileSystem,
+    node_modules_path: &Path,
+) -> Result<Vec<SkillData>> {
+    let resolved = resolve_path_in(file_system, node_modules_path)?;
+    if !file_system.exists(&resolved)? {
+        return Ok(Vec::new());
+    }
+    if !file_system.is_dir(&resolved)? {
+        return Ok(Vec::new());
+    }
+
+    let mut skills = Vec::new();
+    let packages = file_system.list_files(&resolved)?;
+    for package_dir in &packages {
+        // Handle scoped packages: @scope directory contains child packages
+        if package_dir.starts_with('@') {
+            let scope_dir = resolved.join(package_dir);
+            if !file_system.is_dir(&scope_dir).unwrap_or(false) {
+                continue;
+            }
+            let scoped_packages = file_system.list_files(&scope_dir)?;
+            for scoped_pkg in &scoped_packages {
+                let package_path = scope_dir.join(scoped_pkg);
+                if !file_system.is_dir(&package_path).unwrap_or(false) {
+                    continue;
+                }
+                let full_name = format!("{package_dir}/{scoped_pkg}");
+                if let Ok(Some(skills_found)) =
+                    load_node_package_skills_in(file_system, &package_path, &full_name)
+                {
+                    skills.extend(skills_found);
+                }
+            }
+            continue;
+        }
+
+        let package_path = resolved.join(package_dir);
+        if !file_system.is_dir(&package_path).unwrap_or(false) {
+            continue;
+        }
+        if let Ok(Some(skills_found)) =
+            load_node_package_skills_in(file_system, &package_path, package_dir)
+        {
+            skills.extend(skills_found);
+        }
+    }
+
+    sort_dependency_skills(&mut skills);
+    Ok(skills)
+}
+
+fn load_node_package_skills_in(
+    file_system: &dyn FileSystem,
+    package_path: &Path,
+    _full_name: &str,
+) -> Result<Option<Vec<SkillData>>> {
+    let skills_dir = package_path.join("skills");
+    if !file_system.is_dir(&skills_dir)? {
+        return Ok(None);
+    }
+
+    let package_json_path = package_path.join("package.json");
+    let Some(package_info) = read_node_package_json_in(file_system, &package_json_path)? else {
+        return Ok(None);
+    };
+
+    let skill_dirs = file_system.list_files(&skills_dir)?;
+    let mut skills = Vec::new();
+    for skill_dir_name in skill_dirs {
+        let skill_dir = skills_dir.join(&skill_dir_name);
+        if !file_system.is_dir(&skill_dir)? {
+            continue;
+        }
+        let skill = SkillData::from_dir_with_source_metadata_in(
+            file_system,
+            &skill_dir,
+            &SkillSourceMetadata::new(
+                Some(SKILLY_SOURCE_DEPENDENCY),
+                Some(&package_info.name),
+                Some(&package_info.version),
+                None,
+                None,
+                None,
+                Some(PackageEcosystem::Node),
+            ),
+        );
+        match skill {
+            Ok(skill) => skills.push(skill),
+            Err(_) => continue,
+        }
+    }
+
+    Ok(if skills.is_empty() {
+        None
+    } else {
+        Some(skills)
+    })
+}
+
+fn read_node_package_json_in(
+    file_system: &dyn FileSystem,
+    package_json_path: &Path,
+) -> Result<Option<NodePackageInfo>> {
+    if !file_system.exists(package_json_path)? {
+        return Ok(None);
+    }
+    let text = file_system.read_file(package_json_path)?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| anyhow!("invalid package.json: {error}"))?;
+    let name = parsed
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let version = parsed
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0.0.0");
+    Ok(Some(NodePackageInfo {
+        name: name.to_string(),
+        version: version.to_string(),
+    }))
+}
+
 fn project_skill_matches_in(
     file_system: &dyn FileSystem,
     environment: &ProjectEnvironment,
 ) -> Result<Vec<SkillMatchData>> {
     let installed = discover_installed_skills_in(file_system, &environment.directory)?;
-    let requirements = scan_project_requirements_in(
-        file_system,
-        &environment.pyproject_toml_path,
-        &environment.dependency_selection,
-    )?;
-    let origins_by_package = package_dependency_origins(&requirements);
+    let mut matches = Vec::new();
 
-    Ok(
-        discover_venv_skills_in(file_system, &environment.venv_path)?
-            .into_iter()
-            .filter_map(|skill| {
-                let package_name = skill.package_name.as_ref()?;
-                let dependency_origins = origins_by_package.get(package_name)?.clone();
-                Some(SkillMatchData {
-                    installed: match_installed(&installed, &skill),
-                    available: skill,
-                    dependency_origins,
-                })
-            })
-            .collect(),
-    )
+    // Python ecosystem scanning
+    if file_system
+        .exists(&environment.pyproject_toml_path)
+        .unwrap_or(false)
+    {
+        let requirements = scan_project_requirements_in(
+            file_system,
+            &environment.pyproject_toml_path,
+            &environment.dependency_selection,
+        )?;
+        let origins_by_package = package_dependency_origins(&requirements);
+
+        for skill in discover_venv_skills_in(file_system, &environment.venv_path)? {
+            let package_name = match skill.package_name.as_ref() {
+                Some(name) => name,
+                None => continue,
+            };
+            let dependency_origins = match origins_by_package.get(package_name) {
+                Some(origins) => origins.clone(),
+                None => continue,
+            };
+            matches.push(SkillMatchData {
+                installed: match_installed(&installed, &skill),
+                available: skill,
+                dependency_origins,
+            });
+        }
+    }
+
+    // Node ecosystem scanning
+    if file_system
+        .exists(&environment.package_json_path)
+        .unwrap_or(false)
+    {
+        let node_requirements = scan_node_requirements_in(
+            file_system,
+            &environment.package_json_path,
+            &environment.dependency_selection,
+        )?;
+        let node_origins_by_package = package_dependency_origins(&node_requirements);
+
+        for skill in discover_node_modules_skills_in(file_system, &environment.node_modules_path)? {
+            let package_name = match skill.package_name.as_ref() {
+                Some(name) => name,
+                None => continue,
+            };
+            let dependency_origins = match node_origins_by_package.get(package_name) {
+                Some(origins) => origins.clone(),
+                None => continue,
+            };
+            matches.push(SkillMatchData {
+                installed: match_installed(&installed, &skill),
+                available: skill,
+                dependency_origins,
+            });
+        }
+    }
+
+    Ok(matches)
 }
 
 /// Find an installed skill that matches the available skill.
@@ -1749,11 +2079,13 @@ pub fn scan_project_with_file_system(
     let mut matches = project_skill_matches_in(file_system, environment)?;
     matches.sort_by(|left, right| {
         (
+            left.available.package_ecosystem,
             left.available.package_name.as_deref().unwrap_or(""),
             left.available.name.as_str(),
             left.available.package_version.as_deref().unwrap_or(""),
         )
             .cmp(&(
+                right.available.package_ecosystem,
                 right.available.package_name.as_deref().unwrap_or(""),
                 right.available.name.as_str(),
                 right.available.package_version.as_deref().unwrap_or(""),
@@ -1929,6 +2261,7 @@ pub fn build_skill_from_github_files(
             github_url.as_deref(),
             github_commit_sha.as_deref(),
             skillsmp_id.as_deref(),
+            None,
         ),
     )?;
     let prefix = if skill_dir == "." {
@@ -2020,10 +2353,11 @@ pub fn github_versions_match(installed: &SkillData, available: &SkillData) -> bo
 #[cfg(test)]
 mod tests {
     use super::{
-        NamedSelection, ProjectDependencyOrigin, ScanDependencySelection,
-        parse_project_requirement_entries, parse_project_requirements,
+        NamedSelection, PackageEcosystem, ProjectDependencyOrigin, ScanDependencySelection,
+        SkillData, SkillSourceMetadata, parse_node_dependency_entries,
+        parse_project_requirement_entries, parse_project_requirements, validate_node_package_name,
     };
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     const PYPROJECT: &str = r#"
 [project]
@@ -2072,6 +2406,9 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
                     include_project_dependencies: false,
                     dependency_groups: NamedSelection::All,
                     optional_dependencies: NamedSelection::Include(BTreeSet::new()),
+                    include_node_dependencies: false,
+                    include_node_dev_dependencies: false,
+                    include_node_optional_dependencies: false,
                 }
                 .includes(&requirement.origin)
             })
@@ -2080,7 +2417,7 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
         assert_eq!(selected.len(), 2);
         assert!(selected.iter().all(|requirement| {
             requirement.origin
-                == ProjectDependencyOrigin::DependencyGroup {
+                == ProjectDependencyOrigin::PythonDependencyGroup {
                     group: "dev".to_string(),
                 }
         }));
@@ -2102,6 +2439,9 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
                     optional_dependencies: NamedSelection::Exclude(
                         ["docs".to_string()].into_iter().collect(),
                     ),
+                    include_node_dependencies: false,
+                    include_node_dev_dependencies: false,
+                    include_node_optional_dependencies: false,
                 }
                 .includes(&requirement.origin)
             })
@@ -2118,6 +2458,357 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
                 "dev-pkg>=1".to_string(),
                 "shared-pkg>=1".to_string(),
             ]
+        );
+    }
+
+    // ── Node dependency parsing ──────────────────────────────────────
+
+    #[test]
+    fn node_package_name_validation_rejects_unsafe_input() {
+        assert!(validate_node_package_name("").is_err());
+        assert!(validate_node_package_name("..").is_err());
+        assert!(validate_node_package_name("foo/..").is_err());
+        assert!(validate_node_package_name("../escape").is_err());
+        assert!(validate_node_package_name("foo/../bar").is_err());
+        assert!(validate_node_package_name("pkg\\traversal").is_err());
+        assert!(validate_node_package_name("@scope/..").is_err());
+        assert!(validate_node_package_name("./local").is_err());
+    }
+
+    #[test]
+    fn node_package_name_validation_accepts_valid_names() {
+        assert!(validate_node_package_name("simple-pkg").is_ok());
+        assert!(validate_node_package_name("@scope/my-pkg").is_ok());
+        assert!(validate_node_package_name("@babel/core").is_ok());
+        assert!(validate_node_package_name("typescript").is_ok());
+        assert!(validate_node_package_name("under_score").is_ok());
+    }
+
+    #[test]
+    fn parse_node_dependencies_extracts_all_sections() {
+        let package_json = r#"{
+            "dependencies": {
+                "react": "^18.0.0",
+                "lodash": "4.17.21"
+            },
+            "devDependencies": {
+                "typescript": "5.0.0",
+                "eslint": "8.0.0"
+            },
+            "optionalDependencies": {
+                "sharp": "0.32.0"
+            }
+        }"#;
+
+        let entries =
+            parse_node_dependency_entries(package_json).expect("package.json should parse");
+
+        let specs: BTreeSet<_> = entries.iter().map(|e| e.spec.clone()).collect();
+        assert!(specs.contains("react"));
+        assert!(specs.contains("lodash"));
+        assert!(specs.contains("typescript"));
+        assert!(specs.contains("eslint"));
+        assert!(specs.contains("sharp"));
+        assert_eq!(specs.len(), 5);
+    }
+
+    #[test]
+    fn parse_node_dependencies_handles_scoped_packages() {
+        let package_json = r#"{
+            "dependencies": {
+                "@scope/package-a": "1.0.0",
+                "@babel/core": "7.0.0"
+            },
+            "devDependencies": {
+                "@types/node": "20.0.0"
+            }
+        }"#;
+
+        let entries =
+            parse_node_dependency_entries(package_json).expect("package.json should parse");
+
+        let specs: BTreeSet<_> = entries.iter().map(|e| e.spec.clone()).collect();
+        assert!(specs.contains("@scope/package-a"));
+        assert!(specs.contains("@babel/core"));
+        assert!(specs.contains("@types/node"));
+    }
+
+    #[test]
+    fn parse_node_dependencies_handles_duplicate_packages_across_sections() {
+        let package_json = r#"{
+            "dependencies": {
+                "shared-lib": "1.0.0"
+            },
+            "devDependencies": {
+                "shared-lib": "2.0.0"
+            }
+        }"#;
+
+        let entries =
+            parse_node_dependency_entries(package_json).expect("package.json should parse");
+
+        assert_eq!(entries.len(), 2);
+        let specs: Vec<_> = entries
+            .iter()
+            .map(|e| (e.spec.as_str(), e.origin.clone()))
+            .collect();
+        assert_eq!(
+            specs[0],
+            ("shared-lib", ProjectDependencyOrigin::NodeDependencies)
+        );
+        assert_eq!(
+            specs[1],
+            ("shared-lib", ProjectDependencyOrigin::NodeDevDependencies)
+        );
+    }
+
+    #[test]
+    fn parse_node_dependencies_handles_empty_sections() {
+        let package_json = r#"{
+            "dependencies": {}
+        }"#;
+
+        let entries =
+            parse_node_dependency_entries(package_json).expect("package.json should parse");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn parse_node_dependencies_handles_missing_sections() {
+        let package_json = r#"{"name": "my-pkg"}"#;
+
+        let entries =
+            parse_node_dependency_entries(package_json).expect("package.json should parse");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn parse_node_dependencies_rejects_malformed_json() {
+        assert!(parse_node_dependency_entries("not json").is_err());
+        assert!(parse_node_dependency_entries("{invalid").is_err());
+    }
+
+    #[test]
+    fn parse_node_dependencies_rejects_traversal_package_names() {
+        let package_json = r#"{
+            "dependencies": {
+                "../escape": "1.0.0"
+            }
+        }"#;
+
+        assert!(parse_node_dependency_entries(package_json).is_err());
+    }
+
+    #[test]
+    fn node_dependency_origin_labels_include_ecosystem() {
+        assert_eq!(
+            ProjectDependencyOrigin::NodeDependencies.scan_label(),
+            "node:dependencies"
+        );
+        assert_eq!(
+            ProjectDependencyOrigin::NodeDevDependencies.detail_label(),
+            "node development dependency"
+        );
+        assert_eq!(
+            ProjectDependencyOrigin::NodeOptionalDependencies.scan_label(),
+            "node:optionalDependencies"
+        );
+    }
+
+    // ── Ecosystem matching and provenance ────────────────────────────
+
+    fn make_skill(name: &str, pkg: &str, ver: &str, eco: Option<PackageEcosystem>) -> SkillData {
+        SkillData {
+            name: name.to_string(),
+            description: String::new(),
+            path: None,
+            content: String::new(),
+            license: None,
+            compatibility: None,
+            metadata: BTreeMap::new(),
+            allowed_tools: None,
+            resources: Vec::new(),
+            resource_warnings: Vec::new(),
+            source: "dependency".to_string(),
+            package_name: Some(pkg.to_string()),
+            package_version: Some(ver.to_string()),
+            github_url: None,
+            github_commit_sha: None,
+            skillsmp_id: None,
+            package_ecosystem: eco,
+        }
+    }
+
+    #[test]
+    fn ecosystem_prevents_cross_ecosystem_matches() {
+        let python_skill = make_skill("lint", "ruff", "1.0.0", Some(PackageEcosystem::Python));
+        let node_skill = make_skill("lint", "ruff", "1.0.0", Some(PackageEcosystem::Node));
+
+        assert!(!python_skill.matches(&node_skill));
+        assert!(!node_skill.matches(&python_skill));
+    }
+
+    #[test]
+    fn ecosystem_same_type_allows_match() {
+        let skill_a = make_skill("lint", "ruff", "1.0.0", Some(PackageEcosystem::Python));
+        let skill_b = make_skill("lint", "ruff", "2.0.0", Some(PackageEcosystem::Python));
+
+        assert!(skill_a.matches(&skill_b));
+    }
+
+    #[test]
+    fn legacy_dependency_skill_without_explicit_ecosystem_infers_python() {
+        // Skills parsed from SKILL.md without ecosystem metadata but with
+        // source="dependency" get ecosystem=Python via the fallback in from_parsed.
+        let mut metadata = BTreeMap::new();
+        metadata.insert("skilly-source".to_string(), "dependency".to_string());
+
+        let mut source_md = SkillSourceMetadata::new(
+            None, // source comes from metadata
+            Some("ruff"),
+            Some("1.0.0"),
+            None,
+            None,
+            None,
+            None, // no explicit ecosystem
+        );
+        source_md.apply_missing_from_metadata(&metadata);
+
+        // apply_missing_from_metadata does not set ecosystem for legacy (no key present)
+        assert_eq!(source_md.package_ecosystem, None);
+
+        // The or_else fallback in from_parsed would set Python:
+        let source = source_md.resolved_source(&metadata);
+        let inferred = source_md.package_ecosystem.or_else(|| {
+            if source == "dependency" {
+                Some(PackageEcosystem::Python)
+            } else {
+                None
+            }
+        });
+        assert_eq!(inferred, Some(PackageEcosystem::Python));
+    }
+
+    #[test]
+    fn package_reference_formats_node_with_at_sign() {
+        let node = make_skill(
+            "lint",
+            "@scope/my-pkg",
+            "2.1.0",
+            Some(PackageEcosystem::Node),
+        );
+        assert_eq!(
+            node.package_reference(),
+            Some("@scope/my-pkg@2.1.0".to_string())
+        );
+
+        let unscoped = make_skill("lint", "typescript", "5.0.0", Some(PackageEcosystem::Node));
+        assert_eq!(
+            unscoped.package_reference(),
+            Some("typescript@5.0.0".to_string())
+        );
+    }
+
+    #[test]
+    fn package_reference_formats_python_with_double_equals() {
+        let python = make_skill("lint", "ruff", "0.12.0", Some(PackageEcosystem::Python));
+        assert_eq!(python.package_reference(), Some("ruff==0.12.0".to_string()));
+    }
+
+    #[test]
+    fn package_reference_omits_version_when_empty() {
+        let no_version = make_skill("lint", "ruff", "", Some(PackageEcosystem::Python));
+        assert_eq!(no_version.package_reference(), Some("ruff".to_string()));
+    }
+
+    #[test]
+    fn source_metadata_persists_ecosystem_in_metadata_map() {
+        let mut metadata = BTreeMap::new();
+        let source_metadata = SkillSourceMetadata::new(
+            Some("dependency"),
+            Some("my-pkg"),
+            Some("1.0.0"),
+            None,
+            None,
+            None,
+            Some(PackageEcosystem::Node),
+        );
+
+        source_metadata.insert_managed_metadata(&mut metadata);
+
+        assert_eq!(
+            metadata.get("skilly-package-ecosystem"),
+            Some(&"node".to_string())
+        );
+        assert_eq!(
+            metadata.get("skilly-package-name"),
+            Some(&"my-pkg".to_string())
+        );
+        assert_eq!(
+            metadata.get("skilly-package-version"),
+            Some(&"1.0.0".to_string())
+        );
+    }
+
+    #[test]
+    fn ecosystem_metadata_round_trips_through_source_metadata() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("skilly-package-ecosystem".to_string(), "node".to_string());
+
+        let mut source_md =
+            SkillSourceMetadata::new(Some("dependency"), None, None, None, None, None, None);
+        source_md.apply_missing_from_metadata(&metadata);
+
+        assert_eq!(source_md.package_ecosystem, Some(PackageEcosystem::Node));
+    }
+
+    #[test]
+    fn scan_dependency_selection_includes_node_sections() {
+        let selection = ScanDependencySelection {
+            include_node_dependencies: true,
+            include_node_dev_dependencies: false,
+            include_node_optional_dependencies: true,
+            ..Default::default()
+        };
+
+        assert!(selection.includes(&ProjectDependencyOrigin::NodeDependencies));
+        assert!(!selection.includes(&ProjectDependencyOrigin::NodeDevDependencies));
+        assert!(selection.includes(&ProjectDependencyOrigin::NodeOptionalDependencies));
+    }
+
+    #[test]
+    fn scan_dependency_selection_controls_python_sections() {
+        let selection = ScanDependencySelection {
+            include_project_dependencies: true,
+            dependency_groups: NamedSelection::Include(["dev".to_string()].into_iter().collect()),
+            optional_dependencies: NamedSelection::Exclude(
+                ["docs".to_string()].into_iter().collect(),
+            ),
+            include_node_dependencies: false,
+            include_node_dev_dependencies: false,
+            include_node_optional_dependencies: false,
+        };
+
+        assert!(selection.includes(&ProjectDependencyOrigin::PythonProject));
+        assert!(
+            selection.includes(&ProjectDependencyOrigin::PythonDependencyGroup {
+                group: "dev".to_string()
+            })
+        );
+        assert!(
+            !selection.includes(&ProjectDependencyOrigin::PythonDependencyGroup {
+                group: "test".to_string()
+            })
+        );
+        assert!(
+            selection.includes(&ProjectDependencyOrigin::PythonOptionalDependency {
+                extra: "lint".to_string()
+            })
+        );
+        assert!(
+            !selection.includes(&ProjectDependencyOrigin::PythonOptionalDependency {
+                extra: "docs".to_string()
+            })
         );
     }
 }

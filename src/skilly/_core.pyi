@@ -74,6 +74,7 @@ class Skill:
         github_url: str | None = ...,
         github_commit_sha: str | None = ...,
         skillsmp_id: str | None = ...,
+        package_ecosystem: str | None = ...,
     ) -> None: ...
     @classmethod
     def from_text(
@@ -83,6 +84,7 @@ class Skill:
         source: str | None = ...,
         package_name: str | None = ...,
         package_version: str | None = ...,
+        package_ecosystem: str | None = ...,
         github_url: str | None = ...,
         github_commit_sha: str | None = ...,
         skillsmp_id: str | None = ...,
@@ -95,6 +97,7 @@ class Skill:
         source: str | None = ...,
         package_name: str | None = ...,
         package_version: str | None = ...,
+        package_ecosystem: str | None = ...,
         github_url: str | None = ...,
         github_commit_sha: str | None = ...,
         skillsmp_id: str | None = ...,
@@ -107,6 +110,7 @@ class Skill:
         source: str | None = ...,
         package_name: str | None = ...,
         package_version: str | None = ...,
+        package_ecosystem: str | None = ...,
         github_url: str | None = ...,
         github_commit_sha: str | None = ...,
         skillsmp_id: str | None = ...,
@@ -158,6 +162,8 @@ class Skill:
     def github_commit_sha(self) -> str | None: ...
     @property
     def skillsmp_id(self) -> str | None: ...
+    @property
+    def package_ecosystem(self) -> str | None: ...
     @property
     def skill_markdown_path(self) -> Path | None: ...
     @property
@@ -265,6 +271,7 @@ def skill_from_text(
     source: str | None = ...,
     package_name: str | None = ...,
     package_version: str | None = ...,
+    package_ecosystem: str | None = ...,
     github_url: str | None = ...,
     github_commit_sha: str | None = ...,
     skillsmp_id: str | None = ...,
@@ -275,6 +282,7 @@ def skill_from_file(
     source: str | None = ...,
     package_name: str | None = ...,
     package_version: str | None = ...,
+    package_ecosystem: str | None = ...,
     github_url: str | None = ...,
     github_commit_sha: str | None = ...,
     skillsmp_id: str | None = ...,
@@ -285,6 +293,7 @@ def skill_from_dir(
     source: str | None = ...,
     package_name: str | None = ...,
     package_version: str | None = ...,
+    package_ecosystem: str | None = ...,
     github_url: str | None = ...,
     github_commit_sha: str | None = ...,
     skillsmp_id: str | None = ...,
@@ -308,6 +317,9 @@ def discover_installed_skills(
 def discover_venv_skills(
     path: StrPath | None = ..., file_system: FileSystem | None = ...
 ) -> list[Skill]: ...
+def discover_node_modules_skills(
+    path: StrPath | None = ..., file_system: FileSystem | None = ...
+) -> list[Skill]: ...
 def scan_project(
     directory: StrPath | None = ...,
     pyproject_toml_path: StrPath | None = ...,
@@ -317,6 +329,11 @@ def scan_project(
     exclude_dependency_groups: list[str] | None = ...,
     optional_dependencies: list[str] | None = ...,
     exclude_optional_dependencies: list[str] | None = ...,
+    package_json_path: StrPath | None = ...,
+    node_modules_path: StrPath | None = ...,
+    include_node_dependencies: bool = ...,
+    include_node_dev_dependencies: bool = ...,
+    include_node_optional_dependencies: bool = ...,
     file_system: FileSystem | None = ...,
 ) -> list[tuple[Skill, Skill | None]]: ...
 def available_dependency_skill(
@@ -329,6 +346,11 @@ def available_dependency_skill(
     exclude_dependency_groups: list[str] | None = ...,
     optional_dependencies: list[str] | None = ...,
     exclude_optional_dependencies: list[str] | None = ...,
+    package_json_path: StrPath | None = ...,
+    node_modules_path: StrPath | None = ...,
+    include_node_dependencies: bool = ...,
+    include_node_dev_dependencies: bool = ...,
+    include_node_optional_dependencies: bool = ...,
     file_system: FileSystem | None = ...,
 ) -> Skill | None: ...
 def parse_github_skill_url(github_url: str) -> GitHubSkillLocationData: ...
