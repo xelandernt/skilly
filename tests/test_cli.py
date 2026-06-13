@@ -1,4 +1,5 @@
 import os
+from importlib.metadata import version
 from pathlib import Path
 import subprocess
 
@@ -28,12 +29,20 @@ def test_run_cli_root_help_describes_commands(capfd) -> None:
 
     assert exit_code == 0
     output = capfd.readouterr().out
+    assert "-V, --version" in output
     assert (
         "Scan dependency-provided skills from pyproject.toml/.venv and package.json/node_modules"
         in output
     )
     assert "Download one or more skills from a GitHub repository URL" in output
     assert "Browse, update, or remove installed skills" in output
+
+
+def test_run_cli_version_reflects_package_version(capfd) -> None:
+    exit_code = run_cli(["--version"])
+
+    assert exit_code == 0
+    assert capfd.readouterr().out == f"skilly {version('skilly')}\n"
 
 
 def test_run_cli_scan_help_describes_options(capfd) -> None:
@@ -259,12 +268,20 @@ def test_native_cli_root_help_describes_commands() -> None:
     result = run_native_cli("--help")
 
     assert result.returncode == 0
+    assert "-V, --version" in result.stdout
     assert (
         "Scan dependency-provided skills from pyproject.toml/.venv and package.json/node_modules"
         in result.stdout
     )
     assert "Download one or more skills from a GitHub repository URL" in result.stdout
     assert "Browse, update, or remove installed skills" in result.stdout
+
+
+def test_native_cli_version_reflects_package_version() -> None:
+    result = run_native_cli("--version")
+
+    assert result.returncode == 0
+    assert result.stdout == f"skilly {version('skilly')}\n"
 
 
 def test_native_cli_list_prints_plain_output_without_terminal(tmp_path: Path) -> None:

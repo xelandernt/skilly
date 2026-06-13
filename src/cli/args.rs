@@ -30,7 +30,7 @@ pub(crate) struct ResolvedDestination {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "skilly", about = "Manage agent skills.")]
+#[command(name = "skilly", version, about = "Manage agent skills.")]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Commands,

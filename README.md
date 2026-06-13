@@ -79,6 +79,7 @@ uvx skilly --help
 | `configure` | Set which directories skilly manages via TUI or CLI flags |
 
 Run `skilly <command> --help` for all options.
+Run `skilly --version` to print the installed package version.
 
 ### Create Skills
 
