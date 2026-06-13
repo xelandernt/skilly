@@ -18,7 +18,7 @@ pub const CLAUDE_SKILLS_PATH: &str = ".claude/skills";
 pub const CODEX_SKILLS_PATH: &str = ".codex/skills";
 pub const COPILOT_LOCAL_SKILLS_PATH: &str = ".github/skills";
 pub const COPILOT_GLOBAL_SKILLS_PATH: &str = ".copilot/skills";
-pub const SKILLY_DIRECTORY_ENV_VAR: &str = "SKILLY_DIRECTORY";
+pub const SKILLY_DEFAULT_DIRECTORY_ENV_VAR: &str = "SKILLY_DEFAULT_DIRECTORY";
 pub const RESOURCE_KIND_SCRIPT: &str = "script";
 pub const RESOURCE_KIND_REFERENCE: &str = "reference";
 pub const RESOURCE_KIND_ASSET: &str = "asset";
@@ -85,12 +85,32 @@ pub fn skills_directory(flavor: SkillDirectoryFlavor, global: bool) -> Result<Pa
     Ok(home.join(relative))
 }
 
-/// Resolve the default skills directory, respecting the `SKILLY_DIRECTORY` env var.
+/// Resolve the default skills directory:
+/// 1. `SKILLY_DEFAULT_DIRECTORY` env var (highest priority).
+/// 2. Falls back to `.agents/skills`.
 pub fn default_skills_directory() -> Result<PathBuf> {
-    if let Some(directory) = env::var_os(SKILLY_DIRECTORY_ENV_VAR) {
+    if let Some(directory) = env::var_os(SKILLY_DEFAULT_DIRECTORY_ENV_VAR) {
         return absolute_path(Path::new(&directory));
     }
     Ok(PathBuf::from(DEFAULT_SKILLS_PATH))
+}
+
+/// Resolve the effective default directory path from environment, config,
+/// and application default, in priority order.
+///
+/// 1. `SKILLY_DEFAULT_DIRECTORY` env var.
+/// 2. `config.default_directory`.
+/// 3. Application default (`.agents/skills`).
+pub fn resolve_default_directory(config: Option<&str>) -> String {
+    if let Ok(directory) = env::var(SKILLY_DEFAULT_DIRECTORY_ENV_VAR) {
+        return directory;
+    }
+    if let Some(cfg_default) = config
+        && !cfg_default.is_empty()
+    {
+        return cfg_default.to_string();
+    }
+    DEFAULT_SKILLS_PATH.to_string()
 }
 
 pub(crate) fn absolute_path(path: &Path) -> Result<PathBuf> {

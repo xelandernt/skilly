@@ -1368,30 +1368,33 @@ where
 /// Interactive configuration TUI that lets users select which directories skilly
 /// should manage. Two tabs: Global Directories and Local Directories.
 pub(crate) fn run_configure_tui(config: &crate::config::SkillyConfig) -> Result<Option<PathBuf>> {
-    use crate::config::BUILTIN_KEYS;
+    use crate::config::{KNOWN_GLOBAL_DIRS, KNOWN_LOCAL_DIRS};
 
-    let global_builtins: Vec<&str> = BUILTIN_KEYS
+    let mut global_enabled: Vec<bool> = KNOWN_GLOBAL_DIRS
         .iter()
-        .filter(|k| k.ends_with("_global"))
-        .copied()
+        .map(|d| config.global.directories.contains(&d.to_string()))
         .collect();
-    let local_builtins: Vec<&str> = BUILTIN_KEYS
+    let mut local_enabled: Vec<bool> = KNOWN_LOCAL_DIRS
         .iter()
-        .filter(|k| k.ends_with("_local"))
-        .copied()
+        .map(|d| config.local.directories.contains(&d.to_string()))
         .collect();
 
-    let mut global_enabled: Vec<bool> = global_builtins
+    let mut custom_global: Vec<String> = config
+        .global
+        .directories
         .iter()
-        .map(|k| config.enabled_builtin.iter().any(|e| e == k))
+        .filter(|d| !KNOWN_GLOBAL_DIRS.contains(&d.as_str()))
+        .cloned()
         .collect();
-    let mut local_enabled: Vec<bool> = local_builtins
+    let mut custom_local: Vec<String> = config
+        .local
+        .directories
         .iter()
-        .map(|k| config.enabled_builtin.iter().any(|e| e == k))
+        .filter(|d| !KNOWN_LOCAL_DIRS.contains(&d.as_str()))
+        .cloned()
         .collect();
 
-    let mut custom_global: Vec<String> = config.custom_global_dirs.clone();
-    let mut custom_local: Vec<String> = config.custom_local_dirs.clone();
+    let mut default_directory = config.default_directory.clone();
 
     let mut session = TerminalSession::new()?;
     let mut active_tab: usize = 0; // 0 = Global, 1 = Local
@@ -1412,37 +1415,18 @@ pub(crate) fn run_configure_tui(config: &crate::config::SkillyConfig) -> Result<
         },
     ];
 
-    let help_text =
-        "\u{2191}\u{2193} move | Tab switch | Space toggle | Enter add | ^S save | Esc cancel";
+    let help_text = "\u{2191}\u{2193} move | Tab switch | Space toggle | Enter set default | ^S save | Esc cancel";
 
     loop {
-        // Build items snapshot for this frame
         let items = build_configure_items(
             active_tab,
-            &global_builtins,
-            &local_builtins,
             &global_enabled,
             &local_enabled,
             &custom_global,
             &custom_local,
+            &default_directory,
         );
-        let selectable_count = if active_tab == 0 {
-            let builtin_end = global_builtins.len();
-            if custom_global.is_empty() {
-                builtin_end
-            } else {
-                builtin_end + custom_global.len()
-            }
-        } else {
-            let builtin_end = local_builtins.len();
-            if custom_local.is_empty() {
-                builtin_end
-            } else {
-                builtin_end + custom_local.len()
-            }
-        };
-
-        if selected >= selectable_count.saturating_add(2).min(items.len()) {
+        if selected >= items.len() {
             selected = items.len().saturating_sub(1);
         }
 
@@ -1498,7 +1482,10 @@ pub(crate) fn run_configure_tui(config: &crate::config::SkillyConfig) -> Result<
             }
 
             let list = List::new(display_items)
-                .block(Block::default().borders(Borders::ALL).title("Directories"))
+                .block(Block::default().borders(Borders::ALL).title(format!(
+                    "Directories  (default: {})",
+                    configure_dir_label(&default_directory)
+                )))
                 .highlight_style(
                     Style::default()
                         .fg(Color::Yellow)
@@ -1549,10 +1536,14 @@ pub(crate) fn run_configure_tui(config: &crate::config::SkillyConfig) -> Result<
                     input_layout[1],
                 );
             } else {
-                frame.render_widget(
-                    Paragraph::new(help_text).style(Style::default().fg(Color::Gray)),
-                    bottom_area,
-                );
+                let mut help = vec![Span::styled(help_text, Style::default().fg(Color::Gray))];
+                if default_directory.is_empty() {
+                    help.push(Span::styled(
+                        " | ⚠ No default directory set — select one with Enter before saving",
+                        Style::default().fg(Color::Red),
+                    ));
+                }
+                frame.render_widget(Paragraph::new(Line::from(help)), bottom_area);
             }
         })?;
 
@@ -1577,11 +1568,13 @@ pub(crate) fn run_configure_tui(config: &crate::config::SkillyConfig) -> Result<
                     }
                     if active_tab == 0 {
                         if path.starts_with('/') || path.starts_with('~') {
-                            if !custom_global.contains(&path) {
+                            if !custom_global.contains(&path)
+                                && !KNOWN_GLOBAL_DIRS.contains(&path.as_str())
+                            {
                                 custom_global.push(path);
                             }
                             input_buffer = None;
-                            status_message = Some("Custom global directory added".to_string());
+                            status_message = Some("Global directory added".to_string());
                         } else {
                             status_message = Some(
                                 "global directories must be absolute (start with / or ~)"
@@ -1595,30 +1588,16 @@ pub(crate) fn run_configure_tui(config: &crate::config::SkillyConfig) -> Result<
                                     .to_string(),
                             );
                         } else {
-                            if !custom_local.contains(&path) {
+                            if !custom_local.contains(&path)
+                                && !KNOWN_LOCAL_DIRS.contains(&path.as_str())
+                            {
                                 custom_local.push(path);
                             }
                             input_buffer = None;
-                            status_message = Some("Custom local directory added".to_string());
+                            status_message = Some("Local directory added".to_string());
                         }
                     }
-                    // Position on "Add custom..." after adding
-                    let new_selectable = if active_tab == 0 {
-                        let builtin_end = global_builtins.len();
-                        if custom_global.is_empty() {
-                            builtin_end
-                        } else {
-                            builtin_end + custom_global.len()
-                        }
-                    } else {
-                        let builtin_end = local_builtins.len();
-                        if custom_local.is_empty() {
-                            builtin_end
-                        } else {
-                            builtin_end + custom_local.len()
-                        }
-                    };
-                    selected = new_selectable.saturating_add(1);
+                    selected = items.len().saturating_sub(1);
                 }
                 KeyCode::Backspace => {
                     buf.backspace();
@@ -1638,20 +1617,53 @@ pub(crate) fn run_configure_tui(config: &crate::config::SkillyConfig) -> Result<
 
             // Ctrl+S save
             if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                if default_directory.is_empty() {
+                    status_message = Some(
+                        "Set a default directory (Enter on an item) before saving.".to_string(),
+                    );
+                    continue;
+                }
+                // Check that the default is among the enabled directories
+                let all_enabled: Vec<String> = {
+                    let mut v: Vec<String> = Vec::new();
+                    for (i, dir) in KNOWN_GLOBAL_DIRS.iter().enumerate() {
+                        if global_enabled[i] {
+                            v.push(dir.to_string());
+                        }
+                    }
+                    v.extend(custom_global.clone());
+                    for (i, dir) in KNOWN_LOCAL_DIRS.iter().enumerate() {
+                        if local_enabled[i] {
+                            v.push(dir.to_string());
+                        }
+                    }
+                    v.extend(custom_local.clone());
+                    v
+                };
+                if !all_enabled.contains(&default_directory) {
+                    status_message = Some(format!(
+                        "Default directory '{}' is not enabled. Enable it or pick a different default.",
+                        default_directory
+                    ));
+                    continue;
+                }
+
                 let mut new_config = config.clone();
-                new_config.enabled_builtin.clear();
-                for (i, key) in global_builtins.iter().enumerate() {
+                new_config.default_directory = default_directory.clone();
+                new_config.global.directories.clear();
+                for (i, dir) in KNOWN_GLOBAL_DIRS.iter().enumerate() {
                     if global_enabled[i] {
-                        new_config.enabled_builtin.push(key.to_string());
+                        new_config.global.directories.push(dir.to_string());
                     }
                 }
-                for (i, key) in local_builtins.iter().enumerate() {
+                new_config.global.directories.extend(custom_global.clone());
+                new_config.local.directories.clear();
+                for (i, dir) in KNOWN_LOCAL_DIRS.iter().enumerate() {
                     if local_enabled[i] {
-                        new_config.enabled_builtin.push(key.to_string());
+                        new_config.local.directories.push(dir.to_string());
                     }
                 }
-                new_config.custom_global_dirs = custom_global.clone();
-                new_config.custom_local_dirs = custom_local.clone();
+                new_config.local.directories.extend(custom_local.clone());
                 new_config.save()?;
                 return Ok(Some(crate::config::SkillyConfig::config_path()?));
             }
@@ -1677,11 +1689,9 @@ pub(crate) fn run_configure_tui(config: &crate::config::SkillyConfig) -> Result<
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     return Ok(None);
                 }
-                KeyCode::Char(' ') | KeyCode::Enter => {
-                    // Toggle checkbox (Space or Enter)
+                KeyCode::Char(' ') => {
                     let add_custom_index = items.len().saturating_sub(1);
                     if selected == add_custom_index {
-                        // "Add custom..." is always the last item
                         input_buffer = Some(TextBuffer::from_text(""));
                         status_message = None;
                     } else {
@@ -1692,10 +1702,29 @@ pub(crate) fn run_configure_tui(config: &crate::config::SkillyConfig) -> Result<
                             &mut local_enabled,
                             &mut custom_global,
                             &mut custom_local,
+                            &default_directory,
                         );
                         if let Some(msg) = toggled {
                             status_message = Some(msg);
                         }
+                    }
+                }
+                KeyCode::Enter => {
+                    let add_custom_index = items.len().saturating_sub(1);
+                    if selected == add_custom_index {
+                        input_buffer = Some(TextBuffer::from_text(""));
+                        status_message = None;
+                    } else {
+                        let msg = set_configure_default(
+                            active_tab,
+                            selected,
+                            &mut default_directory,
+                            &global_enabled,
+                            &local_enabled,
+                            &custom_global,
+                            &custom_local,
+                        );
+                        status_message = Some(msg);
                     }
                 }
                 _ => {}
@@ -1707,85 +1736,73 @@ pub(crate) fn run_configure_tui(config: &crate::config::SkillyConfig) -> Result<
 /// Build the list of [`MenuItemUi`] for a configure tab.
 fn build_configure_items(
     active_tab: usize,
-    global_builtins: &[&str],
-    local_builtins: &[&str],
     global_enabled: &[bool],
     local_enabled: &[bool],
     custom_global: &[String],
     custom_local: &[String],
+    default_directory: &str,
 ) -> Vec<MenuItemUi> {
-    let mut items = Vec::new();
-    if active_tab == 0 {
-        for (i, key) in global_builtins.iter().enumerate() {
-            let label = builtin_key_to_label(key);
-            let preview = builtin_preview_line(key);
-            items.push(MenuItemUi {
-                label: if global_enabled[i] {
-                    format!("[\u{2713}] {label}")
-                } else {
-                    format!("[ ] {label}")
-                },
-                preview_lines: vec![preview],
-                status: if global_enabled[i] {
-                    MenuItemStatus::Installed
-                } else {
-                    MenuItemStatus::Default
-                },
-                selectable: true,
-            });
-        }
-        if !custom_global.is_empty() {
-            items.push(MenuItemUi {
-                label: "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
-                    .to_string(),
-                preview_lines: vec![],
-                status: MenuItemStatus::Disabled,
-                selectable: false,
-            });
-            for dir in custom_global {
-                items.push(MenuItemUi {
-                    label: format!("[\u{2713}] {dir}"),
-                    preview_lines: vec![format!("Path: {dir}")],
-                    status: MenuItemStatus::Installed,
-                    selectable: true,
-                });
-            }
-        }
+    use crate::config::{KNOWN_GLOBAL_DIRS, KNOWN_LOCAL_DIRS};
+
+    let dirs: &[&str] = if active_tab == 0 {
+        KNOWN_GLOBAL_DIRS
     } else {
-        for (i, key) in local_builtins.iter().enumerate() {
-            let label = builtin_key_to_label(key);
-            let preview = builtin_preview_line(key);
+        KNOWN_LOCAL_DIRS
+    };
+    let enabled: &[bool] = if active_tab == 0 {
+        global_enabled
+    } else {
+        local_enabled
+    };
+    let customs: &[String] = if active_tab == 0 {
+        custom_global
+    } else {
+        custom_local
+    };
+
+    let mut items = Vec::new();
+    for (i, dir) in dirs.iter().enumerate() {
+        let label = configure_dir_label(dir);
+        let preview = configure_dir_preview(dir, active_tab == 0);
+        let checkbox = if *dir == default_directory {
+            "[\u{2605}]"
+        } else if enabled[i] {
+            "[\u{2713}]"
+        } else {
+            "[ ]"
+        };
+        items.push(MenuItemUi {
+            label: format!("{checkbox} {label}"),
+            preview_lines: vec![preview],
+            status: if enabled[i] {
+                MenuItemStatus::Installed
+            } else {
+                MenuItemStatus::Default
+            },
+            selectable: true,
+        });
+    }
+    if !customs.is_empty() {
+        items.push(MenuItemUi {
+            label: "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
+                .to_string(),
+            preview_lines: vec![],
+            status: MenuItemStatus::Disabled,
+            selectable: false,
+        });
+        for dir in customs {
+            let preview = configure_dir_preview(dir, active_tab == 0);
+            let checkbox = if *dir == default_directory {
+                "[\u{2605}]"
+            } else {
+                "[\u{2713}]"
+            };
             items.push(MenuItemUi {
-                label: if local_enabled[i] {
-                    format!("[\u{2713}] {label}")
-                } else {
-                    format!("[ ] {label}")
-                },
+                label: format!("{checkbox} {dir}"),
                 preview_lines: vec![preview],
-                status: if local_enabled[i] {
-                    MenuItemStatus::Installed
-                } else {
-                    MenuItemStatus::Default
-                },
+                status: MenuItemStatus::Installed,
                 selectable: true,
             });
-        }
-        if !custom_local.is_empty() {
-            items.push(MenuItemUi {
-                label: "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
-                    .to_string(),
-                preview_lines: vec![],
-                status: MenuItemStatus::Disabled,
-                selectable: false,
-            });
-            for dir in custom_local {
-                items.push(MenuItemUi {
-                    label: format!("[\u{2713}] {dir}"),
-                    preview_lines: vec![format!("Path (relative to cwd): {dir}")],
-                    status: MenuItemStatus::Installed,
-                    selectable: true,
-                });
-            }
         }
     }
     items.push(MenuItemUi {
@@ -1808,10 +1825,9 @@ fn build_configure_items(
     items
 }
 
-/// Toggle a checkbox in the configure TUI. Returns an optional status message.
-/// Handles built-in enable/disable and custom dir removal.
-/// The `+1` offset on custom-dir bounds accounts for the separator row between
-/// built-in entries and custom entries.
+/// Toggle a checkbox in the configure TUI. For known entries this flips
+/// enabled state, for custom entries this removes the entry. If the entry
+/// being removed is the default directory, the operation is blocked.
 fn toggle_configure_selection(
     active_tab: usize,
     selected: usize,
@@ -1819,74 +1835,126 @@ fn toggle_configure_selection(
     local_enabled: &mut [bool],
     custom_global: &mut Vec<String>,
     custom_local: &mut Vec<String>,
+    default_directory: &str,
 ) -> Option<String> {
-    if active_tab == 0 {
-        let builtin_count = global_enabled.len();
-        if selected < builtin_count {
-            global_enabled[selected] = !global_enabled[selected];
-            None
-        } else {
-            let custom_start = builtin_count + 1; // +1 for separator
-            let custom_end = custom_start + custom_global.len();
-            if selected >= custom_start && selected < custom_end {
-                let idx = selected - custom_start;
-                let removed = custom_global.remove(idx);
-                Some(format!("Custom global directory removed: {removed}"))
-            } else {
-                None
-            }
-        }
+    use crate::config::{KNOWN_GLOBAL_DIRS, KNOWN_LOCAL_DIRS};
+
+    let known: &[&str] = if active_tab == 0 {
+        KNOWN_GLOBAL_DIRS
     } else {
-        let builtin_count = local_enabled.len();
-        if selected < builtin_count {
-            local_enabled[selected] = !local_enabled[selected];
-            None
-        } else {
-            let custom_start = builtin_count + 1;
-            let custom_end = custom_start + custom_local.len();
-            if selected >= custom_start && selected < custom_end {
-                let idx = selected - custom_start;
-                let removed = custom_local.remove(idx);
-                Some(format!("Custom local directory removed: {removed}"))
-            } else {
-                None
-            }
-        }
-    }
-}
-
-/// Convert a built-in key like `"agents_global"` to a display label like `"agents (global)"`.
-fn builtin_key_to_label(key: &str) -> String {
-    if let Some(stripped) = key.strip_suffix("_global") {
-        format!("{stripped} (global)")
-    } else if let Some(stripped) = key.strip_suffix("_local") {
-        format!("{stripped} (local)")
-    } else {
-        key.to_string()
-    }
-}
-
-/// Generate a preview line describing the resolved destination path for a built-in key.
-fn builtin_preview_line(key: &str) -> String {
-    use crate::core::{SkillDirectoryFlavor, skills_directory};
-
-    let (flavor, global) = match key {
-        "agents_global" => (SkillDirectoryFlavor::Agents, true),
-        "agents_local" => (SkillDirectoryFlavor::Agents, false),
-        "claude_global" => (SkillDirectoryFlavor::Claude, true),
-        "claude_local" => (SkillDirectoryFlavor::Claude, false),
-        "codex_global" => (SkillDirectoryFlavor::Codex, true),
-        "codex_local" => (SkillDirectoryFlavor::Codex, false),
-        "copilot_global" => (SkillDirectoryFlavor::Copilot, true),
-        "copilot_local" => (SkillDirectoryFlavor::Copilot, false),
-        _ => return format!("Unknown key: {key}"),
+        KNOWN_LOCAL_DIRS
     };
-    match skills_directory(flavor, global) {
-        Ok(path) => format!("Resolves to: {}", path.display()),
-        Err(e) => format!("Error resolving: {e}"),
+    let enabled: &mut [bool] = if active_tab == 0 {
+        global_enabled
+    } else {
+        local_enabled
+    };
+    let customs: &mut Vec<String> = if active_tab == 0 {
+        custom_global
+    } else {
+        custom_local
+    };
+
+    if selected < known.len() {
+        if known[selected] == default_directory && enabled[selected] {
+            return Some(
+                "Cannot disable the default directory. Set a different default first.".to_string(),
+            );
+        }
+        enabled[selected] = !enabled[selected];
+        None
+    } else {
+        let custom_start = known.len() + 1;
+        let custom_end = custom_start + customs.len();
+        if selected >= custom_start && selected < custom_end {
+            let idx = selected - custom_start;
+            if customs[idx] == default_directory {
+                return Some(
+                    "Cannot remove the default directory. Set a different default first."
+                        .to_string(),
+                );
+            }
+            let removed = customs.remove(idx);
+            Some(format!("Directory removed: {removed}"))
+        } else {
+            None
+        }
     }
 }
 
+/// Set the default directory from the currently selected item.
+fn set_configure_default(
+    active_tab: usize,
+    selected: usize,
+    default_directory: &mut String,
+    global_enabled: &[bool],
+    local_enabled: &[bool],
+    custom_global: &[String],
+    custom_local: &[String],
+) -> String {
+    use crate::config::{KNOWN_GLOBAL_DIRS, KNOWN_LOCAL_DIRS};
+
+    let known: &[&str] = if active_tab == 0 {
+        KNOWN_GLOBAL_DIRS
+    } else {
+        KNOWN_LOCAL_DIRS
+    };
+    let enabled: &[bool] = if active_tab == 0 {
+        global_enabled
+    } else {
+        local_enabled
+    };
+    let customs: &[String] = if active_tab == 0 {
+        custom_global
+    } else {
+        custom_local
+    };
+
+    let new_default = if selected < known.len() {
+        if enabled[selected] {
+            known[selected].to_string()
+        } else {
+            return "Enable this directory first before setting it as default.".to_string();
+        }
+    } else {
+        let custom_start = known.len() + 1;
+        let custom_end = custom_start + customs.len();
+        if selected >= custom_start && selected < custom_end {
+            customs[selected - custom_start].clone()
+        } else {
+            return String::new();
+        }
+    };
+
+    *default_directory = new_default.clone();
+    format!("Default directory set to: {new_default}")
+}
+
+/// Human-readable label for a directory path (used in the configure TUI list).
+fn configure_dir_label(dir: &str) -> String {
+    use crate::cli::args::detect_flavor_from_path;
+    use crate::core::SkillDirectoryFlavor;
+    match detect_flavor_from_path(dir) {
+        Some(SkillDirectoryFlavor::Agents) => format!("agents ({dir})"),
+        Some(SkillDirectoryFlavor::Claude) => format!("claude ({dir})"),
+        Some(SkillDirectoryFlavor::Codex) => format!("codex ({dir})"),
+        Some(SkillDirectoryFlavor::Copilot) => format!("copilot ({dir})"),
+        None => dir.to_string(),
+    }
+}
+
+/// Preview line showing the resolved path for a directory entry.
+fn configure_dir_preview(dir: &str, global: bool) -> String {
+    use crate::core::absolute_path;
+    if global {
+        match absolute_path(Path::new(dir)) {
+            Ok(path) => format!("Resolves to: {}", path.display()),
+            Err(e) => format!("Error resolving: {e}"),
+        }
+    } else {
+        format!("Path (relative to cwd): {dir}")
+    }
+}
 // ============================================================
 // File viewer: data model
 // ============================================================

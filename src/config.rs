@@ -1,8 +1,8 @@
 //! User configuration for skilly — manages `~/.skilly.toml` persistence and
 //! the list of directories (tabs) that skilly commands operate across.
 //!
-//! The configuration determines which built-in agent flavor destinations are
-//! enabled and which custom global/local directories should appear in tab bars.
+//! The configuration stores two lists of directory paths: global (absolute or
+//! `~`-prefixed) and local (relative to the current working directory).
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -12,49 +12,102 @@ use std::path::PathBuf;
 
 const CONFIG_FILENAME: &str = ".skilly.toml";
 
-/// Known built-in destination keys that correspond to agent flavor + scope
-/// combinations. These appear as checkboxes in the configure TUI and as tab
-/// labels in command menus.
-pub(crate) const BUILTIN_KEYS: &[&str] = &[
-    "agents_global",
-    "agents_local",
-    "claude_global",
-    "claude_local",
-    "codex_global",
-    "codex_local",
-    "copilot_global",
-    "copilot_local",
+/// Default global skill directories stored with `~` prefix for portability.
+pub(crate) const DEFAULT_GLOBAL_DIRS: &[&str] = &["~/.agents/skills"];
+
+/// Default local skill directories stored as relative paths.
+pub(crate) const DEFAULT_LOCAL_DIRS: &[&str] = &[".agents/skills"];
+
+/// All known global directories available as toggles in the configure TUI.
+pub(crate) const KNOWN_GLOBAL_DIRS: &[&str] = &[
+    "~/.agents/skills",
+    "~/.claude/skills",
+    "~/.codex/skills",
+    "~/.copilot/skills",
+];
+
+/// All known local directories available as toggles in the configure TUI.
+pub(crate) const KNOWN_LOCAL_DIRS: &[&str] = &[
+    ".agents/skills",
+    ".claude/skills",
+    ".codex/skills",
+    ".github/skills",
 ];
 
 /// Persistent user configuration stored in `~/.skilly.toml`.
+///
+/// ```toml
+/// default_directory = ".agents/skills"
+///
+/// [global]
+/// directories = ["~/.agents/skills", "~/.claude/skills"]
+///
+/// [local]
+/// directories = [".agents/skills", ".claude/skills"]
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct SkillyConfig {
-    /// Which built-in agent/scopes are active (e.g. `"agents_global"`).
-    #[serde(default = "default_enabled_builtin")]
-    pub(crate) enabled_builtin: Vec<String>,
+    /// The directory path that is opened by default in interactive menus.
+    /// Must be present in either `global.directories` or `local.directories`.
+    #[serde(default = "default_directory_path")]
+    pub(crate) default_directory: String,
 
-    /// Additional absolute directories that are always available.
-    /// Stored as-is; `~` expansion is applied at resolution time via
-    /// [`crate::core::absolute_path`].
     #[serde(default)]
-    pub(crate) custom_global_dirs: Vec<String>,
+    pub(crate) global: GlobalConfig,
 
-    /// Additional directories relative to the current working directory.
     #[serde(default)]
-    pub(crate) custom_local_dirs: Vec<String>,
+    pub(crate) local: LocalConfig,
 }
 
-fn default_enabled_builtin() -> Vec<String> {
-    BUILTIN_KEYS.iter().map(|k| k.to_string()).collect()
+fn default_directory_path() -> String {
+    ".agents/skills".to_string()
 }
 
 impl Default for SkillyConfig {
     fn default() -> Self {
         Self {
-            enabled_builtin: default_enabled_builtin(),
-            custom_global_dirs: Vec::new(),
-            custom_local_dirs: Vec::new(),
+            default_directory: default_directory_path(),
+            global: GlobalConfig::default(),
+            local: LocalConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct GlobalConfig {
+    #[serde(default = "default_global_dirs")]
+    pub(crate) directories: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct LocalConfig {
+    #[serde(default = "default_local_dirs")]
+    pub(crate) directories: Vec<String>,
+}
+
+fn default_global_dirs() -> Vec<String> {
+    DEFAULT_GLOBAL_DIRS.iter().map(|d| d.to_string()).collect()
+}
+
+fn default_local_dirs() -> Vec<String> {
+    DEFAULT_LOCAL_DIRS.iter().map(|d| d.to_string()).collect()
+}
+
+impl Default for GlobalConfig {
+    fn default() -> Self {
+        Self {
+            directories: default_global_dirs(),
+        }
+    }
+}
+
+impl Default for LocalConfig {
+    fn default() -> Self {
+        Self {
+            directories: default_local_dirs(),
         }
     }
 }
@@ -92,37 +145,34 @@ impl SkillyConfig {
             .with_context(|| format!("failed to write configuration to {}", path.display()))
     }
 
-    /// Return `true` when no built-in destinations are enabled and no custom
-    /// directories are defined — meaning the tab bar would be empty.
+    /// Return `true` when no directories are configured.
     #[allow(dead_code)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.enabled_builtin.is_empty()
-            && self.custom_global_dirs.is_empty()
-            && self.custom_local_dirs.is_empty()
+        self.global.directories.is_empty() && self.local.directories.is_empty()
     }
 
-    /// Validate that every entry in `enabled_builtin` is a known key.
+    /// Check that the default directory is present in the configured directories.
     #[allow(dead_code)]
-    pub(crate) fn validate_builtin_keys(&self) -> Result<()> {
-        for key in &self.enabled_builtin {
-            if !BUILTIN_KEYS.contains(&key.as_str()) {
-                bail!(
-                    "unknown built-in destination key: {key}. valid keys: {}",
-                    BUILTIN_KEYS.join(", ")
-                );
-            }
+    pub(crate) fn validate_default_directory(&self) -> Result<()> {
+        if self.global.directories.contains(&self.default_directory)
+            || self.local.directories.contains(&self.default_directory)
+        {
+            return Ok(());
         }
-        // Deduplicate
-        let mut seen = std::collections::BTreeSet::new();
-        self.enabled_builtin
-            .iter()
-            .filter(|k| !seen.insert(k.as_str()))
-            .for_each(|_dup| {
-                // We'll report it via the length check below.
-            });
-        if seen.len() != self.enabled_builtin.len() {
-            bail!("enabled_builtin contains duplicate entries");
+        bail!(
+            "default_directory '{}' is not in the configured directories. \
+             Select a default directory before saving.",
+            self.default_directory
+        );
+    }
+
+    /// Set the default directory. Returns an error if the path is empty.
+    #[allow(dead_code)]
+    pub(crate) fn set_default_directory(&mut self, path: &str) -> Result<()> {
+        if path.trim().is_empty() {
+            bail!("default directory path must not be empty");
         }
+        self.default_directory = path.trim().to_string();
         Ok(())
     }
 
@@ -131,97 +181,69 @@ impl SkillyConfig {
     /// - local dirs must be relative (not start with `/` or `~`)
     #[allow(dead_code)]
     pub(crate) fn validate_custom_dirs(&self) -> Result<()> {
-        for dir in &self.custom_global_dirs {
+        for dir in &self.global.directories {
             if dir.trim().is_empty() {
-                bail!("custom global directory path must not be empty");
+                bail!("global directory path must not be empty");
             }
-            // Allow `~`-prefixed paths; absolute_path() expands them.
-            // Reject paths that look like relative bare names.
             let stripped = dir.trim().trim_start_matches("~/");
             if stripped.is_empty() {
-                bail!("custom global directory path must not be just '~'");
+                bail!("global directory path must not be just '~'");
             }
         }
-        for dir in &self.custom_local_dirs {
+        for dir in &self.local.directories {
             if dir.trim().is_empty() {
-                bail!("custom local directory path must not be empty");
+                bail!("local directory path must not be empty");
             }
             if dir.starts_with('/') || dir.starts_with('~') {
-                bail!("custom local directory must be a relative path (no leading / or ~): {dir}");
+                bail!("local directory must be a relative path (no leading / or ~): {dir}");
             }
         }
         Ok(())
     }
 
-    /// Enable a built-in destination key (idempotent).
-    pub(crate) fn enable(&mut self, key: &str) -> Result<()> {
-        if !BUILTIN_KEYS.contains(&key) {
-            bail!(
-                "unknown built-in destination key: {key}. valid keys: {}",
-                BUILTIN_KEYS.join(", ")
-            );
-        }
-        if !self.enabled_builtin.iter().any(|k| k == key) {
-            self.enabled_builtin.push(key.to_string());
-        }
-        Ok(())
-    }
-
-    /// Disable a built-in destination key (idempotent).
-    pub(crate) fn disable(&mut self, key: &str) -> Result<()> {
-        if !BUILTIN_KEYS.contains(&key) {
-            bail!(
-                "unknown built-in destination key: {key}. valid keys: {}",
-                BUILTIN_KEYS.join(", ")
-            );
-        }
-        self.enabled_builtin.retain(|k| k != key);
-        Ok(())
-    }
-
-    /// Add a custom global directory (absolute path, `~` allowed).
+    /// Add a global directory path (absolute or `~`-prefixed).
     pub(crate) fn add_global_dir(&mut self, path: &str) -> Result<()> {
         let trimmed = path.trim().to_string();
         if trimmed.is_empty() {
-            bail!("custom global directory path must not be empty");
+            bail!("global directory path must not be empty");
         }
-        if !self.custom_global_dirs.contains(&trimmed) {
-            self.custom_global_dirs.push(trimmed);
+        if !self.global.directories.contains(&trimmed) {
+            self.global.directories.push(trimmed);
         }
         Ok(())
     }
 
-    /// Remove a custom global directory.
+    /// Remove a global directory path.
     pub(crate) fn remove_global_dir(&mut self, path: &str) -> Result<()> {
-        let len_before = self.custom_global_dirs.len();
-        self.custom_global_dirs.retain(|d| d.trim() != path.trim());
-        if self.custom_global_dirs.len() == len_before {
-            bail!("custom global directory not found: {path}");
+        let len_before = self.global.directories.len();
+        self.global.directories.retain(|d| d.trim() != path.trim());
+        if self.global.directories.len() == len_before {
+            bail!("global directory not found: {path}");
         }
         Ok(())
     }
 
-    /// Add a custom local directory (relative path).
+    /// Add a local directory path (relative).
     pub(crate) fn add_local_dir(&mut self, path: &str) -> Result<()> {
         let trimmed = path.trim().to_string();
         if trimmed.is_empty() {
-            bail!("custom local directory path must not be empty");
+            bail!("local directory path must not be empty");
         }
         if trimmed.starts_with('/') || trimmed.starts_with('~') {
-            bail!("custom local directory must be a relative path (no leading / or ~): {trimmed}");
+            bail!("local directory must be a relative path (no leading / or ~): {trimmed}");
         }
-        if !self.custom_local_dirs.contains(&trimmed) {
-            self.custom_local_dirs.push(trimmed);
+        if !self.local.directories.contains(&trimmed) {
+            self.local.directories.push(trimmed);
         }
         Ok(())
     }
 
-    /// Remove a custom local directory.
+    /// Remove a local directory path.
     pub(crate) fn remove_local_dir(&mut self, path: &str) -> Result<()> {
-        let len_before = self.custom_local_dirs.len();
-        self.custom_local_dirs.retain(|d| d.trim() != path.trim());
-        if self.custom_local_dirs.len() == len_before {
-            bail!("custom local directory not found: {path}");
+        let len_before = self.local.directories.len();
+        self.local.directories.retain(|d| d.trim() != path.trim());
+        if self.local.directories.len() == len_before {
+            bail!("local directory not found: {path}");
         }
         Ok(())
     }
@@ -240,122 +262,91 @@ pub(crate) fn home_dir() -> Result<PathBuf> {
 mod tests {
     use super::*;
 
-    fn config_path_for_test() -> PathBuf {
-        let home = home_dir().unwrap();
-        home.join(".skilly.test.toml")
-    }
-
     fn remove_test_config() {
-        let path = config_path_for_test();
+        let home = home_dir().unwrap();
+        let path = home.join(".skilly.test.toml");
         let _ = fs::remove_file(&path);
     }
 
     #[test]
-    fn default_enables_all_builtin() {
+    fn default_enables_all_dirs() {
         let config = SkillyConfig::default();
-        assert_eq!(config.enabled_builtin.len(), BUILTIN_KEYS.len());
-        for key in BUILTIN_KEYS {
+        assert_eq!(config.global.directories.len(), DEFAULT_GLOBAL_DIRS.len());
+        assert_eq!(config.local.directories.len(), DEFAULT_LOCAL_DIRS.len());
+        for dir in DEFAULT_GLOBAL_DIRS {
             assert!(
-                config.enabled_builtin.contains(&key.to_string()),
-                "missing {key}"
+                config.global.directories.contains(&dir.to_string()),
+                "missing {dir}"
             );
         }
-        assert!(config.custom_global_dirs.is_empty());
-        assert!(config.custom_local_dirs.is_empty());
+        for dir in DEFAULT_LOCAL_DIRS {
+            assert!(
+                config.local.directories.contains(&dir.to_string()),
+                "missing {dir}"
+            );
+        }
         assert!(!config.is_empty());
     }
 
     #[test]
     fn empty_config_is_empty() {
         let config = SkillyConfig {
-            enabled_builtin: Vec::new(),
-            custom_global_dirs: Vec::new(),
-            custom_local_dirs: Vec::new(),
+            default_directory: String::new(),
+            global: GlobalConfig {
+                directories: Vec::new(),
+            },
+            local: LocalConfig {
+                directories: Vec::new(),
+            },
         };
         assert!(config.is_empty());
     }
 
     #[test]
-    fn validate_builtin_keys_rejects_unknown() {
-        let mut config = SkillyConfig::default();
-        config.enabled_builtin.push("bogus_key".to_string());
-        assert!(config.validate_builtin_keys().is_err());
-    }
-
-    #[test]
-    fn validate_builtin_keys_rejects_duplicates() {
-        let mut config = SkillyConfig::default();
-        config.enabled_builtin.push("agents_global".to_string());
-        assert!(config.validate_builtin_keys().is_err());
-    }
-
-    #[test]
     fn validate_custom_dirs_rejects_empty() {
         let mut config = SkillyConfig::default();
-        config.custom_global_dirs.push("".to_string());
+        config.global.directories.push("".to_string());
         assert!(config.validate_custom_dirs().is_err());
 
-        config.custom_global_dirs.clear();
-        config.custom_local_dirs.push("".to_string());
+        config.global.directories.clear();
+        config.local.directories.push("".to_string());
         assert!(config.validate_custom_dirs().is_err());
     }
 
     #[test]
     fn validate_custom_dirs_rejects_absolute_local() {
         let mut config = SkillyConfig::default();
-        config.custom_local_dirs.push("/absolute/path".to_string());
+        config.local.directories.push("/absolute/path".to_string());
         assert!(config.validate_custom_dirs().is_err());
 
-        config.custom_local_dirs.clear();
-        config.custom_local_dirs.push("~/tilde/path".to_string());
+        config.local.directories.clear();
+        config.local.directories.push("~/tilde/path".to_string());
         assert!(config.validate_custom_dirs().is_err());
-    }
-
-    #[test]
-    fn enable_disable_roundtrip() {
-        let mut config = SkillyConfig::default();
-        config.disable("agents_global").unwrap();
-        assert!(
-            !config
-                .enabled_builtin
-                .contains(&"agents_global".to_string())
-        );
-        config.enable("agents_global").unwrap();
-        assert!(
-            config
-                .enabled_builtin
-                .contains(&"agents_global".to_string())
-        );
-
-        // Disabling again is fine
-        config.disable("agents_global").unwrap();
-        assert!(
-            !config
-                .enabled_builtin
-                .contains(&"agents_global".to_string())
-        );
-    }
-
-    #[test]
-    fn enable_unknown_key_errors() {
-        let mut config = SkillyConfig::default();
-        assert!(config.enable("nonexistent").is_err());
     }
 
     #[test]
     fn add_remove_global_dir() {
-        let mut config = SkillyConfig::default();
+        let mut config = SkillyConfig {
+            default_directory: String::new(),
+            global: GlobalConfig {
+                directories: Vec::new(),
+            },
+            local: LocalConfig {
+                directories: Vec::new(),
+            },
+        };
         config.add_global_dir("/opt/skills").unwrap();
         assert!(
             config
-                .custom_global_dirs
+                .global
+                .directories
                 .contains(&"/opt/skills".to_string())
         );
         // Add again is idempotent
         config.add_global_dir("/opt/skills").unwrap();
-        assert_eq!(config.custom_global_dirs.len(), 1);
+        assert_eq!(config.global.directories.len(), 1);
         config.remove_global_dir("/opt/skills").unwrap();
-        assert!(config.custom_global_dirs.is_empty());
+        assert!(config.global.directories.is_empty());
     }
 
     #[test]
@@ -366,27 +357,38 @@ mod tests {
         config.add_local_dir(".agents/skills").unwrap();
         assert!(
             config
-                .custom_local_dirs
+                .local
+                .directories
                 .contains(&".agents/skills".to_string())
         );
     }
 
     #[test]
     fn remove_global_dir_not_found() {
-        let mut config = SkillyConfig::default();
+        let mut config = SkillyConfig {
+            default_directory: String::new(),
+            global: GlobalConfig {
+                directories: Vec::new(),
+            },
+            local: LocalConfig {
+                directories: Vec::new(),
+            },
+        };
         assert!(config.remove_global_dir("/nonexistent").is_err());
     }
 
     #[test]
     fn save_and_load_roundtrip() {
         remove_test_config();
-        // Use env override to isolate from real config
         let tmp = std::env::temp_dir().join("skilly-test-config.toml");
         let _ = fs::remove_file(&tmp);
 
         let mut config = SkillyConfig::default();
-        config.disable("copilot_global").unwrap();
-        config.disable("copilot_local").unwrap();
+        config
+            .global
+            .directories
+            .retain(|d| d != "~/.agents/skills");
+        config.local.directories.retain(|d| d != ".agents/skills");
         config.add_global_dir("/opt/custom").unwrap();
         config.add_local_dir(".custom/skills").unwrap();
 
@@ -394,24 +396,18 @@ mod tests {
         fs::write(&tmp, &content).unwrap();
 
         let loaded: SkillyConfig = toml::from_str(&fs::read_to_string(&tmp).unwrap()).unwrap();
-        assert!(
-            !loaded
-                .enabled_builtin
-                .contains(&"copilot_global".to_string())
-        );
-        assert!(
-            !loaded
-                .enabled_builtin
-                .contains(&"copilot_local".to_string())
-        );
+        assert_eq!(loaded.global.directories.len(), 1); // only /opt/custom
         assert!(
             loaded
-                .custom_global_dirs
+                .global
+                .directories
                 .contains(&"/opt/custom".to_string())
         );
+        assert_eq!(loaded.local.directories.len(), 1); // only .custom/skills
         assert!(
             loaded
-                .custom_local_dirs
+                .local
+                .directories
                 .contains(&".custom/skills".to_string())
         );
 
@@ -421,20 +417,45 @@ mod tests {
     #[test]
     fn load_nonexistent_returns_default() {
         remove_test_config();
-        // Note: we can't easily test load() without mocking because it reads
-        // the real ~/.skilly.toml. We test the serde default path instead.
+        // Empty TOML string → serde default fills all fields
         let empty: SkillyConfig = toml::from_str("").unwrap();
-        assert_eq!(empty.enabled_builtin.len(), BUILTIN_KEYS.len());
+        assert_eq!(empty.global.directories.len(), DEFAULT_GLOBAL_DIRS.len());
+        assert_eq!(empty.local.directories.len(), DEFAULT_LOCAL_DIRS.len());
     }
 
     #[test]
-    fn serde_default_populates_enabled_builtin() {
+    fn serde_default_populates_missing_sections() {
+        // Only [global] section present — [local] gets its default
         let toml_str = r#"
-custom_global_dirs = ["/opt/a"]
+[global]
+directories = ["/opt/a"]
 "#;
         let config: SkillyConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.enabled_builtin.len(), BUILTIN_KEYS.len());
-        assert_eq!(config.custom_global_dirs, vec!["/opt/a"]);
-        assert!(config.custom_local_dirs.is_empty());
+        assert_eq!(config.global.directories, vec!["/opt/a"]);
+        assert_eq!(config.local.directories.len(), DEFAULT_LOCAL_DIRS.len());
+    }
+
+    #[test]
+    fn serde_default_populates_missing_dirs_field() {
+        // [global] section exists but no directories field
+        let toml_str = r#"
+[global]
+"#;
+        let config: SkillyConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.global.directories.len(), DEFAULT_GLOBAL_DIRS.len());
+    }
+
+    #[test]
+    fn remove_local_dir_not_found() {
+        let mut config = SkillyConfig {
+            default_directory: String::new(),
+            global: GlobalConfig {
+                directories: Vec::new(),
+            },
+            local: LocalConfig {
+                directories: Vec::new(),
+            },
+        };
+        assert!(config.remove_local_dir("/nonexistent").is_err());
     }
 }

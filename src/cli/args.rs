@@ -1,6 +1,7 @@
 use crate::config::SkillyConfig;
 use crate::core::{
-    NamedSelection, ScanDependencySelection, SkillDirectoryFlavor, absolute_path, skills_directory,
+    NamedSelection, ScanDependencySelection, SkillDirectoryFlavor, absolute_path,
+    resolve_default_directory, skills_directory,
 };
 use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand};
@@ -148,7 +149,7 @@ pub(crate) enum Commands {
         show: bool,
         #[arg(
             long,
-            help = "Restore the default configuration (all built-in destinations, no custom dirs)."
+            help = "Restore the default configuration (agents global and local directories only)."
         )]
         reset: bool,
         #[arg(
@@ -175,18 +176,6 @@ pub(crate) enum Commands {
             help = "Remove a custom local directory by its path."
         )]
         remove_local: Vec<String>,
-        #[arg(
-            long,
-            value_name = "KEY",
-            help = "Enable a built-in destination (e.g. agents_global, claude_local)."
-        )]
-        enable: Vec<String>,
-        #[arg(
-            long,
-            value_name = "KEY",
-            help = "Disable a built-in destination (e.g. copilot_global, codex_local)."
-        )]
-        disable: Vec<String>,
     },
 }
 
@@ -368,42 +357,63 @@ impl DestinationArgs {
 pub(crate) fn all_interactive_destinations(
     config: &SkillyConfig,
 ) -> Result<Vec<ResolvedDestination>> {
+    let effective_default = resolve_default_directory(Some(&config.default_directory));
     let mut destinations = Vec::new();
-    for key in &config.enabled_builtin {
-        if let Some((flavor, global)) = builtin_key_to_flavor_scope(key) {
-            destinations.push(resolved_destination(flavor, global.into())?);
+    let mut default_index = None;
+    for (i, dir) in config.global.directories.iter().enumerate() {
+        let dest = destination_from_dir(dir, true)?;
+        if dir == &effective_default && default_index.is_none() {
+            default_index = Some(i);
         }
+        destinations.push(dest);
     }
-    for dir in &config.custom_global_dirs {
-        destinations.push(custom_destination(dir, true)?);
+    for dir in config.local.directories.iter() {
+        if dir == &effective_default && default_index.is_none() {
+            default_index = Some(destinations.len());
+        }
+        destinations.push(destination_from_dir(dir, false)?);
     }
-    for dir in &config.custom_local_dirs {
-        destinations.push(custom_destination(dir, false)?);
+    if let Some(pos) = default_index
+        && pos > 0
+    {
+        let default = destinations.remove(pos);
+        destinations.insert(0, default);
     }
     Ok(destinations)
 }
 
-/// Map a built-in key string (e.g. `"agents_global"`) to its flavor and scope.
-fn builtin_key_to_flavor_scope(key: &str) -> Option<(SkillDirectoryFlavor, bool)> {
-    match key {
-        "agents_global" => Some((SkillDirectoryFlavor::Agents, true)),
-        "agents_local" => Some((SkillDirectoryFlavor::Agents, false)),
-        "claude_global" => Some((SkillDirectoryFlavor::Claude, true)),
-        "claude_local" => Some((SkillDirectoryFlavor::Claude, false)),
-        "codex_global" => Some((SkillDirectoryFlavor::Codex, true)),
-        "codex_local" => Some((SkillDirectoryFlavor::Codex, false)),
-        "copilot_global" => Some((SkillDirectoryFlavor::Copilot, true)),
-        "copilot_local" => Some((SkillDirectoryFlavor::Copilot, false)),
-        _ => None,
-    }
-}
-
-/// Create a [`ResolvedDestination`] for a custom directory path.
-fn custom_destination(path: &str, global: bool) -> Result<ResolvedDestination> {
-    let label = PathBuf::from(path)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.to_string());
+/// Create a [`ResolvedDestination`] from a directory path, detecting the
+/// flavor and computing a human-readable label with appropriate color.
+pub(crate) fn destination_from_dir(path: &str, global: bool) -> Result<ResolvedDestination> {
+    let flavor = detect_flavor_from_path(path);
+    let label = if let Some(flavor) = flavor {
+        let name = match flavor {
+            SkillDirectoryFlavor::Agents => "agents",
+            SkillDirectoryFlavor::Claude => "claude",
+            SkillDirectoryFlavor::Codex => "codex",
+            SkillDirectoryFlavor::Copilot => "copilot",
+        };
+        format!(
+            "{name} {scope}",
+            scope = if global { "global" } else { "local" }
+        )
+    } else {
+        let basename = Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string());
+        format!(
+            "{basename} ({scope})",
+            scope = if global { "global" } else { "local" }
+        )
+    };
+    let color = match flavor {
+        Some(SkillDirectoryFlavor::Agents) => Color::Green,
+        Some(SkillDirectoryFlavor::Claude) => Color::Yellow,
+        Some(SkillDirectoryFlavor::Codex) => Color::Cyan,
+        Some(SkillDirectoryFlavor::Copilot) => Color::Blue,
+        None => Color::White,
+    };
     let resolved = if global {
         absolute_path(Path::new(path))?
     } else {
@@ -412,8 +422,31 @@ fn custom_destination(path: &str, global: bool) -> Result<ResolvedDestination> {
     Ok(ResolvedDestination {
         label,
         path: resolved,
-        color: Color::White,
+        color,
     })
+}
+
+/// Heuristically detect the [`SkillDirectoryFlavor`] from a path string.
+pub(crate) fn detect_flavor_from_path(path: &str) -> Option<SkillDirectoryFlavor> {
+    let normalized = path.trim_start_matches("~/");
+    if normalized.contains(".agents/")
+        || normalized.ends_with(".agents/skills")
+        || normalized == ".agents/skills"
+    {
+        Some(SkillDirectoryFlavor::Agents)
+    } else if normalized.contains(".claude/") || normalized.ends_with(".claude/skills") {
+        Some(SkillDirectoryFlavor::Claude)
+    } else if normalized.contains(".codex/") || normalized.ends_with(".codex/skills") {
+        Some(SkillDirectoryFlavor::Codex)
+    } else if normalized.contains(".copilot/")
+        || normalized.ends_with(".copilot/skills")
+        || normalized.ends_with(".github/skills")
+        || normalized.contains(".github/skills")
+    {
+        Some(SkillDirectoryFlavor::Copilot)
+    } else {
+        None
+    }
 }
 
 fn resolved_destination(

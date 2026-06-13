@@ -183,8 +183,6 @@ fn try_run(args: Vec<String>) -> Result<i32> {
             remove_global,
             add_local,
             remove_local,
-            enable,
-            disable,
         } => run_configure(
             &skilly_config,
             ConfigureFlags {
@@ -194,8 +192,6 @@ fn try_run(args: Vec<String>) -> Result<i32> {
                 remove_global,
                 add_local,
                 remove_local,
-                enable,
-                disable,
             },
         )?,
     }
@@ -210,8 +206,6 @@ struct ConfigureFlags {
     remove_global: Vec<String>,
     add_local: Vec<String>,
     remove_local: Vec<String>,
-    enable: Vec<String>,
-    disable: Vec<String>,
 }
 
 fn run_configure(skilly_config: &SkillyConfig, flags: ConfigureFlags) -> Result<()> {
@@ -225,9 +219,7 @@ fn run_configure(skilly_config: &SkillyConfig, flags: ConfigureFlags) -> Result<
     let has_modifications = !flags.add_global.is_empty()
         || !flags.remove_global.is_empty()
         || !flags.add_local.is_empty()
-        || !flags.remove_local.is_empty()
-        || !flags.enable.is_empty()
-        || !flags.disable.is_empty();
+        || !flags.remove_local.is_empty();
 
     let config_to_display = if has_modifications {
         let mut config = skilly_config.clone();
@@ -242,12 +234,6 @@ fn run_configure(skilly_config: &SkillyConfig, flags: ConfigureFlags) -> Result<
         }
         for path in &flags.remove_local {
             config.remove_local_dir(path)?;
-        }
-        for key in &flags.disable {
-            config.disable(key)?;
-        }
-        for key in &flags.enable {
-            config.enable(key)?;
         }
         config.save()?;
         config

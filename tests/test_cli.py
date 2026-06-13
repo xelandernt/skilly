@@ -310,7 +310,7 @@ def test_native_cli_uses_environment_default_directory(tmp_path: Path) -> None:
         directory=tmp_path,
     )
 
-    env = {**os.environ, "SKILLY_DIRECTORY": str(tmp_path)}
+    env = {**os.environ, "SKILLY_DEFAULT_DIRECTORY": str(tmp_path)}
     result = run_native_cli("list", env=env)
 
     assert result.returncode == 0
@@ -326,7 +326,7 @@ def test_native_cli_explicit_directory_overrides_environment_default(
         directory=explicit_directory,
     )
 
-    env = {**os.environ, "SKILLY_DIRECTORY": str(tmp_path)}
+    env = {**os.environ, "SKILLY_DEFAULT_DIRECTORY": str(tmp_path)}
     result = run_native_cli("list", "--directory", str(explicit_directory), env=env)
 
     assert result.returncode == 0
@@ -341,7 +341,7 @@ def test_resolve_skills_directory_supports_local_agent_flavors() -> None:
 
 
 def test_resolve_skills_directory_uses_environment_default(monkeypatch) -> None:
-    monkeypatch.setenv("SKILLY_DIRECTORY", "~/custom-skills")
+    monkeypatch.setenv("SKILLY_DEFAULT_DIRECTORY", "~/custom-skills")
 
     assert resolve_skills_directory() == Path.home() / "custom-skills"
     assert resolve_skills_directory("claude") == Path(".claude/skills")
@@ -524,21 +524,20 @@ def test_configure_help_shows_flags(capfd) -> None:
     assert "--remove-global" in output
     assert "--add-local" in output
     assert "--remove-local" in output
-    assert "--enable" in output
-    assert "--disable" in output
 
 
 def test_configure_show_prints_toml(capfd, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    # Start with default config (file doesn't exist yet)
     exit_code = run_cli(["configure", "--show"])
 
     assert exit_code == 0
     output = capfd.readouterr().out
-    assert "enabled_builtin" in output
-    assert "agents_global" in output
-    assert "custom_global_dirs" in output
-    assert "custom_local_dirs" in output
+    assert "default_directory" in output
+    assert "[global]" in output
+    assert "directories" in output
+    assert "~/.agents/skills" in output
+    assert "[local]" in output
+    assert ".agents/skills" in output
 
 
 def test_configure_add_global_and_show(capfd, tmp_path: Path, monkeypatch) -> None:
@@ -569,60 +568,32 @@ def test_configure_add_local_rejects_absolute(
     assert "relative path" in capfd.readouterr().err.lower()
 
 
-def test_configure_enable_disable_builtin(capfd, tmp_path: Path, monkeypatch) -> None:
+def test_configure_remove_global_dir(capfd, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    # Disable all built-ins, then enable one
-    keys = [
-        "agents_global",
-        "agents_local",
-        "claude_global",
-        "claude_local",
-        "codex_global",
-        "codex_local",
-        "copilot_global",
-        "copilot_local",
-    ]
-    args = ["configure"]
-    for k in keys:
-        args.extend(["--disable", k])
-    args.extend(["--enable", "agents_local"])
-    args.append("--show")
-    exit_code = run_cli(args)
+    # Remove the default agents global dir
+    exit_code = run_cli(["configure", "--remove-global", "~/.agents/skills", "--show"])
 
     assert exit_code == 0
     output = capfd.readouterr().out
-    assert "agents_local" in output
-    assert "agents_global" not in output
+    assert "~/.agents/skills" not in output
 
 
 def test_configure_reset_restores_defaults(capfd, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    # First, disable everything
-    keys = [
-        "agents_global",
-        "agents_local",
-        "claude_global",
-        "claude_local",
-        "codex_global",
-        "codex_local",
-        "copilot_global",
-        "copilot_local",
-    ]
-    args = ["configure"]
-    for k in keys:
-        args.extend(["--disable", k])
-    run_cli(args)
+    # First, remove all directories
+    run_cli(["configure", "--remove-global", "~/.agents/skills"])
+    run_cli(["configure", "--remove-local", ".agents/skills"])
 
     # Reset
     exit_code = run_cli(["configure", "--reset"])
     assert exit_code == 0
 
-    # Now show should have all defaults
+    # Now show should have defaults back
     exit_code = run_cli(["configure", "--show"])
     assert exit_code == 0
     output = capfd.readouterr().out
-    assert "agents_global" in output
-    assert "copilot_local" in output
+    assert "~/.agents/skills" in output
+    assert ".agents/skills" in output
 
 
 def test_configure_list_flag_does_not_conflict_with_modify(
@@ -635,8 +606,6 @@ def test_configure_list_flag_does_not_conflict_with_modify(
 
     assert exit_code == 0
     output = capfd.readouterr().out
-    # --show with --add-global: shows current config (which doesn't yet have /opt/x)
-    # The add happens first, then show
     assert "/opt/x" in output
 
 

@@ -146,7 +146,7 @@ uvx skilly list --directory ~/custom     # Explicit directory
 
 | Flags                | Resolved destination                                  |
 |----------------------|-------------------------------------------------------|
-| _none_               | `SKILLY_DIRECTORY` if set, otherwise `.agents/skills` |
+| _none_               | `SKILLY_DEFAULT_DIRECTORY` if set, otherwise `.agents/skills` |
 | `--local`            | `.agents/skills`                                      |
 | `--global`           | `~/.agents/skills`                                    |
 | `--claude`           | `.claude/skills`                                      |
@@ -160,14 +160,14 @@ uvx skilly list --directory ~/custom     # Explicit directory
 Set a default destination:
 
 ```shell
-export SKILLY_DIRECTORY="$HOME/.config/skilly/skills"
+export SKILLY_DEFAULT_DIRECTORY="$HOME/.config/skilly/skills"
 ```
 
-`--directory` overrides all other destination options and `SKILLY_DIRECTORY`.
+`--directory` overrides all other destination options and `SKILLY_DEFAULT_DIRECTORY`.
 
 ### Configure Destinations
 
-`skilly configure` lets you choose which directories skilly should manage. Interactive terminals open a two-tab TUI (Global / Local). Non-interactive runs accept flags.
+`skilly configure` lets you choose which directories skilly should manage and which one opens by default. Interactive terminals open a two-tab TUI (Global / Local) showing all known agent directories as toggleable checkboxes (agents, claude, codex, copilot). Non-interactive runs accept flags.
 
 ```shell
 uvx skilly configure                 # Open the TUI
@@ -175,7 +175,12 @@ uvx skilly configure --show          # Print current config as TOML
 uvx skilly configure --reset         # Restore defaults
 ```
 
-Add or remove custom directories:
+In the TUI:
+- **Space** toggles a known directory on or off, or removes a custom one.
+- **Enter** sets the highlighted directory as the default (marked with a ★).
+- **Ctrl+S** saves; you must have a default directory selected before saving.
+
+Add or remove custom directories via CLI:
 
 ```shell
 uvx skilly configure --add-global /opt/skills
@@ -184,19 +189,19 @@ uvx skilly configure --remove-global /opt/skills
 uvx skilly configure --remove-local .project/skills
 ```
 
-Enable or disable built-in destinations (valid keys: `agents_global`, `agents_local`, `claude_global`, `claude_local`, `codex_global`, `codex_local`, `copilot_global`, `copilot_local`):
-
-```shell
-uvx skilly configure --enable agents_global --disable copilot_global
-```
-
 Configuration is stored in `~/.skilly.toml`:
 
 ```toml
-enabled_builtin = ["agents_global", "agents_local", ...]
-custom_global_dirs = []
-custom_local_dirs = []
+default_directory = ".agents/skills"
+
+[global]
+directories = ["~/.agents/skills", "/opt/skills"]
+
+[local]
+directories = [".agents/skills", ".project/skills"]
 ```
+
+The default directory opens first in interactive menus (`list`, `scan`, etc.).
 
 ### GitHub Authentication
 
