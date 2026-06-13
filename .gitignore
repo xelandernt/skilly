@@ -37,3 +37,4 @@ ts/node_modules/
 **/**.dylib
 **/__pycache__
 **/**.pyc
+.DS_Store
