@@ -2,16 +2,19 @@ import posixpath
 from os import PathLike, fspath
 from pathlib import Path, PurePosixPath
 
+import io
+import zipfile
+
 from skilly import (
     FileSystem,
-    NodeProjectSettings,
+    MavenSource,
+    NodeSource,
     ProjectSettings,
-    PythonProjectSettings,
+    PythonSource,
     Skill,
     SkillRepository,
     SkillResource,
-    discover_node_modules_skills,
-    discover_venv_skills,
+    discover_package_source_skills,
 )
 
 StrPath = str | PathLike[str]
@@ -21,21 +24,26 @@ class InMemoryFileSystem(FileSystem):
     def __init__(self, *, cwd: Path = Path("/workspace")) -> None:
         self.cwd = cwd
         self._directories: set[Path] = {self.resolve(Path("/"))}
-        self._files: dict[Path, str] = {}
+        self._files: dict[Path, bytes] = {}
 
-    def seed_file(self, path: StrPath, content: str) -> None:
+    def seed_file(self, path: StrPath, content: str | bytes) -> None:
         resolved = self.resolve(path)
         self.make_dir(resolved.parent, parents=True, exist_ok=True)
+        if isinstance(content, str):
+            content = content.encode("utf-8")
         self._files[resolved] = content
 
-    def read_file(self, path: StrPath) -> str:
+    def read_bytes(self, path: StrPath, max_size: int) -> bytes:
         resolved = self.resolve(path)
         try:
-            return self._files[resolved]
+            data = self._files[resolved]
         except KeyError as error:
             raise FileNotFoundError(resolved) from error
+        if len(data) > max_size:
+            raise ValueError(f"file size {len(data)} exceeds maximum {max_size} bytes")
+        return data
 
-    def write_file(self, path: StrPath, content: str) -> None:
+    def write_bytes(self, path: StrPath, content: bytes) -> None:
         resolved = self.resolve(path)
         if resolved.parent not in self._directories:
             raise FileNotFoundError(resolved.parent)
@@ -136,23 +144,28 @@ class CrossHostPosixFileSystem(FileSystem):
     def __init__(self, *, cwd: PurePosixPath = PurePosixPath("/workspace")) -> None:
         self.cwd = cwd
         self._directories: set[str] = {"/"}
-        self._files: dict[str, str] = {}
+        self._files: dict[str, bytes] = {}
 
-    def seed_file(self, path: PurePosixPath, content: str) -> None:
+    def seed_file(self, path: PurePosixPath, content: str | bytes) -> None:
         resolved = self._resolve_storage_path(path)
         self.make_dir(
             PurePosixPath(posixpath.dirname(resolved)), parents=True, exist_ok=True
         )
+        if isinstance(content, str):
+            content = content.encode("utf-8")
         self._files[resolved] = content
 
-    def read_file(self, path: StrPath) -> str:
+    def read_bytes(self, path: StrPath, max_size: int) -> bytes:
         resolved = self._lookup_path(path)
         try:
-            return self._files[resolved]
+            data = self._files[resolved]
         except KeyError as error:
             raise FileNotFoundError(resolved) from error
+        if len(data) > max_size:
+            raise ValueError(f"file size {len(data)} exceeds maximum {max_size} bytes")
+        return data
 
-    def write_file(self, path: StrPath, content: str) -> None:
+    def write_bytes(self, path: StrPath, content: bytes) -> None:
         resolved = self._lookup_path(path)
         parent = posixpath.dirname(resolved)
         if parent not in self._directories:
@@ -326,7 +339,7 @@ Body
         "sample_pkg/.agents/skills/sample-skill/SKILL.md,,\n",
     )
 
-    skills = discover_venv_skills(file_system=file_system)
+    skills = discover_package_source_skills(PythonSource(), file_system=file_system)
 
     assert [skill.name for skill in skills] == ["sample-skill"]
     assert skills[0].package_reference() == "sample-pkg==1.2.3"
@@ -361,7 +374,7 @@ Body
         "sample_pkg/.agents/skills/sample-skill/SKILL.md,,\n",
     )
 
-    skills = discover_venv_skills(file_system=file_system)
+    skills = discover_package_source_skills(PythonSource(), file_system=file_system)
 
     assert [skill.name for skill in skills] == ["sample-skill"]
     assert skills[0].path == Path(
@@ -402,7 +415,7 @@ Body
     )
 
     skills = SkillRepository(
-        project=ProjectSettings(), file_system=file_system
+        project=ProjectSettings.defaults(), file_system=file_system
     ).project_skills()
 
     assert [skill.name for skill in skills] == ["sample-skill"]
@@ -427,7 +440,9 @@ Generated instructions.
 
     skill_markdown = Path("/virtual/project/.agents/skills/generated-skill/SKILL.md")
     assert installed.path == Path("/virtual/project/.agents/skills/generated-skill")
-    assert "skilly-source: unknown" in file_system.read_file(skill_markdown)
+    assert b"skilly-source: unknown" in file_system.read_bytes(
+        skill_markdown, 1024 * 1024
+    )
 
     removed = repository.remove("generated-skill", directory=Path(".agents/skills"))
 
@@ -442,7 +457,7 @@ def test_repository_replace_removes_stale_resources_with_custom_file_system() ->
         "sample-skill",
         "Original skill.",
         resources=[
-            SkillResource(PurePosixPath("references/stale.md"), "reference", "stale\n")
+            SkillResource(PurePosixPath("references/stale.md"), "reference", b"stale\n")
         ],
     )
     replacement = Skill("sample-skill", "Replacement skill.")
@@ -475,7 +490,7 @@ Body
 """,
     )
 
-    skills = discover_node_modules_skills(file_system=file_system)
+    skills = discover_package_source_skills(NodeSource(), file_system=file_system)
 
     assert [skill.name for skill in skills] == ["sample-skill"]
     assert skills[0].package_name == "sample-pkg"
@@ -503,7 +518,7 @@ Body
 """,
     )
 
-    skills = discover_node_modules_skills(file_system=file_system)
+    skills = discover_package_source_skills(NodeSource(), file_system=file_system)
 
     assert len(skills) == 1
     assert skills[0].name == "scoped-skill"
@@ -540,7 +555,7 @@ Body
 """,
     )
 
-    skills = discover_node_modules_skills(file_system=file_system)
+    skills = discover_package_source_skills(NodeSource(), file_system=file_system)
 
     assert [skill.name for skill in skills] == ["skill-a", "skill-b"]
 
@@ -557,7 +572,7 @@ Body
 """,
     )
 
-    skills = discover_node_modules_skills(file_system=file_system)
+    skills = discover_package_source_skills(NodeSource(), file_system=file_system)
 
     assert skills == []
 
@@ -569,7 +584,7 @@ def test_get_node_modules_skills_skips_missing_skills_directory() -> None:
         '{"name": "plain-pkg", "version": "3.0.0"}',
     )
 
-    skills = discover_node_modules_skills(file_system=file_system)
+    skills = discover_package_source_skills(NodeSource(), file_system=file_system)
 
     assert skills == []
 
@@ -585,7 +600,7 @@ def test_get_node_modules_skills_skips_malformed_skill() -> None:
         "not valid frontmatter\n",
     )
 
-    skills = discover_node_modules_skills(file_system=file_system)
+    skills = discover_package_source_skills(NodeSource(), file_system=file_system)
 
     assert skills == []
 
@@ -614,7 +629,7 @@ Body
         "# Reference\n",
     )
 
-    skills = discover_node_modules_skills(file_system=file_system)
+    skills = discover_package_source_skills(NodeSource(), file_system=file_system)
 
     assert len(skills) == 1
     assert [r.relative_path.as_posix() for r in skills[0].resources] == [
@@ -641,7 +656,7 @@ Body
 """,
     )
 
-    skills = discover_node_modules_skills(file_system=file_system)
+    skills = discover_package_source_skills(NodeSource(), file_system=file_system)
 
     assert [skill.name for skill in skills] == ["posix-skill"]
 
@@ -667,10 +682,7 @@ Body
     )
 
     matches = SkillRepository(
-        project=ProjectSettings(
-            python=None,
-            node=NodeProjectSettings(),
-        ),
+        project=ProjectSettings(sources=(NodeSource(),)),
         file_system=file_system,
     ).project_skills()
 
@@ -729,11 +741,11 @@ Body
     )
 
     matches = SkillRepository(
-        project=ProjectSettings(),
+        project=ProjectSettings.defaults(),
         file_system=file_system,
     ).project_skills()
 
-    assert [skill.name for skill in matches] == ["python-skill", "node-skill"]
+    assert [skill.name for skill in matches] == ["node-skill", "python-skill"]
 
 
 def test_scan_project_node_disabled_skips_node_ecosystem() -> None:
@@ -757,11 +769,73 @@ Body
     )
 
     matches = SkillRepository(
-        project=ProjectSettings(
-            python=PythonProjectSettings(),
-            node=None,
-        ),
+        project=ProjectSettings(sources=(PythonSource(),)),
         file_system=file_system,
     ).project_skills()
 
     assert matches == []
+
+
+# --- Maven custom-filesystem tests ---
+
+
+def _make_jar_bytes(skill_name: str = "maven-skill") -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            f"skills/{skill_name}/SKILL.md",
+            f"---\nname: {skill_name}\ndescription: Maven skill.\n---\nBody\n",
+        )
+    return buf.getvalue()
+
+
+def test_maven_scan_with_custom_file_system() -> None:
+    file_system = InMemoryFileSystem(cwd=Path("/virtual/project"))
+
+    pom = Path("pom.xml")
+    file_system.seed_file(
+        pom,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <groupId>com.example</groupId>
+    <artifactId>demo</artifactId>
+    <version>1.0.0</version>
+    <dependencies>
+        <dependency>
+            <groupId>com.example</groupId>
+            <artifactId>skill-lib</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+    </dependencies>
+</project>""",
+    )
+
+    jar_path = "/virtual/m2/repository/com/example/skill-lib/1.0.0/skill-lib-1.0.0.jar"
+    file_system.seed_file(Path(jar_path), _make_jar_bytes())
+
+    skills = discover_package_source_skills(
+        MavenSource(
+            pom_xml_path=pom,
+            repository_path=Path("/virtual/m2/repository"),
+        ),
+        file_system=file_system,
+    )
+
+    assert len(skills) == 1
+    assert skills[0].name == "maven-skill"
+    assert skills[0].package_name == "com.example:skill-lib"
+    assert skills[0].package_version == "1.0.0"
+
+
+def test_maven_scan_with_custom_fs_returns_empty_for_missing_pom() -> None:
+    file_system = InMemoryFileSystem(cwd=Path("/virtual/project"))
+
+    skills = discover_package_source_skills(
+        MavenSource(
+            pom_xml_path=Path("nonexistent.xml"),
+            repository_path=Path("/virtual/m2/repository"),
+        ),
+        file_system=file_system,
+    )
+
+    assert skills == []

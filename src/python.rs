@@ -1,16 +1,14 @@
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery};
 use crate::core::{
-    FileSystem, NamedSelection, ProjectEnvironment, ScanDependencySelection, SkillData,
-    SkillDirectoryFlavor, SkillResourceData, SkillSourceMetadata,
-    available_dependency_skill_in as rust_available_dependency_skill,
+    FileSystem, MavenSourceSettings, NamedSelection, NodeSourceSettings, ProjectEnvironment,
+    ProjectSource, PythonSourceSettings, SkillData, SkillDirectoryFlavor, SkillResourceData,
+    SkillSourceMetadata, available_dependency_skill_in as rust_available_dependency_skill,
     available_dependency_skill_with_file_system as rust_available_dependency_skill_with_file_system,
     default_skills_directory as rust_default_skills_directory,
     discover_github_skills as rust_discover_github_skills,
     discover_installed_skills as rust_discover_installed_skills,
     discover_installed_skills_in as rust_discover_installed_skills_in,
-    discover_node_modules_skills as rust_discover_node_modules_skills,
     discover_node_modules_skills_in as rust_discover_node_modules_skills_in,
-    discover_venv_skills as rust_discover_venv_skills,
     discover_venv_skills_in as rust_discover_venv_skills_in,
     github_versions_match as rust_github_versions_match,
     parse_github_skill_url as rust_parse_github_skill_url,
@@ -24,7 +22,7 @@ use crate::{cli, core};
 use pyo3::class::basic::CompareOp;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList, PyModule, PyType};
+use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PyModule, PyType};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
@@ -315,10 +313,11 @@ fn optional_string_attr(value: &Bound<'_, PyAny>, name: &str) -> PyResult<Option
 }
 
 fn resource_from_py(value: &Bound<'_, PyAny>) -> PyResult<SkillResourceData> {
+    let content: Vec<u8> = value.getattr("content")?.extract()?;
     Ok(SkillResourceData {
         relative_path: relative_path_arg(&value.getattr("relative_path")?)?,
         kind: value.getattr("kind")?.extract()?,
-        content: value.getattr("content")?.extract()?,
+        content,
     })
 }
 
@@ -339,7 +338,7 @@ fn py_resource(py: Python<'_>, value: &SkillResourceData) -> PyResult<Py<PyAny>>
         py_pure_posix_path(py, &value.relative_path)?,
     )?;
     kwargs.set_item("kind", value.kind.clone())?;
-    kwargs.set_item("content", value.content.clone())?;
+    kwargs.set_item("content", PyBytes::new(py, &value.content))?;
     Ok(py
         .import("skilly.skills")?
         .getattr("SkillResource")?
@@ -414,23 +413,26 @@ impl PythonFileSystem {
 }
 
 impl FileSystem for PythonFileSystem {
-    fn read_file(&self, path: &Path) -> anyhow::Result<String> {
+    fn read_bytes(&self, path: &Path, max_size: Option<u64>) -> anyhow::Result<Vec<u8>> {
+        let limit = max_size.unwrap_or(core::MAX_BINARY_READ_SIZE);
         Python::with_gil(|py| {
             let path_arg = py_bridge_path(py, &path.to_string_lossy())?;
-            self.inner
+            let result = self
+                .inner
                 .bind(py)
-                .call_method1("read_file", (path_arg,))?
-                .extract()
+                .call_method1("read_bytes", (path_arg, limit))?;
+            let bytes: Vec<u8> = result.extract()?;
+            Ok(bytes)
         })
         .map_err(|error: PyErr| anyhow::anyhow!(error.to_string()))
     }
 
-    fn write_file(&self, path: &Path, content: &str) -> anyhow::Result<()> {
+    fn write_bytes(&self, path: &Path, content: &[u8]) -> anyhow::Result<()> {
         Python::with_gil(|py| {
             let path_arg = py_bridge_path(py, &path.to_string_lossy())?;
             self.inner
                 .bind(py)
-                .call_method1("write_file", (path_arg, content))?;
+                .call_method1("write_bytes", (path_arg, content))?;
             Ok(())
         })
         .map_err(|error: PyErr| anyhow::anyhow!(error.to_string()))
@@ -542,11 +544,9 @@ fn skill_from_text_impl(
         github_url,
         github_commit_sha,
         skillsmp_id,
-        package_ecosystem.as_deref().and_then(|s| match s {
-            "python" => Some(core::PackageEcosystem::Python),
-            "node" => Some(core::PackageEcosystem::Node),
-            _ => None,
-        }),
+        package_ecosystem
+            .as_deref()
+            .map(core::PackageEcosystem::new),
     );
     let path = optional_path_arg(path)?;
     let skill = if let Some(file_system) = file_system {
@@ -585,11 +585,9 @@ fn skill_from_file_impl(
         github_url,
         github_commit_sha,
         skillsmp_id,
-        package_ecosystem.as_deref().and_then(|s| match s {
-            "python" => Some(core::PackageEcosystem::Python),
-            "node" => Some(core::PackageEcosystem::Node),
-            _ => None,
-        }),
+        package_ecosystem
+            .as_deref()
+            .map(core::PackageEcosystem::new),
     );
     let skill = if let Some(file_system) = file_system {
         let file_system = PythonFileSystem::new(file_system);
@@ -629,11 +627,9 @@ fn skill_from_dir_impl(
         github_url,
         github_commit_sha,
         skillsmp_id,
-        package_ecosystem.as_deref().and_then(|s| match s {
-            "python" => Some(core::PackageEcosystem::Python),
-            "node" => Some(core::PackageEcosystem::Node),
-            _ => None,
-        }),
+        package_ecosystem
+            .as_deref()
+            .map(core::PackageEcosystem::new),
     );
     let skill = if let Some(file_system) = file_system {
         let file_system = PythonFileSystem::new(file_system);
@@ -784,11 +780,9 @@ impl PySkill {
                 github_url,
                 github_commit_sha,
                 skillsmp_id,
-                package_ecosystem: package_ecosystem.as_deref().and_then(|s| match s {
-                    "python" => Some(core::PackageEcosystem::Python),
-                    "node" => Some(core::PackageEcosystem::Node),
-                    _ => None,
-                }),
+                package_ecosystem: package_ecosystem
+                    .as_deref()
+                    .map(core::PackageEcosystem::new),
             },
         })
     }
@@ -1029,10 +1023,10 @@ impl PySkill {
 
     #[getter]
     fn package_ecosystem(&self) -> Option<String> {
-        self.inner.package_ecosystem.map(|eco| match eco {
-            core::PackageEcosystem::Python => "python".to_string(),
-            core::PackageEcosystem::Node => "node".to_string(),
-        })
+        self.inner
+            .package_ecosystem
+            .as_ref()
+            .map(|eco| eco.as_str().to_string())
     }
 
     #[getter]
@@ -1382,99 +1376,248 @@ fn discover_installed_skills_py(
     Ok(skills.into_iter().map(PySkill::from_data).collect())
 }
 
+fn parse_optional_string_list(dict: &Bound<'_, PyAny>, key: &str) -> PyResult<Option<Vec<String>>> {
+    match dict.get_item(key) {
+        Ok(value) if value.is_none() => Ok(None),
+        Ok(value) => value.extract::<Vec<String>>().map(Some).map_err(|error| {
+            PyTypeError::new_err(format!(
+                "invalid value for {key}: expected list[str] or null: {error}"
+            ))
+        }),
+        Err(_) => Ok(None),
+    }
+}
+
+fn parse_source_dict(dict: &Bound<'_, PyAny>) -> PyResult<ProjectSource> {
+    let kind: String = dict.get_item("kind")?.extract()?;
+    match kind.as_str() {
+        "python" => {
+            let pyproject_toml_path: String = dict
+                .get_item("pyproject_toml_path")
+                .map(|v| v.extract())
+                .unwrap_or(Ok("pyproject.toml".to_string()))?;
+            let venv_path: String = dict
+                .get_item("venv_path")
+                .map(|v| v.extract())
+                .unwrap_or(Ok(".venv".to_string()))?;
+            let include_project_dependencies: bool = dict
+                .get_item("include_project_dependencies")
+                .map(|v| v.extract())
+                .unwrap_or(Ok(true))?;
+            let dependency_groups: Option<Vec<String>> =
+                parse_optional_string_list(dict, "dependency_groups")?;
+            let exclude_dependency_groups: Option<Vec<String>> =
+                parse_optional_string_list(dict, "exclude_dependency_groups")?;
+            let optional_dependencies: Option<Vec<String>> =
+                parse_optional_string_list(dict, "optional_dependencies")?;
+            let exclude_optional_dependencies: Option<Vec<String>> =
+                parse_optional_string_list(dict, "exclude_optional_dependencies")?;
+            Ok(ProjectSource::Python(PythonSourceSettings {
+                pyproject_toml_path: PathBuf::from(pyproject_toml_path),
+                venv_path: PathBuf::from(venv_path),
+                include_project_dependencies,
+                dependency_groups: NamedSelection::new(
+                    dependency_groups,
+                    exclude_dependency_groups,
+                )
+                .map_err(py_err)?,
+                optional_dependencies: NamedSelection::new(
+                    optional_dependencies,
+                    exclude_optional_dependencies,
+                )
+                .map_err(py_err)?,
+            }))
+        }
+        "node" => {
+            let package_json_path: String = dict
+                .get_item("package_json_path")
+                .map(|v| v.extract())
+                .unwrap_or(Ok("package.json".to_string()))?;
+            let node_modules_path: String = dict
+                .get_item("node_modules_path")
+                .map(|v| v.extract())
+                .unwrap_or(Ok("node_modules".to_string()))?;
+            let include_dependencies: bool = dict
+                .get_item("include_dependencies")
+                .map(|v| v.extract())
+                .unwrap_or(Ok(true))?;
+            let include_dev_dependencies: bool = dict
+                .get_item("include_dev_dependencies")
+                .map(|v| v.extract())
+                .unwrap_or(Ok(true))?;
+            let include_optional_dependencies: bool = dict
+                .get_item("include_optional_dependencies")
+                .map(|v| v.extract())
+                .unwrap_or(Ok(true))?;
+            Ok(ProjectSource::Node(NodeSourceSettings {
+                package_json_path: PathBuf::from(package_json_path),
+                node_modules_path: PathBuf::from(node_modules_path),
+                include_dependencies,
+                include_dev_dependencies,
+                include_optional_dependencies,
+            }))
+        }
+        "maven" => {
+            let pom_xml_path: String = dict
+                .get_item("pom_xml_path")
+                .map(|v| v.extract())
+                .unwrap_or(Ok("pom.xml".to_string()))?;
+            let repository_path: String = dict
+                .get_item("repository_path")
+                .map(|v| v.extract())
+                .unwrap_or(Ok("~/.m2/repository".to_string()))?;
+            let include_compile_scope: bool = dict
+                .get_item("include_compile_scope")
+                .map(|v| v.extract())
+                .unwrap_or(Ok(true))?;
+            let include_runtime_scope: bool = dict
+                .get_item("include_runtime_scope")
+                .map(|v| v.extract())
+                .unwrap_or(Ok(true))?;
+            let include_provided_scope: bool = dict
+                .get_item("include_provided_scope")
+                .map(|v| v.extract())
+                .unwrap_or(Ok(false))?;
+            let include_test_scope: bool = dict
+                .get_item("include_test_scope")
+                .map(|v| v.extract())
+                .unwrap_or(Ok(true))?;
+            let include_system_scope: bool = dict
+                .get_item("include_system_scope")
+                .map(|v| v.extract())
+                .unwrap_or(Ok(false))?;
+            Ok(ProjectSource::Maven(MavenSourceSettings {
+                pom_xml_path: PathBuf::from(pom_xml_path),
+                repository_path: PathBuf::from(repository_path),
+                include_compile_scope,
+                include_runtime_scope,
+                include_provided_scope,
+                include_test_scope,
+                include_system_scope,
+            }))
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unknown source kind: {other}"
+        ))),
+    }
+}
+
+fn build_environment_from_sources(
+    directory: &str,
+    source_dicts: &Bound<'_, PyAny>,
+) -> PyResult<ProjectEnvironment> {
+    let list: &Bound<'_, PyList> = source_dicts
+        .downcast::<PyList>()
+        .map_err(|_| PyTypeError::new_err("sources must be a list"))?;
+    let mut sources = Vec::new();
+    for item in list.iter() {
+        sources.push(parse_source_dict(&item)?);
+    }
+    Ok(ProjectEnvironment {
+        directory: PathBuf::from(directory),
+        sources,
+    })
+}
+
 #[pyfunction]
-#[pyo3(name = "discover_venv_skills", signature = (path=None, file_system=None))]
-fn discover_venv_skills_py(
+#[pyo3(name = "discover_package_source_skills", signature = (source, file_system=None))]
+fn discover_package_source_skills_py(
     py: Python<'_>,
-    path: Option<&Bound<'_, PyAny>>,
+    source: &Bound<'_, PyAny>,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Vec<PySkill>> {
-    let path = default_directory_arg(path, ".venv")?;
-    let skills = if let Some(file_system) = file_system {
-        let file_system = PythonFileSystem::new(file_system);
-        rust_discover_venv_skills_in(&file_system, Path::new(&path)).map_err(py_err)?
-    } else {
-        py.allow_threads(|| rust_discover_venv_skills(Path::new(&path)))
-            .map_err(py_err)?
+    let kind: String = source.get_item("kind")?.extract()?;
+    let skills: Vec<SkillData> = match kind.as_str() {
+        "python" => {
+            let venv_path: String = source
+                .get_item("venv_path")
+                .map(|v| v.extract())
+                .unwrap_or(Ok(".venv".to_string()))?;
+            if let Some(file_system) = file_system {
+                let file_system = PythonFileSystem::new(file_system);
+                rust_discover_venv_skills_in(&file_system, Path::new(&venv_path)).map_err(py_err)?
+            } else {
+                py.allow_threads(|| {
+                    crate::core::discover_venv_skills_in(
+                        &crate::core::NativeFileSystem::default(),
+                        Path::new(&venv_path),
+                    )
+                })
+                .map_err(py_err)?
+            }
+        }
+        "node" => {
+            let node_modules_path: String = source
+                .get_item("node_modules_path")
+                .map(|v| v.extract())
+                .unwrap_or(Ok("node_modules".to_string()))?;
+            if let Some(file_system) = file_system {
+                let file_system = PythonFileSystem::new(file_system);
+                rust_discover_node_modules_skills_in(&file_system, Path::new(&node_modules_path))
+                    .map_err(py_err)?
+            } else {
+                py.allow_threads(|| {
+                    crate::core::discover_node_modules_skills_in(
+                        &crate::core::NativeFileSystem::default(),
+                        Path::new(&node_modules_path),
+                    )
+                })
+                .map_err(py_err)?
+            }
+        }
+        "maven" => {
+            let pom_xml_path: String = source
+                .get_item("pom_xml_path")
+                .map(|v| v.extract())
+                .unwrap_or(Ok("pom.xml".to_string()))?;
+            let repository_path: String = source
+                .get_item("repository_path")
+                .map(|v| v.extract())
+                .unwrap_or(Ok("~/.m2/repository".to_string()))?;
+            let settings = crate::core::MavenSourceSettings {
+                pom_xml_path: PathBuf::from(pom_xml_path),
+                repository_path: PathBuf::from(repository_path),
+                ..Default::default()
+            };
+            let (skills, warnings) = if let Some(file_system) = file_system {
+                let file_system = PythonFileSystem::new(file_system);
+                crate::core::discover_maven_skills_in(&file_system, &settings).map_err(py_err)?
+            } else {
+                py.allow_threads(|| {
+                    crate::core::discover_maven_skills_in(
+                        &crate::core::NativeFileSystem::default(),
+                        &settings,
+                    )
+                })
+                .map_err(py_err)?
+            };
+            for warning in warnings {
+                eprintln!("skilly: {warning}");
+            }
+            skills
+        }
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "unsupported source kind for discovery: {kind}"
+            )));
+        }
     };
     Ok(skills.into_iter().map(PySkill::from_data).collect())
 }
 
 #[pyfunction]
-#[pyo3(name = "discover_node_modules_skills", signature = (path=None, file_system=None))]
-fn discover_node_modules_skills_py(
-    py: Python<'_>,
-    path: Option<&Bound<'_, PyAny>>,
-    file_system: Option<&Bound<'_, PyAny>>,
-) -> PyResult<Vec<PySkill>> {
-    let path = default_directory_arg(path, "node_modules")?;
-    let skills = if let Some(file_system) = file_system {
-        let file_system = PythonFileSystem::new(file_system);
-        rust_discover_node_modules_skills_in(&file_system, Path::new(&path)).map_err(py_err)?
-    } else {
-        py.allow_threads(|| rust_discover_node_modules_skills(Path::new(&path)))
-            .map_err(py_err)?
-    };
-    Ok(skills.into_iter().map(PySkill::from_data).collect())
-}
-
-#[pyfunction]
-#[pyo3(name = "scan_project", signature = (
-    directory=None,
-    pyproject_toml_path=None, venv_path=None,
-    include_project_dependencies=true, dependency_groups=None, exclude_dependency_groups=None,
-    optional_dependencies=None, exclude_optional_dependencies=None,
-    package_json_path=None, node_modules_path=None,
-    include_node_dependencies=true, include_node_dev_dependencies=true, include_node_optional_dependencies=true,
-    file_system=None
-))]
-#[allow(clippy::too_many_arguments)]
+#[pyo3(name = "scan_project", signature = (directory=None, sources=None, file_system=None))]
 fn scan_project_py(
     py: Python<'_>,
     directory: Option<&Bound<'_, PyAny>>,
-    pyproject_toml_path: Option<&Bound<'_, PyAny>>,
-    venv_path: Option<&Bound<'_, PyAny>>,
-    include_project_dependencies: bool,
-    dependency_groups: Option<Vec<String>>,
-    exclude_dependency_groups: Option<Vec<String>>,
-    optional_dependencies: Option<Vec<String>>,
-    exclude_optional_dependencies: Option<Vec<String>>,
-    package_json_path: Option<&Bound<'_, PyAny>>,
-    node_modules_path: Option<&Bound<'_, PyAny>>,
-    include_node_dependencies: bool,
-    include_node_dev_dependencies: bool,
-    include_node_optional_dependencies: bool,
+    sources: Option<&Bound<'_, PyAny>>,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Vec<(PySkill, Option<PySkill>)>> {
     let directory_arg = default_directory_arg(directory, core::DEFAULT_SKILLS_PATH)?;
-    let environment = ProjectEnvironment {
-        directory: PathBuf::from(&directory_arg),
-        pyproject_toml_path: PathBuf::from(&default_directory_arg(
-            pyproject_toml_path,
-            "pyproject.toml",
-        )?),
-        venv_path: PathBuf::from(&default_directory_arg(venv_path, ".venv")?),
-        package_json_path: PathBuf::from(&default_directory_arg(
-            package_json_path,
-            "package.json",
-        )?),
-        node_modules_path: PathBuf::from(&default_directory_arg(
-            node_modules_path,
-            "node_modules",
-        )?),
-        dependency_selection: ScanDependencySelection {
-            include_project_dependencies,
-            dependency_groups: NamedSelection::new(dependency_groups, exclude_dependency_groups)
-                .map_err(py_err)?,
-            optional_dependencies: NamedSelection::new(
-                optional_dependencies,
-                exclude_optional_dependencies,
-            )
-            .map_err(py_err)?,
-            include_node_dependencies,
-            include_node_dev_dependencies,
-            include_node_optional_dependencies,
-        },
+    let environment = if let Some(source_dicts) = sources {
+        build_environment_from_sources(&directory_arg, source_dicts)?
+    } else {
+        ProjectEnvironment::default()
     };
     let matches = if let Some(file_system) = file_system {
         let file_system = PythonFileSystem::new(file_system);
@@ -1495,64 +1638,19 @@ fn scan_project_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "available_dependency_skill", signature = (
-    installed,
-    directory=None,
-    pyproject_toml_path=None, venv_path=None,
-    include_project_dependencies=true, dependency_groups=None, exclude_dependency_groups=None,
-    optional_dependencies=None, exclude_optional_dependencies=None,
-    package_json_path=None, node_modules_path=None,
-    include_node_dependencies=true, include_node_dev_dependencies=true, include_node_optional_dependencies=true,
-    file_system=None
-))]
-#[allow(clippy::too_many_arguments)]
+#[pyo3(name = "available_dependency_skill", signature = (installed, directory=None, sources=None, file_system=None))]
 fn available_dependency_skill_py(
     py: Python<'_>,
     installed: &PySkill,
     directory: Option<&Bound<'_, PyAny>>,
-    pyproject_toml_path: Option<&Bound<'_, PyAny>>,
-    venv_path: Option<&Bound<'_, PyAny>>,
-    include_project_dependencies: bool,
-    dependency_groups: Option<Vec<String>>,
-    exclude_dependency_groups: Option<Vec<String>>,
-    optional_dependencies: Option<Vec<String>>,
-    exclude_optional_dependencies: Option<Vec<String>>,
-    package_json_path: Option<&Bound<'_, PyAny>>,
-    node_modules_path: Option<&Bound<'_, PyAny>>,
-    include_node_dependencies: bool,
-    include_node_dev_dependencies: bool,
-    include_node_optional_dependencies: bool,
+    sources: Option<&Bound<'_, PyAny>>,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Option<PySkill>> {
     let directory_arg = default_directory_arg(directory, core::DEFAULT_SKILLS_PATH)?;
-    let environment = ProjectEnvironment {
-        directory: PathBuf::from(&directory_arg),
-        pyproject_toml_path: PathBuf::from(&default_directory_arg(
-            pyproject_toml_path,
-            "pyproject.toml",
-        )?),
-        venv_path: PathBuf::from(&default_directory_arg(venv_path, ".venv")?),
-        package_json_path: PathBuf::from(&default_directory_arg(
-            package_json_path,
-            "package.json",
-        )?),
-        node_modules_path: PathBuf::from(&default_directory_arg(
-            node_modules_path,
-            "node_modules",
-        )?),
-        dependency_selection: ScanDependencySelection {
-            include_project_dependencies,
-            dependency_groups: NamedSelection::new(dependency_groups, exclude_dependency_groups)
-                .map_err(py_err)?,
-            optional_dependencies: NamedSelection::new(
-                optional_dependencies,
-                exclude_optional_dependencies,
-            )
-            .map_err(py_err)?,
-            include_node_dependencies,
-            include_node_dev_dependencies,
-            include_node_optional_dependencies,
-        },
+    let environment = if let Some(source_dicts) = sources {
+        build_environment_from_sources(&directory_arg, source_dicts)?
+    } else {
+        ProjectEnvironment::default()
     };
     let available = if let Some(file_system) = file_system {
         let file_system = PythonFileSystem::new(file_system);
@@ -1834,8 +1932,7 @@ fn python_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(skill_install_to_py, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_skills_directory_py, m)?)?;
     m.add_function(wrap_pyfunction!(discover_installed_skills_py, m)?)?;
-    m.add_function(wrap_pyfunction!(discover_venv_skills_py, m)?)?;
-    m.add_function(wrap_pyfunction!(discover_node_modules_skills_py, m)?)?;
+    m.add_function(wrap_pyfunction!(discover_package_source_skills_py, m)?)?;
     m.add_function(wrap_pyfunction!(scan_project_py, m)?)?;
     m.add_function(wrap_pyfunction!(available_dependency_skill_py, m)?)?;
     m.add_function(wrap_pyfunction!(parse_github_skill_url_py, m)?)?;

@@ -1,15 +1,52 @@
+import zipfile
 from pathlib import Path
 
 import pytest
 
 from skilly.repository import (
-    NodeProjectSettings,
+    MavenSource,
+    NodeSource,
     ProjectSettings,
-    PythonProjectSettings,
+    PythonSource,
     SkillRepository,
 )
-from skilly.skills import Skill
+from skilly.skills import Skill, discover_package_source_skills
 from helpers import make_venv, write_distribution, write_skill
+
+
+def _make_maven_jar(
+    jar_path: Path,
+    group_id: str,
+    artifact_id: str,
+    version: str,
+    *,
+    skill_name: str = "maven-skill",
+    skill_body: str = "Maven skill body.",
+) -> None:
+    """Create a fake Maven JAR at the given path with a bundled skill."""
+    jar_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(jar_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            f"skills/{skill_name}/SKILL.md",
+            f"---\nname: {skill_name}\ndescription: A Maven skill.\n---\n{skill_body}\n",
+        )
+
+
+def _write_pom(path: Path, dependencies: str = "") -> None:
+    """Write a minimal pom.xml."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"""<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <groupId>com.example</groupId>
+    <artifactId>demo</artifactId>
+    <version>1.0.0</version>
+    <dependencies>
+{dependencies}
+    </dependencies>
+</project>""",
+        encoding="utf-8",
+    )
 
 
 def test_repository_scan_project_detects_updatable_dependency_skill(
@@ -66,8 +103,8 @@ Body
     matches = repository.scan_project(
         directory=install_directory,
         project=ProjectSettings(
-            python=PythonProjectSettings(
-                pyproject_toml_path=pyproject_toml, venv_path=venv_path
+            sources=(
+                PythonSource(pyproject_toml_path=pyproject_toml, venv_path=venv_path),
             )
         ),
     )
@@ -80,10 +117,12 @@ Body
     excluded = repository.scan_project(
         directory=install_directory,
         project=ProjectSettings(
-            python=PythonProjectSettings(
-                pyproject_toml_path=pyproject_toml,
-                venv_path=venv_path,
-                include_project_dependencies=False,
+            sources=(
+                PythonSource(
+                    pyproject_toml_path=pyproject_toml,
+                    venv_path=venv_path,
+                    include_project_dependencies=False,
+                ),
             )
         ),
     )
@@ -145,8 +184,8 @@ Body
     updates = repository.updates(
         directory=install_directory,
         project=ProjectSettings(
-            python=PythonProjectSettings(
-                pyproject_toml_path=pyproject_toml, venv_path=venv_path
+            sources=(
+                PythonSource(pyproject_toml_path=pyproject_toml, venv_path=venv_path),
             )
         ),
     )
@@ -206,11 +245,13 @@ Body
 
     matches = SkillRepository().scan_project(
         project=ProjectSettings(
-            python=PythonProjectSettings(
-                pyproject_toml_path=pyproject_toml,
-                venv_path=venv_path,
-                dependency_groups=("dev",),
-                exclude_optional_dependencies=("docs",),
+            sources=(
+                PythonSource(
+                    pyproject_toml_path=pyproject_toml,
+                    venv_path=venv_path,
+                    dependency_groups=("dev",),
+                    exclude_optional_dependencies=("docs",),
+                ),
             )
         )
     )
@@ -276,11 +317,13 @@ Body
 
     matches = SkillRepository().scan_project(
         project=ProjectSettings(
-            python=PythonProjectSettings(
-                pyproject_toml_path=pyproject_toml,
-                venv_path=venv_path,
-                dependency_groups=("dev", "test"),
-                optional_dependencies=("docs", "lint"),
+            sources=(
+                PythonSource(
+                    pyproject_toml_path=pyproject_toml,
+                    venv_path=venv_path,
+                    dependency_groups=("dev", "test"),
+                    optional_dependencies=("docs", "lint"),
+                ),
             )
         )
     )
@@ -404,11 +447,12 @@ def test_repository_scan_project_node_only(tmp_path: Path) -> None:
 
     matches = SkillRepository().scan_project(
         project=ProjectSettings(
-            python=None,
-            node=NodeProjectSettings(
-                package_json_path=package_json,
-                node_modules_path=node_modules,
-            ),
+            sources=(
+                NodeSource(
+                    package_json_path=package_json,
+                    node_modules_path=node_modules,
+                ),
+            )
         ),
     )
 
@@ -460,18 +504,20 @@ Body
 
     matches = SkillRepository().scan_project(
         project=ProjectSettings(
-            python=PythonProjectSettings(
-                pyproject_toml_path=pyproject_toml,
-                venv_path=venv_path,
-            ),
-            node=NodeProjectSettings(
-                package_json_path=package_json,
-                node_modules_path=node_modules,
-            ),
+            sources=(
+                PythonSource(
+                    pyproject_toml_path=pyproject_toml,
+                    venv_path=venv_path,
+                ),
+                NodeSource(
+                    package_json_path=package_json,
+                    node_modules_path=node_modules,
+                ),
+            )
         ),
     )
 
-    assert [match.available.name for match in matches] == ["python-skill", "node-skill"]
+    assert [match.available.name for match in matches] == ["node-skill", "python-skill"]
 
 
 def test_repository_scan_project_node_disabled_skips_results(tmp_path: Path) -> None:
@@ -484,11 +530,12 @@ def test_repository_scan_project_node_disabled_skips_results(tmp_path: Path) -> 
 
     matches = SkillRepository().scan_project(
         project=ProjectSettings(
-            python=PythonProjectSettings(
-                pyproject_toml_path=tmp_path / "pyproject.toml",
-                venv_path=tmp_path / ".venv",
-            ),
-            node=None,
+            sources=(
+                PythonSource(
+                    pyproject_toml_path=tmp_path / "pyproject.toml",
+                    venv_path=tmp_path / ".venv",
+                ),
+            )
         ),
     )
 
@@ -525,11 +572,12 @@ Body
     updates = repository.updates(
         directory=install_directory,
         project=ProjectSettings(
-            python=None,
-            node=NodeProjectSettings(
-                package_json_path=package_json,
-                node_modules_path=node_modules,
-            ),
+            sources=(
+                NodeSource(
+                    package_json_path=package_json,
+                    node_modules_path=node_modules,
+                ),
+            )
         ),
     )
 
@@ -579,20 +627,22 @@ Body
 
     matches = SkillRepository().scan_project(
         project=ProjectSettings(
-            python=PythonProjectSettings(
-                pyproject_toml_path=pyproject_toml,
-                venv_path=venv_path,
-            ),
-            node=NodeProjectSettings(
-                package_json_path=package_json,
-                node_modules_path=node_modules,
-            ),
+            sources=(
+                PythonSource(
+                    pyproject_toml_path=pyproject_toml,
+                    venv_path=venv_path,
+                ),
+                NodeSource(
+                    package_json_path=package_json,
+                    node_modules_path=node_modules,
+                ),
+            )
         ),
     )
 
     assert [match.available.name for match in matches] == [
-        "python-lint",
         "node-lint",
+        "python-lint",
     ]
 
 
@@ -627,11 +677,12 @@ Body
     matches = repository.scan_project(
         directory=install_directory,
         project=ProjectSettings(
-            python=None,
-            node=NodeProjectSettings(
-                package_json_path=package_json,
-                node_modules_path=node_modules,
-            ),
+            sources=(
+                NodeSource(
+                    package_json_path=package_json,
+                    node_modules_path=node_modules,
+                ),
+            )
         ),
     )
 
@@ -640,3 +691,227 @@ Body
     assert matches[0].installed is not None
     assert matches[0].installed.package_version == "1.0.0"
     assert matches[0].available.package_version == "2.0.0"
+
+
+# --- Maven end-to-end tests ---
+
+
+def test_maven_stateless_discovery_finds_skills(tmp_path: Path) -> None:
+    repo = tmp_path / "m2" / "repository"
+    pom = tmp_path / "pom.xml"
+    group = "com.example"
+    artifact = "skill-lib"
+    version = "1.0.0"
+
+    _write_pom(
+        pom,
+        f"""        <dependency>
+            <groupId>{group}</groupId>
+            <artifactId>{artifact}</artifactId>
+            <version>{version}</version>
+        </dependency>""",
+    )
+    jar = (
+        repo
+        / group.replace(".", "/")
+        / artifact
+        / version
+        / f"{artifact}-{version}.jar"
+    )
+    _make_maven_jar(jar, group, artifact, version, skill_name="maven-skill")
+
+    skills = discover_package_source_skills(
+        MavenSource(pom_xml_path=pom, repository_path=repo),
+    )
+
+    assert len(skills) == 1
+    assert skills[0].name == "maven-skill"
+    assert skills[0].package_name == f"{group}:{artifact}"
+    assert skills[0].package_version == version
+
+
+def test_maven_scan_project_finds_installable_skills(tmp_path: Path) -> None:
+    repo = tmp_path / "m2" / "repository"
+    pom = tmp_path / "pom.xml"
+    group = "com.example"
+    artifact = "scan-lib"
+    version = "1.0.0"
+
+    _write_pom(
+        pom,
+        f"""        <dependency>
+            <groupId>{group}</groupId>
+            <artifactId>{artifact}</artifactId>
+            <version>{version}</version>
+        </dependency>""",
+    )
+    jar = (
+        repo
+        / group.replace(".", "/")
+        / artifact
+        / version
+        / f"{artifact}-{version}.jar"
+    )
+    _make_maven_jar(jar, group, artifact, version, skill_name="scan-skill")
+
+    repository = SkillRepository(
+        directory=tmp_path / ".agents" / "skills",
+        project=ProjectSettings(
+            sources=(MavenSource(pom_xml_path=pom, repository_path=repo),)
+        ),
+    )
+    matches = repository.scan_project()
+
+    assert len(matches) == 1
+    assert matches[0].available.name == "scan-skill"
+    assert matches[0].installed is None
+    assert matches[0].status.value == "installable"
+
+
+def test_maven_scan_project_detects_updatable_skills(tmp_path: Path) -> None:
+    repo = tmp_path / "m2" / "repository"
+    pom = tmp_path / "pom.xml"
+    group = "com.example"
+    artifact = "update-lib"
+    old_version = "1.0.0"
+    new_version = "2.0.0"
+
+    # Install the old version as an installed skill
+    install_dir = tmp_path / ".agents" / "skills"
+    Skill(
+        name="update-skill",
+        description="Update test.",
+        package_name=f"{group}:{artifact}",
+        package_version=old_version,
+        package_ecosystem="maven",
+        source="dependency",
+    ).install_to(install_dir)
+
+    _write_pom(
+        pom,
+        f"""        <dependency>
+            <groupId>{group}</groupId>
+            <artifactId>{artifact}</artifactId>
+            <version>{new_version}</version>
+        </dependency>""",
+    )
+    jar = (
+        repo
+        / group.replace(".", "/")
+        / artifact
+        / new_version
+        / f"{artifact}-{new_version}.jar"
+    )
+    _make_maven_jar(jar, group, artifact, new_version, skill_name="update-skill")
+
+    repository = SkillRepository(
+        directory=install_dir,
+        project=ProjectSettings(
+            sources=(MavenSource(pom_xml_path=pom, repository_path=repo),)
+        ),
+    )
+    matches = repository.scan_project()
+
+    assert len(matches) == 1
+    assert matches[0].status.value == "updatable"
+    assert matches[0].installed is not None
+    assert matches[0].available.package_version == new_version
+
+
+def test_maven_missing_pom_produces_empty_results(tmp_path: Path) -> None:
+    repo = tmp_path / "m2" / "repository"
+    skills = discover_package_source_skills(
+        MavenSource(pom_xml_path=tmp_path / "nonexistent.xml", repository_path=repo),
+    )
+    assert skills == []
+
+
+def test_maven_missing_jar_produces_empty_results(tmp_path: Path) -> None:
+    repo = tmp_path / "m2" / "repository"
+    pom = tmp_path / "pom.xml"
+    _write_pom(
+        pom,
+        """        <dependency>
+            <groupId>com.missing</groupId>
+            <artifactId>nojar-lib</artifactId>
+            <version>1.0.0</version>
+        </dependency>""",
+    )
+
+    skills = discover_package_source_skills(
+        MavenSource(pom_xml_path=pom, repository_path=repo),
+    )
+
+    assert skills == []
+
+
+def test_maven_skips_rejected_scope_dependencies(tmp_path: Path) -> None:
+    repo = tmp_path / "m2" / "repository"
+    pom = tmp_path / "pom.xml"
+    group = "com.example"
+    artifact = "provided-lib"
+    version = "1.0.0"
+
+    _write_pom(
+        pom,
+        f"""        <dependency>
+            <groupId>{group}</groupId>
+            <artifactId>{artifact}</artifactId>
+            <version>{version}</version>
+            <scope>provided</scope>
+        </dependency>""",
+    )
+    jar = (
+        repo
+        / group.replace(".", "/")
+        / artifact
+        / version
+        / f"{artifact}-{version}.jar"
+    )
+    _make_maven_jar(jar, group, artifact, version)
+
+    skills = discover_package_source_skills(
+        MavenSource(
+            pom_xml_path=pom,
+            repository_path=repo,
+            include_provided_scope=False,
+        ),
+    )
+    assert skills == []
+
+
+def test_maven_cross_ecosystem_isolation(tmp_path: Path) -> None:
+    """Maven and Python dependencies should not interfere with each other."""
+    repo = tmp_path / "m2" / "repository"
+    pom = tmp_path / "pom.xml"
+    group = "com.example"
+    artifact = "maven-lib"
+    version = "1.0.0"
+
+    _write_pom(
+        pom,
+        f"""        <dependency>
+            <groupId>{group}</groupId>
+            <artifactId>{artifact}</artifactId>
+            <version>{version}</version>
+        </dependency>""",
+    )
+    jar = (
+        repo
+        / group.replace(".", "/")
+        / artifact
+        / version
+        / f"{artifact}-{version}.jar"
+    )
+    _make_maven_jar(jar, group, artifact, version, skill_name="maven-skill")
+
+    repository = SkillRepository(
+        directory=tmp_path / ".agents" / "skills",
+        project=ProjectSettings(
+            sources=(MavenSource(pom_xml_path=pom, repository_path=repo),)
+        ),
+    )
+    matches = repository.scan_project()
+
+    assert len(matches) == 1
+    assert matches[0].available.package_ecosystem == "maven"

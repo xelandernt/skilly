@@ -272,50 +272,21 @@ def discover_installed_skills(
     return _core.discover_installed_skills(directory, file_system=file_system)
 
 
-def discover_venv_skills(
-    path: StrPath | None = None,
+def discover_package_source_skills(
+    source: dict[str, object],
     file_system: FileSystem | None = None,
 ) -> list[Skill]:
-    return _core.discover_venv_skills(path, file_system=file_system)
-
-
-def discover_node_modules_skills(
-    path: StrPath | None = None,
-    file_system: FileSystem | None = None,
-) -> list[Skill]:
-    return _core.discover_node_modules_skills(path, file_system=file_system)
+    return _core.discover_package_source_skills(source, file_system=file_system)
 
 
 def scan_project(
     directory: StrPath | None = None,
-    pyproject_toml_path: StrPath | None = None,
-    venv_path: StrPath | None = None,
-    include_project_dependencies: bool = True,
-    dependency_groups: list[str] | None = None,
-    exclude_dependency_groups: list[str] | None = None,
-    optional_dependencies: list[str] | None = None,
-    exclude_optional_dependencies: list[str] | None = None,
-    package_json_path: StrPath | None = None,
-    node_modules_path: StrPath | None = None,
-    include_node_dependencies: bool = True,
-    include_node_dev_dependencies: bool = True,
-    include_node_optional_dependencies: bool = True,
+    sources: list[dict[str, object]] | None = None,
     file_system: FileSystem | None = None,
 ) -> list[tuple[Skill, Skill | None]]:
     return _core.scan_project(
         directory=directory,
-        pyproject_toml_path=pyproject_toml_path,
-        venv_path=venv_path,
-        include_project_dependencies=include_project_dependencies,
-        dependency_groups=dependency_groups,
-        exclude_dependency_groups=exclude_dependency_groups,
-        optional_dependencies=optional_dependencies,
-        exclude_optional_dependencies=exclude_optional_dependencies,
-        package_json_path=package_json_path,
-        node_modules_path=node_modules_path,
-        include_node_dependencies=include_node_dependencies,
-        include_node_dev_dependencies=include_node_dev_dependencies,
-        include_node_optional_dependencies=include_node_optional_dependencies,
+        sources=sources,
         file_system=file_system,
     )
 
@@ -323,35 +294,13 @@ def scan_project(
 def available_dependency_skill(
     installed: Skill,
     directory: StrPath | None = None,
-    pyproject_toml_path: StrPath | None = None,
-    venv_path: StrPath | None = None,
-    include_project_dependencies: bool = True,
-    dependency_groups: list[str] | None = None,
-    exclude_dependency_groups: list[str] | None = None,
-    optional_dependencies: list[str] | None = None,
-    exclude_optional_dependencies: list[str] | None = None,
-    package_json_path: StrPath | None = None,
-    node_modules_path: StrPath | None = None,
-    include_node_dependencies: bool = True,
-    include_node_dev_dependencies: bool = True,
-    include_node_optional_dependencies: bool = True,
+    sources: list[dict[str, object]] | None = None,
     file_system: FileSystem | None = None,
 ) -> Skill | None:
     return _core.available_dependency_skill(
         installed,
         directory=directory,
-        pyproject_toml_path=pyproject_toml_path,
-        venv_path=venv_path,
-        include_project_dependencies=include_project_dependencies,
-        dependency_groups=dependency_groups,
-        exclude_dependency_groups=exclude_dependency_groups,
-        optional_dependencies=optional_dependencies,
-        exclude_optional_dependencies=exclude_optional_dependencies,
-        package_json_path=package_json_path,
-        node_modules_path=node_modules_path,
-        include_node_dependencies=include_node_dependencies,
-        include_node_dev_dependencies=include_node_dev_dependencies,
-        include_node_optional_dependencies=include_node_optional_dependencies,
+        sources=sources,
         file_system=file_system,
     )
 

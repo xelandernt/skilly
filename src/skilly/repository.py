@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
 from . import _bridge as bridge
 from .constants import (
@@ -46,7 +46,7 @@ class InstalledSkillUpdate:
 
 
 @dataclass(frozen=True)
-class PythonProjectSettings:
+class PythonSource:
     pyproject_toml_path: Path = DEFAULT_PYPROJECT_PATH
     venv_path: Path = DEFAULT_VENV_PATH
     include_project_dependencies: bool = True
@@ -73,7 +73,7 @@ class PythonProjectSettings:
 
 
 @dataclass(frozen=True)
-class NodeProjectSettings:
+class NodeSource:
     package_json_path: Path = Path("package.json")
     node_modules_path: Path = Path("node_modules")
     include_dependencies: bool = True
@@ -82,14 +82,30 @@ class NodeProjectSettings:
 
 
 @dataclass(frozen=True)
+class MavenSource:
+    pom_xml_path: Path = Path("pom.xml")
+    repository_path: Path = Path("~/.m2/repository").expanduser()
+    include_compile_scope: bool = True
+    include_runtime_scope: bool = True
+    include_provided_scope: bool = False
+    include_test_scope: bool = True
+    include_system_scope: bool = False
+
+
+PackageSource: TypeAlias = PythonSource | NodeSource | MavenSource
+
+
+@dataclass(frozen=True)
 class ProjectSettings:
-    python: PythonProjectSettings | None = None
-    node: NodeProjectSettings | None = None
+    sources: tuple[PackageSource, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.python is None and self.node is None:
-            object.__setattr__(self, "python", PythonProjectSettings())
-            object.__setattr__(self, "node", NodeProjectSettings())
+        if not isinstance(self.sources, tuple):
+            object.__setattr__(self, "sources", tuple(self.sources))
+
+    @staticmethod
+    def defaults() -> "ProjectSettings":
+        return ProjectSettings(sources=(PythonSource(), NodeSource(), MavenSource()))
 
 
 class SkillRepository:
@@ -97,11 +113,11 @@ class SkillRepository:
         self,
         *,
         directory: Path = DEFAULT_SKILLS_PATH,
-        project: ProjectSettings = ProjectSettings(),
+        project: ProjectSettings | None = None,
         file_system: FileSystem | None = None,
     ) -> None:
         self.directory = directory
-        self.project = project
+        self.project = project if project is not None else ProjectSettings.defaults()
         self._file_system = file_system
 
     def _directory(self, directory: Path | None) -> Path:
@@ -219,58 +235,12 @@ class SkillRepository:
         file_system: FileSystem | None = None,
     ) -> Sequence[SkillMatch]:
         settings = project or self.project
+        serialized_sources = _serialize_sources(settings.sources)
         return [
             SkillMatch(available=available, installed=installed)
             for available, installed in bridge.scan_project(
                 self._directory(directory),
-                pyproject_toml_path=settings.python.pyproject_toml_path
-                if settings.python
-                else Path("pyproject.toml"),
-                venv_path=settings.python.venv_path
-                if settings.python
-                else Path(".venv"),
-                include_project_dependencies=settings.python.include_project_dependencies
-                if settings.python
-                else False,
-                dependency_groups=(
-                    None
-                    if settings.python is None
-                    or settings.python.dependency_groups is None
-                    else list(settings.python.dependency_groups)
-                ),
-                exclude_dependency_groups=(
-                    None
-                    if settings.python is None
-                    or settings.python.exclude_dependency_groups is None
-                    else list(settings.python.exclude_dependency_groups)
-                ),
-                optional_dependencies=(
-                    None
-                    if settings.python is None
-                    or settings.python.optional_dependencies is None
-                    else list(settings.python.optional_dependencies)
-                ),
-                exclude_optional_dependencies=(
-                    None
-                    if settings.python is None
-                    or settings.python.exclude_optional_dependencies is None
-                    else list(settings.python.exclude_optional_dependencies)
-                ),
-                package_json_path=settings.node.package_json_path
-                if settings.node
-                else Path("package.json"),
-                node_modules_path=settings.node.node_modules_path
-                if settings.node
-                else Path("node_modules"),
-                include_node_dependencies=settings.node.include_dependencies
-                if settings.node
-                else False,
-                include_node_dev_dependencies=settings.node.include_dev_dependencies
-                if settings.node
-                else False,
-                include_node_optional_dependencies=settings.node.include_optional_dependencies
-                if settings.node
-                else False,
+                sources=serialized_sources,
                 file_system=self._resolve_file_system(file_system),
             )
         ]
@@ -368,54 +338,11 @@ class SkillRepository:
         file_system: FileSystem | None = None,
     ) -> Skill | None:
         settings = self._project_settings(project=project)
+        serialized_sources = _serialize_sources(settings.sources)
         return bridge.available_dependency_skill(
             installed_skill,
             self._directory(directory),
-            pyproject_toml_path=settings.python.pyproject_toml_path
-            if settings.python
-            else Path("pyproject.toml"),
-            venv_path=settings.python.venv_path if settings.python else Path(".venv"),
-            include_project_dependencies=settings.python.include_project_dependencies
-            if settings.python
-            else False,
-            dependency_groups=(
-                None
-                if settings.python is None or settings.python.dependency_groups is None
-                else list(settings.python.dependency_groups)
-            ),
-            exclude_dependency_groups=(
-                None
-                if settings.python is None
-                or settings.python.exclude_dependency_groups is None
-                else list(settings.python.exclude_dependency_groups)
-            ),
-            optional_dependencies=(
-                None
-                if settings.python is None
-                or settings.python.optional_dependencies is None
-                else list(settings.python.optional_dependencies)
-            ),
-            exclude_optional_dependencies=(
-                None
-                if settings.python is None
-                or settings.python.exclude_optional_dependencies is None
-                else list(settings.python.exclude_optional_dependencies)
-            ),
-            package_json_path=settings.node.package_json_path
-            if settings.node
-            else Path("package.json"),
-            node_modules_path=settings.node.node_modules_path
-            if settings.node
-            else Path("node_modules"),
-            include_node_dependencies=settings.node.include_dependencies
-            if settings.node
-            else False,
-            include_node_dev_dependencies=settings.node.include_dev_dependencies
-            if settings.node
-            else False,
-            include_node_optional_dependencies=settings.node.include_optional_dependencies
-            if settings.node
-            else False,
+            sources=serialized_sources,
             file_system=self._resolve_file_system(file_system),
         )
 
@@ -432,3 +359,68 @@ class SkillRepository:
             if available_skill.matches(installed_skill):
                 return installed_skill
         return None
+
+
+def _serialize_sources(
+    sources: tuple[PackageSource, ...],
+) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    for source in sources:
+        if isinstance(source, PythonSource):
+            result.append(
+                {
+                    "kind": "python",
+                    "pyproject_toml_path": str(source.pyproject_toml_path),
+                    "venv_path": str(source.venv_path),
+                    "include_project_dependencies": source.include_project_dependencies,
+                    "dependency_groups": (
+                        source.dependency_groups
+                        if source.dependency_groups is not None
+                        and len(source.dependency_groups) > 0
+                        else None
+                    ),
+                    "exclude_dependency_groups": (
+                        source.exclude_dependency_groups
+                        if source.exclude_dependency_groups is not None
+                        and len(source.exclude_dependency_groups) > 0
+                        else None
+                    ),
+                    "optional_dependencies": (
+                        source.optional_dependencies
+                        if source.optional_dependencies is not None
+                        and len(source.optional_dependencies) > 0
+                        else None
+                    ),
+                    "exclude_optional_dependencies": (
+                        source.exclude_optional_dependencies
+                        if source.exclude_optional_dependencies is not None
+                        and len(source.exclude_optional_dependencies) > 0
+                        else None
+                    ),
+                }
+            )
+        elif isinstance(source, NodeSource):
+            result.append(
+                {
+                    "kind": "node",
+                    "package_json_path": str(source.package_json_path),
+                    "node_modules_path": str(source.node_modules_path),
+                    "include_dependencies": source.include_dependencies,
+                    "include_dev_dependencies": source.include_dev_dependencies,
+                    "include_optional_dependencies": source.include_optional_dependencies,
+                }
+            )
+        elif isinstance(source, MavenSource):
+            result.append(
+                {
+                    "kind": "maven",
+                    "pom_xml_path": str(source.pom_xml_path),
+                    "repository_path": str(source.repository_path),
+                    "include_compile_scope": source.include_compile_scope,
+                    "include_runtime_scope": source.include_runtime_scope,
+                    "include_provided_scope": source.include_provided_scope,
+                    "include_test_scope": source.include_test_scope,
+                    "include_system_scope": source.include_system_scope,
+                }
+            )
+    return result

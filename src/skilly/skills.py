@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
 
 from . import _bridge as bridge
 from ._core import Skill
-from .constants import DEFAULT_SKILLS_PATH, DEFAULT_VENV_PATH
+from .constants import DEFAULT_SKILLS_PATH
 
 if TYPE_CHECKING:
     from ._core import (
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
         GitHubSkillLocationData,
     )
     from .filesystem import FileSystem
+    from .repository import PackageSource
 
 
 ResourceKind: TypeAlias = Literal["script", "reference", "asset", "other"]
@@ -44,7 +45,7 @@ class SkillOrigin:
 class SkillResource:
     relative_path: PurePosixPath
     kind: ResourceKind
-    content: str = ""
+    content: bytes = b""
 
 
 @dataclass(frozen=True)
@@ -141,20 +142,36 @@ def resolve_skills_directory(
     return Path(bridge.resolve_skills_directory(agent, global_=global_))
 
 
-def discover_venv_skills(
-    path: Path = DEFAULT_VENV_PATH,
+def _source_to_dict(source: PackageSource) -> dict[str, Any]:
+    from .repository import MavenSource, NodeSource, PythonSource
+
+    if isinstance(source, PythonSource):
+        return {
+            "kind": "python",
+            "venv_path": str(source.venv_path),
+        }
+    if isinstance(source, NodeSource):
+        return {
+            "kind": "node",
+            "node_modules_path": str(source.node_modules_path),
+        }
+    if isinstance(source, MavenSource):
+        return {
+            "kind": "maven",
+            "pom_xml_path": str(source.pom_xml_path),
+            "repository_path": str(source.repository_path),
+        }
+    raise TypeError(f"unsupported source type: {type(source).__name__}")
+
+
+def discover_package_source_skills(
+    source: PackageSource,
     *,
     file_system: FileSystem | None = None,
 ) -> list[Skill]:
-    return bridge.discover_venv_skills(path, file_system=file_system)
-
-
-def discover_node_modules_skills(
-    path: Path | None = None,
-    *,
-    file_system: FileSystem | None = None,
-) -> list[Skill]:
-    return bridge.discover_node_modules_skills(path, file_system=file_system)
+    return bridge.discover_package_source_skills(
+        _source_to_dict(source), file_system=file_system
+    )
 
 
 def discover_github_skills(

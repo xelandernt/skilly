@@ -3,7 +3,8 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from skilly.repository import SkillRepository
-from skilly.skills import Skill, SkillResource, discover_venv_skills
+from skilly import PythonSource
+from skilly.skills import Skill, SkillResource, discover_package_source_skills
 from helpers import make_venv, write_distribution, write_skill
 
 
@@ -213,10 +214,10 @@ Directory based instructions.
         "other",
     ]
     assert [resource.content for resource in skill.resources] == [
-        "template\n",
-        "# Reference\n",
-        "print('extract')\n",
-        "{}\n",
+        b"template\n",
+        b"# Reference\n",
+        b"print('extract')\n",
+        b"{}\n",
     ]
     assert [resource.relative_path.as_posix() for resource in skill.scripts] == [
         "scripts/extract.py"
@@ -258,7 +259,7 @@ Use this skill carefully.
         record_rows=["sample_pkg/.agents/skills/sample-skill/SKILL.md,,"],
     )
 
-    skills = discover_venv_skills(venv_path)
+    skills = discover_package_source_skills(PythonSource(venv_path=venv_path))
 
     assert len(skills) == 1
     skill = skills[0]
@@ -302,7 +303,7 @@ Invalid extra field.
         record_rows=["broken_pkg/.agents/skills/broken-skill/SKILL.md,,"],
     )
 
-    skills = discover_venv_skills(venv_path)
+    skills = discover_package_source_skills(PythonSource(venv_path=venv_path))
 
     assert len(skills) == 1
     assert skills[0].name == "broken-skill"
@@ -331,7 +332,7 @@ Use this skill carefully.
         record_rows=[r"sample_pkg\.agents\skills\sample-skill\SKILL.md,,"],
     )
 
-    skills = discover_venv_skills(venv_path)
+    skills = discover_package_source_skills(PythonSource(venv_path=venv_path))
 
     assert [skill.name for skill in skills] == ["sample-skill"]
     assert skills[0].path == skill_path.parent.resolve()
@@ -372,7 +373,7 @@ def test_install_rejects_paths_outside_skill_directory(tmp_path: Path) -> None:
     skill = Skill(
         "safe-skill",
         "Safe skill.",
-        resources=[SkillResource(PurePosixPath("../escaped.txt"), "other", "escaped")],
+        resources=[SkillResource(PurePosixPath("../escaped.txt"), "other", b"escaped")],
     )
 
     with pytest.raises(RuntimeError, match="relative resource path"):
@@ -388,7 +389,7 @@ def test_repository_replace_removes_stale_resources(tmp_path: Path) -> None:
         "sample-skill",
         "Original skill.",
         resources=[
-            SkillResource(PurePosixPath("references/stale.md"), "reference", "stale\n")
+            SkillResource(PurePosixPath("references/stale.md"), "reference", b"stale\n")
         ],
     )
     replacement = Skill("sample-skill", "Replacement skill.")

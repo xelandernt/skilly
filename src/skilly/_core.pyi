@@ -13,7 +13,7 @@ class SkillResourceLike(Protocol):
     @property
     def kind(self) -> ResourceKind: ...
     @property
-    def content(self) -> str: ...
+    def content(self) -> bytes: ...
 
 class GitHubSkillFetcherLike(Protocol):
     @property
@@ -314,43 +314,18 @@ def resolve_skills_directory(
 def discover_installed_skills(
     directory: StrPath | None = ..., file_system: FileSystem | None = ...
 ) -> list[Skill]: ...
-def discover_venv_skills(
-    path: StrPath | None = ..., file_system: FileSystem | None = ...
-) -> list[Skill]: ...
-def discover_node_modules_skills(
-    path: StrPath | None = ..., file_system: FileSystem | None = ...
+def discover_package_source_skills(
+    source: dict[str, object], file_system: FileSystem | None = ...
 ) -> list[Skill]: ...
 def scan_project(
     directory: StrPath | None = ...,
-    pyproject_toml_path: StrPath | None = ...,
-    venv_path: StrPath | None = ...,
-    include_project_dependencies: bool = ...,
-    dependency_groups: list[str] | None = ...,
-    exclude_dependency_groups: list[str] | None = ...,
-    optional_dependencies: list[str] | None = ...,
-    exclude_optional_dependencies: list[str] | None = ...,
-    package_json_path: StrPath | None = ...,
-    node_modules_path: StrPath | None = ...,
-    include_node_dependencies: bool = ...,
-    include_node_dev_dependencies: bool = ...,
-    include_node_optional_dependencies: bool = ...,
+    sources: list[dict[str, object]] | None = ...,
     file_system: FileSystem | None = ...,
 ) -> list[tuple[Skill, Skill | None]]: ...
 def available_dependency_skill(
     installed: Skill,
     directory: StrPath | None = ...,
-    pyproject_toml_path: StrPath | None = ...,
-    venv_path: StrPath | None = ...,
-    include_project_dependencies: bool = ...,
-    dependency_groups: list[str] | None = ...,
-    exclude_dependency_groups: list[str] | None = ...,
-    optional_dependencies: list[str] | None = ...,
-    exclude_optional_dependencies: list[str] | None = ...,
-    package_json_path: StrPath | None = ...,
-    node_modules_path: StrPath | None = ...,
-    include_node_dependencies: bool = ...,
-    include_node_dev_dependencies: bool = ...,
-    include_node_optional_dependencies: bool = ...,
+    sources: list[dict[str, object]] | None = ...,
     file_system: FileSystem | None = ...,
 ) -> Skill | None: ...
 def parse_github_skill_url(github_url: str) -> GitHubSkillLocationData: ...
