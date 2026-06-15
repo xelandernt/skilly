@@ -24,15 +24,13 @@ pub const RESOURCE_KIND_REFERENCE: &str = "reference";
 pub const RESOURCE_KIND_ASSET: &str = "asset";
 pub const RESOURCE_KIND_OTHER: &str = "other";
 
-pub const SKILLY_MANAGED_METADATA_KEY: &str = "skilly-managed-by";
-pub const SKILLY_MANAGED_METADATA_VALUE: &str = "skilly";
 pub const SKILLY_SOURCE_METADATA_KEY: &str = "skilly-source";
 pub const SKILLY_SOURCE_DEPENDENCY: &str = "dependency";
 pub const SKILLY_SOURCE_GITHUB: &str = "github";
 pub const SKILLY_SOURCE_SKILLSMP: &str = "skillsmp";
 pub const SKILLY_UNKNOWN_SOURCE: &str = "unknown";
-pub const SKILLY_GITHUB_URL_METADATA_KEY: &str = "skilly-github-url";
-pub const SKILLY_GITHUB_COMMIT_SHA_METADATA_KEY: &str = "skilly-github-commit-sha";
+pub const SKILLY_GIT_URL_METADATA_KEY: &str = "skilly-git-url";
+pub const SKILLY_COMMIT_SHA_METADATA_KEY: &str = "skilly-commit-sha";
 pub const SKILLY_SKILLSMP_ID_METADATA_KEY: &str = "skilly-skillsmp-id";
 pub const SKILLY_DEPENDENCY_PACKAGE_NAME_METADATA_KEY: &str = "skilly-package-name";
 pub const SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY: &str = "skilly-package-version";
@@ -391,10 +389,10 @@ impl SkillSourceMetadata {
                 .cloned();
         }
         if self.github_url.is_none() {
-            self.github_url = metadata.get(SKILLY_GITHUB_URL_METADATA_KEY).cloned();
+            self.github_url = metadata.get(SKILLY_GIT_URL_METADATA_KEY).cloned();
         }
         if self.github_commit_sha.is_none() {
-            self.github_commit_sha = metadata.get(SKILLY_GITHUB_COMMIT_SHA_METADATA_KEY).cloned();
+            self.github_commit_sha = metadata.get(SKILLY_COMMIT_SHA_METADATA_KEY).cloned();
         }
         if self.skillsmp_id.is_none() {
             self.skillsmp_id = metadata.get(SKILLY_SKILLSMP_ID_METADATA_KEY).cloned();
@@ -410,11 +408,14 @@ impl SkillSourceMetadata {
             .unwrap_or_else(|| infer_source(metadata))
     }
 
-    fn insert_managed_metadata(&self, metadata: &mut BTreeMap<String, String>) {
+    fn insert_source_metadata(&self, metadata: &mut BTreeMap<String, String>) {
         if let Some(source) = self.source.as_deref().filter(|source| {
             matches!(
                 *source,
-                SKILLY_SOURCE_DEPENDENCY | SKILLY_SOURCE_GITHUB | SKILLY_SOURCE_SKILLSMP
+                SKILLY_SOURCE_DEPENDENCY
+                    | SKILLY_SOURCE_GITHUB
+                    | SKILLY_SOURCE_SKILLSMP
+                    | SKILLY_UNKNOWN_SOURCE
             )
         }) {
             metadata.insert(SKILLY_SOURCE_METADATA_KEY.to_string(), source.to_string());
@@ -441,14 +442,11 @@ impl SkillSourceMetadata {
             );
         }
         if let Some(github_url) = self.github_url.as_ref() {
-            metadata.insert(
-                SKILLY_GITHUB_URL_METADATA_KEY.to_string(),
-                github_url.clone(),
-            );
+            metadata.insert(SKILLY_GIT_URL_METADATA_KEY.to_string(), github_url.clone());
         }
         if let Some(github_commit_sha) = self.github_commit_sha.as_ref() {
             metadata.insert(
-                SKILLY_GITHUB_COMMIT_SHA_METADATA_KEY.to_string(),
+                SKILLY_COMMIT_SHA_METADATA_KEY.to_string(),
                 github_commit_sha.clone(),
             );
         }
@@ -751,7 +749,10 @@ fn infer_source(metadata: &BTreeMap<String, String>) -> String {
     if let Some(source) = metadata.get(SKILLY_SOURCE_METADATA_KEY)
         && matches!(
             source.as_str(),
-            SKILLY_SOURCE_DEPENDENCY | SKILLY_SOURCE_GITHUB | SKILLY_SOURCE_SKILLSMP
+            SKILLY_SOURCE_DEPENDENCY
+                | SKILLY_SOURCE_GITHUB
+                | SKILLY_SOURCE_SKILLSMP
+                | SKILLY_UNKNOWN_SOURCE
         )
     {
         return source.clone();
@@ -759,10 +760,20 @@ fn infer_source(metadata: &BTreeMap<String, String>) -> String {
     if metadata.contains_key(SKILLY_SKILLSMP_ID_METADATA_KEY) {
         return SKILLY_SOURCE_SKILLSMP.to_string();
     }
-    if metadata.contains_key(SKILLY_GITHUB_URL_METADATA_KEY) {
+    if metadata.contains_key(SKILLY_GIT_URL_METADATA_KEY) {
         return SKILLY_SOURCE_GITHUB.to_string();
     }
     SKILLY_UNKNOWN_SOURCE.to_string()
+}
+
+fn has_managed_metadata(metadata: &BTreeMap<String, String>) -> bool {
+    metadata.contains_key(SKILLY_SOURCE_METADATA_KEY)
+        || metadata.contains_key(SKILLY_GIT_URL_METADATA_KEY)
+        || metadata.contains_key(SKILLY_COMMIT_SHA_METADATA_KEY)
+        || metadata.contains_key(SKILLY_SKILLSMP_ID_METADATA_KEY)
+        || metadata.contains_key(SKILLY_DEPENDENCY_PACKAGE_NAME_METADATA_KEY)
+        || metadata.contains_key(SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY)
+        || metadata.contains_key(SKILLY_PACKAGE_ECOSYSTEM_METADATA_KEY)
 }
 
 fn infer_package_ecosystem(metadata: &BTreeMap<String, String>) -> Option<PackageEcosystem> {
@@ -1258,16 +1269,11 @@ impl SkillData {
         Self::from_dir_with_source_metadata_in(file_system, &root, &SkillSourceMetadata::default())
     }
 
-    /// Build the full metadata map including the managed-by marker and source tracking.
+    /// Build the full metadata map including persisted source tracking.
     #[must_use]
     pub fn managed_metadata(&self) -> BTreeMap<String, String> {
         let mut metadata = self.metadata.clone();
-        metadata.insert(
-            SKILLY_MANAGED_METADATA_KEY.to_string(),
-            SKILLY_MANAGED_METADATA_VALUE.to_string(),
-        );
-        self.source_metadata()
-            .insert_managed_metadata(&mut metadata);
+        self.source_metadata().insert_source_metadata(&mut metadata);
         metadata
     }
 
@@ -1331,14 +1337,11 @@ impl SkillData {
         self.name == other.name
     }
 
-    /// Returns `true` when the skill carries the skilly-managed metadata marker.
+    /// Returns `true` when the skill carries persisted skilly provenance metadata.
     #[must_use]
     #[inline]
     pub fn is_installed(&self) -> bool {
-        self.metadata
-            .get(SKILLY_MANAGED_METADATA_KEY)
-            .map(|value| value == SKILLY_MANAGED_METADATA_VALUE)
-            .unwrap_or(false)
+        has_managed_metadata(&self.metadata)
     }
 
     /// Returns `true` when the skill source is a dependency install.
@@ -2752,7 +2755,7 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             Some(PackageEcosystem::Node),
         );
 
-        source_metadata.insert_managed_metadata(&mut metadata);
+        source_metadata.insert_source_metadata(&mut metadata);
 
         assert_eq!(
             metadata.get("skilly-package-ecosystem"),
@@ -2766,6 +2769,36 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             metadata.get("skilly-package-version"),
             Some(&"1.0.0".to_string())
         );
+    }
+
+    #[test]
+    fn managed_metadata_marks_local_install_with_unknown_source() {
+        let skill = SkillData {
+            name: "local-skill".to_string(),
+            description: "Local skill".to_string(),
+            path: None,
+            content: String::new(),
+            license: None,
+            compatibility: None,
+            metadata: BTreeMap::new(),
+            allowed_tools: None,
+            resources: Vec::new(),
+            resource_warnings: Vec::new(),
+            source: super::SKILLY_UNKNOWN_SOURCE.to_string(),
+            package_name: None,
+            package_version: None,
+            github_url: None,
+            github_commit_sha: None,
+            skillsmp_id: None,
+            package_ecosystem: None,
+        };
+
+        let managed = skill.managed_metadata();
+        assert_eq!(
+            managed.get(super::SKILLY_SOURCE_METADATA_KEY),
+            Some(&super::SKILLY_UNKNOWN_SOURCE.to_string())
+        );
+        assert!(super::has_managed_metadata(&managed));
     }
 
     #[test]

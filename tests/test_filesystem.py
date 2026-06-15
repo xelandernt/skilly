@@ -427,7 +427,7 @@ Generated instructions.
 
     skill_markdown = Path("/virtual/project/.agents/skills/generated-skill/SKILL.md")
     assert installed.path == Path("/virtual/project/.agents/skills/generated-skill")
-    assert "skilly-managed-by: skilly" in file_system.read_file(skill_markdown)
+    assert "skilly-source: unknown" in file_system.read_file(skill_markdown)
 
     removed = repository.remove("generated-skill", directory=Path(".agents/skills"))
 

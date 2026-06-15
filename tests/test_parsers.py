@@ -346,10 +346,9 @@ def test_installed_skill_state_comes_from_metadata(tmp_path: Path) -> None:
 name: installed-skill
 description: Installed skill.
 metadata:
-  skilly-managed-by: skilly
   skilly-source: skillsmp
-  skilly-github-url: https://github.com/example/project/tree/main/.agents/skills/installed-skill
-  skilly-github-commit-sha: 0123456789abcdef0123456789abcdef01234567
+  skilly-git-url: https://github.com/example/project/tree/main/.agents/skills/installed-skill
+  skilly-commit-sha: 0123456789abcdef0123456789abcdef01234567
   skilly-skillsmp-id: skill-1
 ---
 Body
