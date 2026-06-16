@@ -1,0 +1,54 @@
+[project]
+site_name = "skilly"
+site_description = "Manage Agent Skills from the command line or Python."
+site_url = "https://xelandernt.github.io/skilly/"
+docs_dir = "docs"
+site_dir = "site"
+copyright = "MIT"
+nav = [
+    {"Home" = "index.md"},
+    {"Getting started" = [
+        "getting-started/index.md",
+        "getting-started/installation.md",
+        "getting-started/core-concepts.md",
+    ]},
+    {"CLI" = [
+        "cli/index.md",
+        "cli/creating-skills.md",
+        "cli/installing-and-managing.md",
+        "cli/dependency-scanning.md",
+        "cli/destinations-and-configuration.md",
+    ]},
+    {"Python API" = [
+        "python/index.md",
+        "python/skills-and-resources.md",
+        "python/repository-and-sources.md",
+        "python/skillsmp.md",
+        "python/custom-filesystems.md",
+    ]},
+    {"Contributing" = [
+        "contributing.md",
+        "documentation.md",
+    ]},
+]
+
+[project.repo]
+url = "https://github.com/xelandernt/skilly"
+
+[project.theme]
+features = [
+    "navigation.instant",
+    "navigation.tabs",
+    "navigation.tabs.sticky",
+    "navigation.sections",
+    "navigation.expand",
+    "navigation.path",
+    "navigation.top",
+    "toc.follow",
+]
+
+[project.validation]
+strict = true
+absolute_links = "warn"
+unrecognized_links = "warn"
+anchors = "warn"

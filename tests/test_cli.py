@@ -33,7 +33,7 @@ def test_run_cli_root_help_describes_commands(capfd) -> None:
     output = capfd.readouterr().out
     assert "-V, --version" in output
     assert (
-        "Scan dependency-provided skills from pyproject.toml/.venv and package.json/node_modules"
+        "Scan dependency-provided skills from pyproject.toml/.venv, package.json/node_modules, and pom.xml"
         in output
     )
     assert "Download one or more skills from a GitHub repository URL" in output
@@ -53,7 +53,7 @@ def test_run_cli_scan_help_describes_options(capfd) -> None:
     assert exit_code == 0
     output = capfd.readouterr().out
     assert (
-        "Scan dependency-provided skills from pyproject.toml/.venv and package.json/node_modules"
+        "Scan dependency-provided skills from pyproject.toml/.venv, package.json/node_modules, and pom.xml"
         in output
     )
     assert "Directory where skilly installs managed skills" in output
@@ -272,7 +272,7 @@ def test_native_cli_root_help_describes_commands() -> None:
     assert result.returncode == 0
     assert "-V, --version" in result.stdout
     assert (
-        "Scan dependency-provided skills from pyproject.toml/.venv and package.json/node_modules"
+        "Scan dependency-provided skills from pyproject.toml/.venv, package.json/node_modules, and pom.xml"
         in result.stdout
     )
     assert "Download one or more skills from a GitHub repository URL" in result.stdout
