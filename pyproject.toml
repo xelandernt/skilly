@@ -10,6 +10,7 @@ name = "skilly"
 description = "Manage agent skills."
 readme = "README.md"
 requires-python = ">=3.10"
+
 dependencies = [
     "fastapi>=0.136.3",
     "packaging>=26.2",
@@ -27,6 +28,8 @@ classifiers = [
 
 [project.urls]
 repository = "https://github.com/xelandernt/skilly"
+documentation = "https://xelandernt.github.io/skilly/"
+
 
 [project.scripts]
 skilly = "skilly._cli:main"
