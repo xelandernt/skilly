@@ -24,8 +24,7 @@ just docs-build    # Strict production build
 ```
 
 The documentation site is built with [Zensical](https://zensical.org/) from
-Markdown files in `docs/`. See [documentation conventions](documentation.md)
-for authoring guidelines.
+Markdown files in `docs/`.
 
 ## Quality gates
 

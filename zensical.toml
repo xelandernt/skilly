@@ -30,7 +30,6 @@ nav = [
     ]},
     {"Contributing" = [
         "contributing.md",
-        "documentation.md",
     ]},
 ]
 
