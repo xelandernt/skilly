@@ -8,61 +8,58 @@
 
 # skilly
 
-Manage [Agent Skills](https://agentskills.io/specification) from the command line or Python.
-
-`skilly` creates specification-compliant skills, installs skills from GitHub, Python, or Node dependencies, and keeps managed skills up to date.
-
-## Table of Contents
-
-- [Installation](#installation)
-  - [Python](#python)
-  - [Node](#node)
-  - [Homebrew](#homebrew)
-  - [Info](#info)
-- [Quick Start](#quick-start)
-- [CLI Commands](#cli-commands)
-  - [Create Skills](#create-skills)
-  - [Install Dependency Skills](#install-dependency-skills)
-  - [Install GitHub Skills](#install-github-skills)
-  - [Destinations](#destinations)
-  - [Configure Destinations](#configure-destinations)
-  - [GitHub Authentication](#github-authentication)
-- [Python API](#python-api)
-- [Development](#development)
-- [License](#license)
+Manage [Agent Skills](https://agentskills.io/specification) from the command
+line or Python. Creates specification-compliant skills, installs from GitHub or
+dependencies, and keeps them up to date.
 
 ## Installation
 
+```shell
+uvx skilly --help               # Python (uvx/pip)
+npx @xelandernt/skilly --help   # Node (npx)
+brew install xelandernt/skilly/skilly  # Homebrew
+```
 
 ### Python
+
 ```shell
 uvx skilly --help
 ```
 
+Ships CLI + Python import surface. Pre-built wheels for Linux x64, macOS
+arm64/x64, Windows x64.
+
 ### Node
+
 ```shell
 npx @xelandernt/skilly --help
 ```
 
+Ships native Rust CLI (macOS arm64/x64, Linux x64 glibc, Windows x64). No
+Python import surface.
 
 ### Homebrew
+
 ```shell
 brew tap xelandernt/skilly https://github.com/xelandernt/skilly
 brew install xelandernt/skilly/skilly
 ```
 
+Ships native Rust CLI (macOS arm64/x64, Linux x64).
+
 ### Info
 
-| Method        | Ships                                                                                                |
-|---------------|------------------------------------------------------------------------------------------------------|
-| `uvx` / `pip` | Python package with import surface + CLI (pre-built wheels: Linux x64, macOS arm64/x64, Windows x64) |
-| `npx`         | Native Rust CLI (macOS arm64/x64, Linux x64 glibc, Windows x64)                                      |
-| `brew`        | Native Rust CLI (macOS arm64/x64, Linux x64)                                                         |
+See the [installation guide](https://xelandernt.github.io/skilly/getting-started/installation/)
+for a full capability comparison.
 
 ## Quick Start
 
 ```shell
-uvx skilly --help
+skilly create deployment-checks \
+  --description "Validate deployment readiness." \
+  --instructions "# Instructions\n\nRun the deployment checklist." \
+  --yes
+skilly list
 ```
 
 ## CLI Commands
@@ -83,54 +80,15 @@ Run `skilly --version` to print the installed package version.
 
 ### Create Skills
 
-Interactive terminals open a full-screen editor. `Ctrl+S` creates the skill, `Ctrl+X` cancels.
-
-```shell
-uvx skilly create deployment-checks \
-  --description "Validate deployment readiness before a production release." \
-  --instructions "# Instructions
-
-Run the deployment checklist and report blockers." \
-  --metadata owner=platform \
-  --with-scripts \
-  --yes
-```
-
-Existing skills are rejected unless `--overwrite` is passed.
+See [creating skills](https://xelandernt.github.io/skilly/cli/creating-skills/).
 
 ### Install Dependency Skills
 
-`skilly scan` discovers skills shipped by your project's dependencies across two ecosystems:
-
-- **Python** — reads `pyproject.toml` and scans the project's `.venv` for packages that bundle skills in a `skills/` directory.
-- **Node** — reads `package.json` (`dependencies`, `devDependencies`, `optionalDependencies`) and scans `node_modules/` for packages that bundle skills in a `skills/` directory.
-
-```shell
-uvx skilly scan
-```
-
-Both ecosystems are scanned by default whenever the corresponding manifest and package directory exist. Results are shown with their source (e.g. `node:dependencies`, `python:project`) and status (`installable`, `installed`, `updatable`).
-
-Include or exclude specific Python extras and dependency groups:
-
-```shell
-uvx skilly scan --group dev --group test --exclude-extra docs
-uvx skilly scan --no-project-dependencies         # skip [project].dependencies
-```
-
+See [dependency scanning](https://xelandernt.github.io/skilly/cli/dependency-scanning/).
 
 ### Install GitHub Skills
 
-```shell
-uvx skilly download https://github.com/example/project
-```
-
-When a repository contains multiple skills:
-
-```shell
-uvx skilly download https://github.com/example/project --all
-uvx skilly download https://github.com/example/project --skill-name code-review
-```
+See [installing and managing](https://xelandernt.github.io/skilly/cli/installing-and-managing/).
 
 ### Destinations
 
@@ -208,7 +166,8 @@ The default directory opens first in interactive menus (`list`, `scan`, etc.).
 
 ### GitHub Authentication
 
-Set a token for higher API rate limits (first available wins: `SKILLY_GITHUB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`):
+Set a token for higher API rate limits (first available wins:
+`SKILLY_GITHUB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`):
 
 ```shell
 export SKILLY_GITHUB_TOKEN=ghp_your_token
@@ -218,7 +177,9 @@ All GitHub-fetching commands also accept `--github-token`.
 
 ## Python API
 
-`SkillRepository` bundles a directory and project settings for stateful workflows:
+Full [Python API reference](https://xelandernt.github.io/skilly/python/) with
+`SkillRepository`, discovery functions, source types, SkillsMP client, and
+custom filesystem protocol.
 
 ```python
 from pathlib import Path
@@ -331,10 +292,10 @@ print(result.data.skills[0].github_url)
 ## Development
 
 ```shell
-just install      # Install dev dependencies + editable extension
-just lint         # Run linters
-just test         # Run tests
-just typecheck    # Run type checkers
+just install
+just lint
+just test
+just typecheck
 ```
 
 ## License

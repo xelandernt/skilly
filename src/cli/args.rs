@@ -68,7 +68,7 @@ pub(crate) enum Commands {
         destination: DestinationArgs,
     },
     #[command(
-        about = "Scan dependency-provided skills from pyproject.toml/.venv and package.json/node_modules."
+        about = "Scan dependency-provided skills from pyproject.toml/.venv, package.json/node_modules, and pom.xml."
     )]
     Scan {
         #[command(flatten)]

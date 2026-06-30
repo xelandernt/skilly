@@ -68,6 +68,16 @@ bump component="patch":
 
     just install
 
+# preview documentation site
+docs:
+    @just docs-build
+    uv run --group docs zensical serve
+
+# build documentation site (strict, production)
+docs-build:
+    rm -rf site
+    uv run --group docs zensical build --strict
+
 # publish project on pypi
 publish:
     rm -rf dist

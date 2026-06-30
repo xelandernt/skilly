@@ -32,6 +32,9 @@ repository = "https://github.com/xelandernt/skilly"
 skilly = "skilly._cli:main"
 
 [dependency-groups]
+docs = [
+    "zensical>=0.0.45,<0.1",
+]
 dev = [
     "maturin>=1.7,<2",
     "prek>=0.3.13",
