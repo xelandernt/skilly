@@ -487,6 +487,9 @@ fn run_scan(
                     match actions[action_index] {
                         BACK_CHOICE => continue,
                         EXIT_CHOICE => break,
+                        VIEW_FILES_CHOICE => {
+                            run_file_viewer(&mut session, &selected.available)?;
+                        }
                         INSTALL_CHOICE | UPDATE_CHOICE => {
                             let installed = install_available_skill(
                                 directory,
@@ -1713,6 +1716,9 @@ fn run_skillsmp_search(
         match actions[action_index] {
             BACK_CHOICE => continue,
             EXIT_CHOICE => break,
+            VIEW_FILES_CHOICE => {
+                run_file_viewer(&mut session, &installable)?;
+            }
             INSTALL_CHOICE => {
                 let installed = installable.install_to(directory, None, overwrite)?;
                 remember_status(
@@ -1901,6 +1907,9 @@ fn run_skillsmp_list(
                     SelectMenuResult::Selected(action_index) => match actions[action_index] {
                         BACK_CHOICE => continue,
                         EXIT_CHOICE => break,
+                        VIEW_FILES_CHOICE => {
+                            run_file_viewer(&mut session, &selected)?;
+                        }
                         UPDATE_CHOICE => {
                             remember_status(
                                 &mut messages,
@@ -2190,9 +2199,9 @@ fn scan_dependency_label(origins: &[ProjectDependencyOrigin]) -> String {
 
 fn scan_skill_actions(item: &SkillMatchData) -> Vec<&'static str> {
     match scan_match_status(&item.available, item.installed.as_ref()) {
-        STATUS_UPDATABLE => vec![UPDATE_CHOICE, BACK_CHOICE, EXIT_CHOICE],
-        STATUS_INSTALLED => vec![BACK_CHOICE, EXIT_CHOICE],
-        _ => vec![INSTALL_CHOICE, BACK_CHOICE, EXIT_CHOICE],
+        STATUS_UPDATABLE => vec![UPDATE_CHOICE, VIEW_FILES_CHOICE, BACK_CHOICE, EXIT_CHOICE],
+        STATUS_INSTALLED => vec![VIEW_FILES_CHOICE, BACK_CHOICE, EXIT_CHOICE],
+        _ => vec![INSTALL_CHOICE, VIEW_FILES_CHOICE, BACK_CHOICE, EXIT_CHOICE],
     }
 }
 
