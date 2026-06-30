@@ -411,6 +411,7 @@ fn run_scan(
                 preview_lines: scan_match_preview_lines(item),
                 status: scan_menu_status(item),
                 selectable: true,
+                filter_text: Some(item.available.name.clone()),
             })
             .collect::<Vec<_>>();
         let exit_index = items.len();
@@ -470,6 +471,7 @@ fn run_scan(
                                     preview_lines: scan_match_preview_lines(&selected),
                                     status: MenuItemStatus::Default,
                                     selectable: true,
+                                    filter_text: None,
                                 })
                                 .collect(),
                             default: action_menu_default(&actions),
@@ -546,6 +548,7 @@ fn run_scan(
                                         .collect(),
                                     status: MenuItemStatus::Default,
                                     selectable: true,
+                                    filter_text: None,
                                 })
                                 .collect(),
                             default: action_menu_default(&actions),
@@ -730,6 +733,7 @@ fn download_selected_skills(
                 preview_lines: downloadable_skill_preview_lines(item, directory),
                 status: downloadable_skill_menu_status(item),
                 selectable: true,
+                filter_text: Some(item.available.name.clone()),
             })
             .collect::<Vec<_>>();
         items.push(exit_menu_item("Exit download"));
@@ -792,6 +796,7 @@ fn download_selected_skills(
                                     ),
                                     status: MenuItemStatus::Default,
                                     selectable: true,
+                                    filter_text: None,
                                 })
                                 .collect(),
                             default: action_menu_default(&actions),
@@ -897,6 +902,7 @@ fn download_selected_skills(
                                         .collect(),
                                     status: MenuItemStatus::Default,
                                     selectable: true,
+                                    filter_text: None,
                                 })
                                 .collect(),
                             default: action_menu_default(&actions),
@@ -1040,6 +1046,10 @@ fn run_list(
                 preview_lines: listed_skill_preview_lines(entry),
                 status: listed_skill_menu_status(entry),
                 selectable: matches!(entry, ListedSkillEntry::Valid(_)),
+                filter_text: Some(match entry {
+                    ListedSkillEntry::Valid(skill) => skill.name.clone(),
+                    ListedSkillEntry::Invalid(invalid) => invalid.directory_name.clone(),
+                }),
             })
             .collect::<Vec<_>>();
         items.push(exit_menu_item("Exit list"));
@@ -1106,6 +1116,7 @@ fn run_list(
                                         ),
                                         status: MenuItemStatus::Default,
                                         selectable: true,
+                                        filter_text: None,
                                     })
                                     .collect(),
                                 default: action_menu_default(&actions),
@@ -1171,6 +1182,7 @@ fn run_list(
                                         ),
                                         status: MenuItemStatus::Default,
                                         selectable: true,
+                                        filter_text: None,
                                     })
                                     .collect(),
                                 default: action_menu_default(&actions),
@@ -1252,6 +1264,7 @@ fn run_list(
                                 preview_lines: preview_names.lines().map(str::to_owned).collect(),
                                 status: MenuItemStatus::Default,
                                 selectable: true,
+                                filter_text: None,
                             })
                             .collect(),
                         default: action_menu_default(&actions),
@@ -1607,6 +1620,7 @@ fn run_skillsmp_search(
                 preview_lines: skillsmp_search_preview_lines(skill, installed.as_ref(), directory),
                 status: skillsmp_search_menu_status(installed.as_ref()),
                 selectable: true,
+                filter_text: Some(skill.name.clone()),
             })
             .collect::<Vec<_>>();
         items.push(exit_menu_item("Exit search"));
@@ -1696,6 +1710,7 @@ fn run_skillsmp_search(
                         ),
                         status: MenuItemStatus::Default,
                         selectable: true,
+                        filter_text: None,
                     })
                     .collect(),
                 default: action_menu_default(&actions),
@@ -1823,6 +1838,7 @@ fn run_skillsmp_list(
                 preview_lines: installed_skill_preview_lines(skill),
                 status: MenuItemStatus::Default,
                 selectable: true,
+                filter_text: Some(skill.name.clone()),
             })
             .collect::<Vec<_>>();
         items.push(exit_menu_item("Exit list"));
@@ -1880,6 +1896,7 @@ fn run_skillsmp_list(
                                 preview_lines: installed_skill_preview_lines(&selected),
                                 status: MenuItemStatus::Default,
                                 selectable: true,
+                                filter_text: None,
                             })
                             .collect(),
                         default: action_menu_default(&actions),
@@ -2421,6 +2438,7 @@ fn exit_menu_item(label: &str) -> MenuItemUi {
         preview_lines: vec![label.to_string()],
         status: MenuItemStatus::Default,
         selectable: true,
+        filter_text: None,
     }
 }
 
@@ -2608,8 +2626,9 @@ mod tests {
         previous_selectable_index, previous_tab_index,
     };
     use super::tui::{
-        DownloadableSkillMatch, MenuAction, MenuItemStatus, MenuItemUi, TextBuffer, create_action,
-        menu_action,
+        DownloadableSkillMatch, MenuAction, MenuItemStatus, MenuItemUi, TextBuffer,
+        adjust_focused_on_filter, build_visible_indices, create_action, filter_matches,
+        filterable_count, menu_action, visible_position,
     };
     use super::{
         APPLY_ALL_CHOICE, BACK_CHOICE, EXIT_CHOICE, INSTALL_ALL_CHOICE, INSTALL_CHOICE,
@@ -3063,12 +3082,14 @@ mod tests {
                 preview_lines: Vec::new(),
                 status: MenuItemStatus::Default,
                 selectable: true,
+                filter_text: None,
             },
             MenuItemUi {
                 label: ".system".to_string(),
                 preview_lines: Vec::new(),
                 status: MenuItemStatus::Disabled,
                 selectable: false,
+                filter_text: None,
             },
             exit_menu_item("Exit list"),
         ];
@@ -3542,5 +3563,133 @@ mod tests {
         // Moving up from run.py (4, hidden) should find first visible >= 4: actually none, but then return first visible
         // Wait: visible.iter().find(|&&i| i >= current) -> no match -> unwrap_or(visible[0]) -> 0
         assert_eq!(file_viewer_move_selection_up(&visible, 4), 3);
+    }
+
+    // --- Filtering tests ---
+
+    fn skill_item(name: &str) -> MenuItemUi {
+        MenuItemUi {
+            label: name.to_string(),
+            preview_lines: Vec::new(),
+            status: MenuItemStatus::Default,
+            selectable: true,
+            filter_text: Some(name.to_string()),
+        }
+    }
+
+    fn exit_item() -> MenuItemUi {
+        MenuItemUi {
+            label: "Exit".to_string(),
+            preview_lines: vec!["Exit menu".to_string()],
+            status: MenuItemStatus::Default,
+            selectable: true,
+            filter_text: None,
+        }
+    }
+
+    fn disabled_item(label: &str) -> MenuItemUi {
+        MenuItemUi {
+            label: label.to_string(),
+            preview_lines: Vec::new(),
+            status: MenuItemStatus::Disabled,
+            selectable: false,
+            filter_text: Some(label.to_string()),
+        }
+    }
+
+    #[test]
+    fn filter_matches_non_filterable_always_returns_true() {
+        let item = exit_item();
+        assert!(filter_matches("", &item));
+    }
+
+    #[test]
+    fn filter_matches_non_filterable_returns_false_when_filtering() {
+        let item = exit_item();
+        assert!(!filter_matches("xyz", &item));
+    }
+
+    #[test]
+    fn filter_matches_case_insensitive_substring() {
+        let item = skill_item("Python");
+        assert!(filter_matches("p", &item));
+        assert!(filter_matches("PY", &item));
+        assert!(filter_matches("thon", &item));
+        assert!(!filter_matches("xyz", &item));
+    }
+
+    #[test]
+    fn filterable_count_counts_only_filterable_items() {
+        let items = vec![skill_item("a"), exit_item(), skill_item("b")];
+        assert_eq!(filterable_count(&items), 2);
+    }
+
+    #[test]
+    fn filterable_count_returns_zero_when_none_filterable() {
+        let items = vec![exit_item(), exit_item()];
+        assert_eq!(filterable_count(&items), 0);
+    }
+
+    #[test]
+    fn build_visible_indices_empty_filter_returns_all() {
+        let items = vec![skill_item("a"), exit_item(), skill_item("b")];
+        assert_eq!(build_visible_indices(&items, ""), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn build_visible_indices_filters_by_name() {
+        let items = vec![skill_item("alpha"), exit_item(), skill_item("beta")];
+        assert_eq!(build_visible_indices(&items, "alpha"), vec![0]);
+    }
+
+    #[test]
+    fn build_visible_indices_no_match_returns_empty() {
+        let items = vec![skill_item("alpha"), exit_item(), skill_item("beta")];
+        assert_eq!(build_visible_indices(&items, "xyz"), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn build_visible_indices_disabled_filterable_still_visible_when_matched() {
+        let items = vec![skill_item("alpha"), disabled_item("beta")];
+        let visible = build_visible_indices(&items, "beta");
+        assert_eq!(visible, vec![1]);
+    }
+
+    #[test]
+    fn visible_position_finds_index_in_visible() {
+        let visible = vec![2, 5, 7];
+        assert_eq!(visible_position(&visible, 5), Some(1));
+        assert_eq!(visible_position(&visible, 2), Some(0));
+        assert_eq!(visible_position(&visible, 99), None);
+    }
+
+    #[test]
+    fn visible_position_empty_list_returns_none() {
+        let visible: Vec<usize> = vec![];
+        assert_eq!(visible_position(&visible, 0), None);
+    }
+
+    #[test]
+    fn adjust_focused_on_filter_changes_when_not_in_visible() {
+        let visible = vec![2, 5, 7];
+        let mut focused = 3;
+        adjust_focused_on_filter(&visible, &mut focused);
+        assert_eq!(focused, 2);
+    }
+
+    #[test]
+    fn adjust_focused_on_filter_preserves_when_in_visible() {
+        let visible = vec![2, 5, 7];
+        let mut focused = 5;
+        adjust_focused_on_filter(&visible, &mut focused);
+        assert_eq!(focused, 5);
+    }
+
+    #[test]
+    fn adjust_focused_on_filter_empty_visible_does_nothing() {
+        let visible: Vec<usize> = vec![];
+        let mut focused = 3;
+        adjust_focused_on_filter(&visible, &mut focused);
+        assert_eq!(focused, 3);
     }
 }

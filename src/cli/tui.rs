@@ -28,6 +28,7 @@ pub(crate) struct MenuItemUi {
     pub(crate) preview_lines: Vec<String>,
     pub(crate) status: MenuItemStatus,
     pub(crate) selectable: bool,
+    pub(crate) filter_text: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -853,7 +854,18 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
     if !menu.items[selected].selectable {
         selected = crate::cli::args::first_selectable_index(&menu.items);
     }
-    state.select(Some(selected));
+
+    let has_filterable = menu.items.iter().any(|i| i.filter_text.is_some());
+    let mut filter_text = String::new();
+    let mut filter_active = false;
+
+    let mut visible = if filter_active {
+        build_visible_indices(&menu.items, &filter_text)
+    } else {
+        (0..menu.items.len()).collect()
+    };
+    let vis_pos = visible_position(&visible, selected).unwrap_or(0);
+    state.select(Some(vis_pos));
 
     loop {
         session.terminal.draw(|frame| {
@@ -880,15 +892,36 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .split(content_area);
 
-            let items = menu
-                .items
+            let render_indices: Vec<usize> = if filter_active {
+                visible.clone()
+            } else {
+                (0..menu.items.len()).collect()
+            };
+            let items = render_indices
                 .iter()
-                .map(|item| {
-                    ListItem::new(Line::from(item.label.clone())).style(menu_item_style(item))
+                .map(|&i| {
+                    let item = &menu.items[i];
+                    let style = menu_item_style(item);
+                    let line = if filter_active && !filter_text.is_empty() {
+                        highlighted_line(&item.label, &filter_text, style)
+                    } else {
+                        Line::from(Span::styled(item.label.clone(), style))
+                    };
+                    ListItem::new(line)
                 })
                 .collect::<Vec<_>>();
+            let list_title = if filter_active {
+                let shown = visible
+                    .iter()
+                    .filter(|&&i| menu.items[i].filter_text.is_some())
+                    .count();
+                let total = filterable_count(&menu.items);
+                format!("Options (filter: \"{}\", {}/{})", filter_text, shown, total)
+            } else {
+                "Options".to_string()
+            };
             let list = List::new(items)
-                .block(Block::default().borders(Borders::ALL).title("Options"))
+                .block(Block::default().borders(Borders::ALL).title(list_title))
                 .highlight_style(
                     Style::default()
                         .fg(Color::Yellow)
@@ -905,7 +938,11 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
             }
             frame.render_stateful_widget(list, panes[0], &mut state);
 
-            let preview_lines = menu.items[selected].preview_lines.clone();
+            let preview_lines = if filter_active && visible.is_empty() {
+                Vec::new()
+            } else {
+                menu.items[selected].preview_lines.clone()
+            };
             let preview_text = if preview_lines.is_empty() {
                 menu.empty_preview.clone()
             } else {
@@ -928,23 +965,118 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
                     status_area,
                 );
             }
+            let help = if has_filterable {
+                format!("{} | / filter", menu.help_text)
+            } else {
+                menu.help_text.clone()
+            };
             frame.render_widget(
-                Paragraph::new(menu.help_text.clone()).style(Style::default().fg(Color::Gray)),
+                Paragraph::new(help).style(Style::default().fg(Color::Gray)),
                 help_area,
             );
         })?;
 
         if let Event::Key(key) = event::read()? {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return Ok(SelectMenuResult::Cancel);
+            }
+
+            if !filter_active
+                && key.code == KeyCode::Char('/')
+                && key.modifiers.is_empty()
+                && has_filterable
+            {
+                filter_active = true;
+                filter_text.clear();
+                visible = build_visible_indices(&menu.items, &filter_text);
+                let vis_pos = visible_position(&visible, selected).unwrap_or(0);
+                state.select(Some(vis_pos));
+                continue;
+            }
+
+            if filter_active {
+                match key.code {
+                    KeyCode::Esc => {
+                        filter_text.clear();
+                        filter_active = false;
+                        visible = (0..menu.items.len()).collect();
+                        let vis_pos = visible_position(&visible, selected).unwrap_or(0);
+                        state.select(Some(vis_pos));
+                        continue;
+                    }
+                    KeyCode::Backspace => {
+                        filter_text.pop();
+                        visible = build_visible_indices(&menu.items, &filter_text);
+                        let vis_pos = visible_position(&visible, selected).unwrap_or(0);
+                        if (!menu.items[selected].selectable || !visible.contains(&selected))
+                            && let Some(&first) = visible.first()
+                        {
+                            selected = first;
+                        }
+                        state.select(Some(vis_pos));
+                        continue;
+                    }
+                    KeyCode::Char(c) if key.modifiers.is_empty() => {
+                        filter_text.push(c);
+                        visible = build_visible_indices(&menu.items, &filter_text);
+                        let vis_pos = visible_position(&visible, selected).unwrap_or(0);
+                        if !visible.contains(&selected)
+                            && let Some(&first) = visible.first()
+                        {
+                            selected = first;
+                        }
+                        state.select(Some(vis_pos));
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+
             match menu_action(key) {
                 Some(MenuAction::MoveUp) => {
-                    selected = crate::cli::args::previous_selectable_index(&menu.items, selected);
-                    state.select(Some(selected));
+                    if filter_active {
+                        if visible.is_empty() {
+                            // no matches — stay put
+                        } else {
+                            let vis_pos = visible_position(&visible, selected).unwrap_or(0);
+                            let new_pos = vis_pos.saturating_sub(1);
+                            selected = visible[new_pos];
+                            state.select(Some(new_pos));
+                        }
+                    } else {
+                        selected =
+                            crate::cli::args::previous_selectable_index(&menu.items, selected);
+                        let vis_pos = visible_position(&visible, selected).unwrap_or(0);
+                        state.select(Some(vis_pos));
+                    }
                 }
                 Some(MenuAction::MoveDown) => {
-                    selected = crate::cli::args::next_selectable_index(&menu.items, selected);
-                    state.select(Some(selected));
+                    if filter_active {
+                        if visible.is_empty() {
+                            // no matches — stay put
+                        } else {
+                            let vis_pos = visible_position(&visible, selected).unwrap_or(0);
+                            let new_pos = (vis_pos + 1).min(visible.len().saturating_sub(1));
+                            selected = visible[new_pos];
+                            state.select(Some(new_pos));
+                        }
+                    } else {
+                        selected = crate::cli::args::next_selectable_index(&menu.items, selected);
+                        let vis_pos = visible_position(&visible, selected).unwrap_or(0);
+                        state.select(Some(vis_pos));
+                    }
                 }
-                Some(MenuAction::Select) => return Ok(SelectMenuResult::Selected(selected)),
+                Some(MenuAction::Select) => {
+                    if filter_active && visible.is_empty() {
+                        // no matches — ignore, must Esc first
+                    } else {
+                        return Ok(SelectMenuResult::Selected(selected));
+                    }
+                }
                 Some(MenuAction::Cancel) => return Ok(SelectMenuResult::Cancel),
                 Some(MenuAction::NextTab) => return Ok(SelectMenuResult::NextTab),
                 Some(MenuAction::PreviousTab) => return Ok(SelectMenuResult::PreviousTab),
@@ -969,12 +1101,23 @@ pub(crate) fn multi_select_menu(
     if !menu.items[focused].selectable {
         focused = crate::cli::args::first_selectable_index(&menu.items);
     }
-    state.select(Some(focused));
     let mut checked: HashSet<usize> = initially_checked
         .iter()
         .copied()
         .filter(|index| *index < selectable_count)
         .collect();
+
+    let has_filterable = menu.items.iter().any(|i| i.filter_text.is_some());
+    let mut filter_text = String::new();
+    let mut filter_active = false;
+
+    let mut visible = if filter_active {
+        build_visible_indices(&menu.items, &filter_text)
+    } else {
+        (0..menu.items.len()).collect()
+    };
+    let vis_pos = visible_position(&visible, focused).unwrap_or(0);
+    state.select(Some(vis_pos));
 
     loop {
         session.terminal.draw(|frame| {
@@ -1001,34 +1144,72 @@ pub(crate) fn multi_select_menu(
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .split(content_area);
 
-            let items = menu
-                .items
+            let render_indices: Vec<usize> = if filter_active {
+                visible.clone()
+            } else {
+                (0..menu.items.len()).collect()
+            };
+
+            let selected_count = checked.len();
+            let items = render_indices
                 .iter()
-                .enumerate()
-                .map(|(i, item)| {
-                    let label = if i < selectable_count {
-                        let checkbox = if checked.contains(&i) {
+                .map(|&i| {
+                    let item = &menu.items[i];
+                    let (checkbox, text) = if i < selectable_count {
+                        let chk = if checked.contains(&i) {
                             "[\u{2713}] "
                         } else {
                             "[ ] "
                         };
-                        format!("{checkbox}{}", item.label)
+                        (Some(chk), item.label.as_str())
                     } else {
-                        item.label.clone()
+                        (None, item.label.as_str())
                     };
-                    let style = if i < selectable_count && checked.contains(&i) {
+                    let base_style = if i < selectable_count && checked.contains(&i) {
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD)
                     } else {
                         menu_item_style(item)
                     };
-                    ListItem::new(Line::from(label)).style(style)
+                    let line = if filter_active && !filter_text.is_empty() {
+                        let spans = if let Some(chk) = checkbox {
+                            let mut spans = vec![Span::styled(chk.to_string(), base_style)];
+                            spans.extend(highlighted_line(text, &filter_text, base_style).spans);
+                            spans
+                        } else {
+                            highlighted_line(text, &filter_text, base_style).spans
+                        };
+                        Line::from(spans)
+                    } else {
+                        let mut spans = Vec::new();
+                        if let Some(chk) = checkbox {
+                            spans.push(Span::styled(chk.to_string(), base_style));
+                        }
+                        spans.push(Span::styled(text.to_string(), base_style));
+                        Line::from(spans)
+                    };
+                    ListItem::new(line)
                 })
                 .collect::<Vec<_>>();
 
+            let list_title = if filter_active {
+                let shown = visible
+                    .iter()
+                    .filter(|&&i| menu.items[i].filter_text.is_some())
+                    .count();
+                let total = filterable_count(&menu.items);
+                format!(
+                    "Options (filter: \"{}\", {}/{}, {} selected)",
+                    filter_text, shown, total, selected_count
+                )
+            } else if selected_count > 0 {
+                format!("Options ({} selected)", selected_count)
+            } else {
+                "Options".to_string()
+            };
             let list = List::new(items)
-                .block(Block::default().borders(Borders::ALL).title("Options"))
+                .block(Block::default().borders(Borders::ALL).title(list_title))
                 .highlight_style(
                     Style::default()
                         .fg(Color::Yellow)
@@ -1046,7 +1227,11 @@ pub(crate) fn multi_select_menu(
             }
             frame.render_stateful_widget(list, panes[0], &mut state);
 
-            let preview_lines = menu.items[focused].preview_lines.clone();
+            let preview_lines = if filter_active && visible.is_empty() {
+                Vec::new()
+            } else {
+                menu.items[focused].preview_lines.clone()
+            };
             let preview_text = if preview_lines.is_empty() {
                 menu.empty_preview.clone()
             } else {
@@ -1069,24 +1254,106 @@ pub(crate) fn multi_select_menu(
                     status_area,
                 );
             }
+            let help = if has_filterable {
+                format!("{} | / filter", menu.help_text)
+            } else {
+                menu.help_text.clone()
+            };
             frame.render_widget(
-                Paragraph::new(menu.help_text.clone()).style(Style::default().fg(Color::Gray)),
+                Paragraph::new(help).style(Style::default().fg(Color::Gray)),
                 help_area,
             );
         })?;
 
         if let Event::Key(key) = event::read()? {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return Ok(MultiSelectMenuResult::Cancel);
+            }
+
+            if !filter_active
+                && key.code == KeyCode::Char('/')
+                && key.modifiers.is_empty()
+                && has_filterable
+            {
+                filter_active = true;
+                filter_text.clear();
+                visible = build_visible_indices(&menu.items, &filter_text);
+                let vis_pos = visible_position(&visible, focused).unwrap_or(0);
+                state.select(Some(vis_pos));
+                continue;
+            }
+
+            if filter_active {
+                match key.code {
+                    KeyCode::Esc => {
+                        filter_text.clear();
+                        filter_active = false;
+                        visible = (0..menu.items.len()).collect();
+                        let vis_pos = visible_position(&visible, focused).unwrap_or(0);
+                        state.select(Some(vis_pos));
+                        continue;
+                    }
+                    KeyCode::Backspace => {
+                        filter_text.pop();
+                        visible = build_visible_indices(&menu.items, &filter_text);
+                        adjust_focused_on_filter(&visible, &mut focused);
+                        let vis_pos = visible_position(&visible, focused).unwrap_or(0);
+                        state.select(Some(vis_pos));
+                        continue;
+                    }
+                    KeyCode::Char(c) if key.modifiers.is_empty() => {
+                        filter_text.push(c);
+                        visible = build_visible_indices(&menu.items, &filter_text);
+                        adjust_focused_on_filter(&visible, &mut focused);
+                        let vis_pos = visible_position(&visible, focused).unwrap_or(0);
+                        state.select(Some(vis_pos));
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+
             match multi_select_action(key) {
                 Some(MultiSelectMenuAction::MoveUp) => {
-                    focused = crate::cli::args::previous_selectable_index(&menu.items, focused);
-                    state.select(Some(focused));
+                    if filter_active {
+                        if visible.is_empty() {
+                            // no matches — stay put
+                        } else {
+                            let vis_pos = visible_position(&visible, focused).unwrap_or(0);
+                            let new_pos = vis_pos.saturating_sub(1);
+                            focused = visible[new_pos];
+                            state.select(Some(new_pos));
+                        }
+                    } else {
+                        focused = crate::cli::args::previous_selectable_index(&menu.items, focused);
+                        let vis_pos = visible_position(&visible, focused).unwrap_or(0);
+                        state.select(Some(vis_pos));
+                    }
                 }
                 Some(MultiSelectMenuAction::MoveDown) => {
-                    focused = crate::cli::args::next_selectable_index(&menu.items, focused);
-                    state.select(Some(focused));
+                    if filter_active {
+                        if visible.is_empty() {
+                            // no matches — stay put
+                        } else {
+                            let vis_pos = visible_position(&visible, focused).unwrap_or(0);
+                            let new_pos = (vis_pos + 1).min(visible.len().saturating_sub(1));
+                            focused = visible[new_pos];
+                            state.select(Some(new_pos));
+                        }
+                    } else {
+                        focused = crate::cli::args::next_selectable_index(&menu.items, focused);
+                        let vis_pos = visible_position(&visible, focused).unwrap_or(0);
+                        state.select(Some(vis_pos));
+                    }
                 }
                 Some(MultiSelectMenuAction::ToggleSelect) if focused < selectable_count => {
-                    if checked.contains(&focused) {
+                    if filter_active && visible.is_empty() {
+                        // no matches — ignore
+                    } else if checked.contains(&focused) {
                         checked.remove(&focused);
                     } else {
                         checked.insert(focused);
@@ -1094,24 +1361,45 @@ pub(crate) fn multi_select_menu(
                 }
                 Some(MultiSelectMenuAction::ToggleSelect) => {}
                 Some(MultiSelectMenuAction::SelectAll) => {
-                    let all_selected = (0..selectable_count).all(|i| checked.contains(&i));
-                    if all_selected {
-                        checked.clear();
+                    if filter_active {
+                        let all_visible_selected = visible
+                            .iter()
+                            .filter(|&&i| i < selectable_count)
+                            .all(|&i| checked.contains(&i));
+                        if all_visible_selected {
+                            for &i in &visible {
+                                checked.remove(&i);
+                            }
+                        } else {
+                            for &i in &visible {
+                                if i < selectable_count {
+                                    checked.insert(i);
+                                }
+                            }
+                        }
                     } else {
-                        checked.extend(0..selectable_count);
+                        let all_selected = (0..selectable_count).all(|i| checked.contains(&i));
+                        if all_selected {
+                            checked.clear();
+                        } else {
+                            checked.extend(0..selectable_count);
+                        }
                     }
                 }
                 Some(MultiSelectMenuAction::Confirm) => {
-                    if checked.is_empty() {
+                    if filter_active && visible.is_empty() {
+                        // no matches — ignore, must Esc first
+                    } else if checked.is_empty() {
                         return Ok(MultiSelectMenuResult::Selection(MultiSelectResult::Single(
                             focused,
                         )));
+                    } else {
+                        let mut indices: Vec<usize> = checked.iter().copied().collect();
+                        indices.sort_unstable();
+                        return Ok(MultiSelectMenuResult::Selection(MultiSelectResult::Bulk(
+                            indices,
+                        )));
                     }
-                    let mut indices: Vec<usize> = checked.iter().copied().collect();
-                    indices.sort_unstable();
-                    return Ok(MultiSelectMenuResult::Selection(MultiSelectResult::Bulk(
-                        indices,
-                    )));
                 }
                 Some(MultiSelectMenuAction::Cancel) => return Ok(MultiSelectMenuResult::Cancel),
                 Some(MultiSelectMenuAction::NextTab) => {
@@ -1123,6 +1411,67 @@ pub(crate) fn multi_select_menu(
                 None => {}
             }
         }
+    }
+}
+
+pub(crate) fn filter_matches(filter_text: &str, item: &MenuItemUi) -> bool {
+    match &item.filter_text {
+        None => filter_text.is_empty(),
+        Some(name) => name.to_lowercase().contains(&filter_text.to_lowercase()),
+    }
+}
+
+pub(crate) fn filterable_count(items: &[MenuItemUi]) -> usize {
+    items.iter().filter(|i| i.filter_text.is_some()).count()
+}
+
+pub(crate) fn build_visible_indices(items: &[MenuItemUi], filter_text: &str) -> Vec<usize> {
+    if filter_text.is_empty() {
+        return (0..items.len()).collect();
+    }
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| filter_matches(filter_text, item))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+pub(crate) fn visible_position(visible: &[usize], original: usize) -> Option<usize> {
+    visible.iter().position(|&i| i == original)
+}
+
+pub(crate) fn adjust_focused_on_filter(visible: &[usize], focused: &mut usize) {
+    if !visible.contains(focused)
+        && let Some(&first) = visible.first()
+    {
+        *focused = first;
+    }
+}
+
+pub(crate) fn highlighted_line(text: &str, query: &str, base_style: Style) -> Line<'static> {
+    if query.is_empty() {
+        return Line::from(Span::styled(text.to_string(), base_style));
+    }
+
+    let lower_text = text.to_lowercase();
+    let lower_query = query.to_lowercase();
+
+    if let Some(start) = lower_text.find(&lower_query) {
+        let end = start + query.len();
+        let match_style = base_style.add_modifier(Modifier::UNDERLINED);
+
+        let mut spans = Vec::new();
+        if start > 0 {
+            spans.push(Span::styled(text[..start].to_string(), base_style));
+        }
+        spans.push(Span::styled(text[start..end].to_string(), match_style));
+        if end < text.len() {
+            spans.push(Span::styled(text[end..].to_string(), base_style));
+        }
+        Line::from(spans)
+    } else {
+        Line::from(Span::styled(text.to_string(), base_style))
     }
 }
 
@@ -1780,6 +2129,7 @@ fn build_configure_items(
                 MenuItemStatus::Default
             },
             selectable: true,
+            filter_text: None,
         });
     }
     if !customs.is_empty() {
@@ -1789,6 +2139,7 @@ fn build_configure_items(
             preview_lines: vec![],
             status: MenuItemStatus::Disabled,
             selectable: false,
+            filter_text: None,
         });
         for dir in customs {
             let preview = configure_dir_preview(dir, active_tab == 0);
@@ -1802,6 +2153,7 @@ fn build_configure_items(
                 preview_lines: vec![preview],
                 status: MenuItemStatus::Installed,
                 selectable: true,
+                filter_text: None,
             });
         }
     }
@@ -1811,6 +2163,7 @@ fn build_configure_items(
         preview_lines: vec![],
         status: MenuItemStatus::Disabled,
         selectable: false,
+        filter_text: None,
     });
     items.push(MenuItemUi {
         label: "Add custom...".to_string(),
@@ -1821,6 +2174,7 @@ fn build_configure_items(
         }],
         status: MenuItemStatus::Default,
         selectable: true,
+        filter_text: None,
     });
     items
 }

@@ -178,8 +178,10 @@ uvx skilly configure --reset         # Restore defaults
 
 In the TUI:
 - **Space** toggles a known directory on or off, or removes a custom one.
-- **Enter** sets the highlighted directory as the default (marked with a ★).
+- **Enter** sets the highlighted directory as the default (marked with a star).
 - **Ctrl+S** saves; you must have a default directory selected before saving.
+
+Skill-selection menus (`list`, `scan`, `download`, `skillsmp search`, `skillsmp list`) support `f` to filter by skill name. Press `f`, type a substring, and use `Backspace` / `Esc` to edit or clear the filter.
 
 Add or remove custom directories via CLI:
 
