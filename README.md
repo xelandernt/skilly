@@ -181,10 +181,113 @@ Full [Python API reference](https://xelandernt.github.io/skilly/python/) with
 `SkillRepository`, discovery functions, source types, SkillsMP client, and
 custom filesystem protocol.
 
+```python
+from pathlib import Path
+from skilly import (
+    ProjectSettings,
+    PythonSource,
+    Skill,
+    SkillRepository,
+)
+
+repository = SkillRepository(
+    directory=Path(".agents/skills"),
+    project=ProjectSettings(
+        sources=(
+            PythonSource(
+                dependency_groups=("dev",),
+                optional_dependencies=("docs",),
+            ),
+        ),
+    ),
+)
+
+repository.install(
+    Skill(
+        name="code-review",
+        description="Review code for correctness and maintainability.",
+        content="# Instructions\n\nReview the proposed change.",
+    )
+)
+
+for match in repository.scan_project():
+    print(match.available.name, match.status)
+```
+
+Stateless discovery functions for one-shot reads:
+
+```python
+from skilly import (
+    NodeSource,
+    PythonSource,
+    discover_installed_skills,
+    discover_package_source_skills,
+)
+
+installed = discover_installed_skills()
+python_skills = discover_package_source_skills(PythonSource())
+node_skills = discover_package_source_skills(NodeSource())
+```
+
+`ProjectSettings` accepts `PythonSource`, `NodeSource`, and `MavenSource`:
+
+```python
+from skilly import (
+    MavenSource,
+    NodeSource,
+    ProjectSettings,
+    PythonSource,
+    SkillRepository,
+)
+
+repository = SkillRepository(
+    directory=Path(".agents/skills"),
+    project=ProjectSettings(
+        sources=(
+            NodeSource(
+                include_dependencies=True,
+                include_dev_dependencies=False,
+            ),
+        ),
+    ),
+)
+```
+
+Use `ProjectSettings(sources=())` to disable scanning, or pass
+individual `PackageSource` entries to scan only specific ecosystems.
+`SkillRepository()` defaults to Python, Node, and Maven sources.
+
 ### Maven support
 
-See [dependency scanning](https://xelandernt.github.io/skilly/cli/dependency-scanning/)
-for Maven integration details.
+Maven skills are discovered from JAR artifacts in the local Maven
+repository (`~/.m2/repository` by default). The scanner:
+
+- Reads only direct `<dependencies>` from `pom.xml` — profiles,
+  plugins, and `<dependencyManagement>` are ignored.
+- Resolves `${property}` references defined in the same file's
+  `<properties>` block.
+- Loads skills from recognized archive layouts:
+  `.agents/skills/<name>/SKILL.md` and `skills/<name>/SKILL.md`.
+- Preserves binary resources inside JARs.
+- Rejects coordinates with path traversal components.
+
+**Known limitations:**
+- Only the local repository is used; no remote artifact resolution.
+- No POM inheritance or effective-model merging.
+- No Gradle build file support.
+- Build execution and dependency graph traversal are not performed.
+- Scopes are controlled via `include_*_scope` flags (default: compile,
+  runtime, and test; provided and system are excluded).
+
+SkillsMP client with typed results:
+
+```python
+from skilly.skillsmp import ClientSettings, SkillsMp, SkillsMpSearchQuery
+
+client = SkillsMp(settings=ClientSettings(base_url="https://skillsmp.com/api/v1"))
+result = client.search(SkillsMpSearchQuery(text="python", limit=5))
+print(result.data.skills[0].github_url)
+```
 
 ## Development
 
