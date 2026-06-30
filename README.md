@@ -67,16 +67,16 @@ uvx skilly --help
 
 ## CLI Commands
 
-| Command | Purpose |
-|---------|---------|
-| `scan` | Find skills provided by Python and Node project dependencies |
-| `download <github-url>` | Install one or more skills from GitHub |
-| `list` | Browse, update, or remove installed skills |
-| `update` | Preview available updates; `--yes` applies all |
-| `remove <name>` | Remove an installed skill by directory name |
-| `skillsmp search <query>` | Search SkillsMP and install a selected result |
-| `create` | Create a valid skill through a terminal wizard or explicit options |
-| `configure` | Set which directories skilly manages via TUI or CLI flags |
+| Command                   | Purpose                                                            |
+|---------------------------|--------------------------------------------------------------------|
+| `scan`                    | Find skills provided by Python and Node project dependencies       |
+| `download <github-url>`   | Install one or more skills from GitHub                             |
+| `list`                    | Browse, update, or remove installed skills                         |
+| `update`                  | Preview available updates; `--yes` applies all                     |
+| `remove <name>`           | Remove an installed skill by directory name                        |
+| `skillsmp search <query>` | Search SkillsMP and install a selected result                      |
+| `create`                  | Create a valid skill through a terminal wizard or explicit options |
+| `configure`               | Set which directories skilly manages via TUI or CLI flags          |
 
 Run `skilly <command> --help` for all options.
 Run `skilly --version` to print the installed package version.
@@ -145,18 +145,18 @@ uvx skilly list --copilot      # .github/skills (local), ~/.copilot/skills (glob
 uvx skilly list --directory ~/custom     # Explicit directory
 ```
 
-| Flags                | Resolved destination                                  |
-|----------------------|-------------------------------------------------------|
+| Flags                | Resolved destination                                          |
+|----------------------|---------------------------------------------------------------|
 | _none_               | `SKILLY_DEFAULT_DIRECTORY` if set, otherwise `.agents/skills` |
-| `--local`            | `.agents/skills`                                      |
-| `--global`           | `~/.agents/skills`                                    |
-| `--claude`           | `.claude/skills`                                      |
-| `--claude --global`  | `~/.claude/skills`                                    |
-| `--codex`            | `.codex/skills`                                       |
-| `--codex --global`   | `~/.codex/skills`                                     |
-| `--copilot`          | `.github/skills`                                      |
-| `--copilot --global` | `~/.copilot/skills`                                   |
-| `--directory <path>` | That directory (after `~` expansion)                  |
+| `--local`            | `.agents/skills`                                              |
+| `--global`           | `~/.agents/skills`                                            |
+| `--claude`           | `.claude/skills`                                              |
+| `--claude --global`  | `~/.claude/skills`                                            |
+| `--codex`            | `.codex/skills`                                               |
+| `--codex --global`   | `~/.codex/skills`                                             |
+| `--copilot`          | `.github/skills`                                              |
+| `--copilot --global` | `~/.copilot/skills`                                           |
+| `--directory <path>` | That directory (after `~` expansion)                          |
 
 Set a default destination:
 
@@ -181,7 +181,7 @@ In the TUI:
 - **Enter** sets the highlighted directory as the default (marked with a star).
 - **Ctrl+S** saves; you must have a default directory selected before saving.
 
-Skill-selection menus (`list`, `scan`, `download`, `skillsmp search`, `skillsmp list`) support `f` to filter by skill name. Press `f`, type a substring, and use `Backspace` / `Esc` to edit or clear the filter.
+Skill-selection menus support `/` to filter by skill name. Press `/`, type a substring, and the list narrows to matching items. `Backspace` edits the filter, `Esc` clears it.
 
 Add or remove custom directories via CLI:
 

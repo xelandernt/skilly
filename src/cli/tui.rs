@@ -901,10 +901,16 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
                 .iter()
                 .map(|&i| {
                     let item = &menu.items[i];
-                    ListItem::new(Line::from(item.label.clone())).style(menu_item_style(item))
+                    let style = menu_item_style(item);
+                    let line = if filter_active && !filter_text.is_empty() {
+                        highlighted_line(&item.label, &filter_text, style)
+                    } else {
+                        Line::from(Span::styled(item.label.clone(), style))
+                    };
+                    ListItem::new(line)
                 })
                 .collect::<Vec<_>>();
-            let list_title = if filter_active && !filter_text.is_empty() {
+            let list_title = if filter_active {
                 let shown = visible
                     .iter()
                     .filter(|&&i| menu.items[i].filter_text.is_some())
@@ -960,7 +966,7 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
                 );
             }
             let help = if has_filterable {
-                format!("{} | f filter", menu.help_text)
+                format!("{} | / filter", menu.help_text)
             } else {
                 menu.help_text.clone()
             };
@@ -980,7 +986,7 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
             }
 
             if !filter_active
-                && key.code == KeyCode::Char('f')
+                && key.code == KeyCode::Char('/')
                 && key.modifiers.is_empty()
                 && has_filterable
             {
@@ -1149,28 +1155,45 @@ pub(crate) fn multi_select_menu(
                 .iter()
                 .map(|&i| {
                     let item = &menu.items[i];
-                    let label = if i < selectable_count {
-                        let checkbox = if checked.contains(&i) {
+                    let (checkbox, text) = if i < selectable_count {
+                        let chk = if checked.contains(&i) {
                             "[\u{2713}] "
                         } else {
                             "[ ] "
                         };
-                        format!("{checkbox}{}", item.label)
+                        (Some(chk), item.label.as_str())
                     } else {
-                        item.label.clone()
+                        (None, item.label.as_str())
                     };
-                    let style = if i < selectable_count && checked.contains(&i) {
+                    let base_style = if i < selectable_count && checked.contains(&i) {
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD)
                     } else {
                         menu_item_style(item)
                     };
-                    ListItem::new(Line::from(label)).style(style)
+                    let line = if filter_active && !filter_text.is_empty() {
+                        let spans = if let Some(chk) = checkbox {
+                            let mut spans = vec![Span::styled(chk.to_string(), base_style)];
+                            spans.extend(highlighted_line(text, &filter_text, base_style).spans);
+                            spans
+                        } else {
+                            highlighted_line(text, &filter_text, base_style).spans
+                        };
+                        Line::from(spans)
+                    } else {
+                        let mut spans = Vec::new();
+                        if let Some(chk) = checkbox {
+                            spans.push(Span::styled(chk.to_string(), base_style));
+                        }
+                        spans.push(Span::styled(text.to_string(), base_style));
+                        Line::from(spans)
+                    };
+                    ListItem::new(line)
                 })
                 .collect::<Vec<_>>();
 
-            let list_title = if filter_active && !filter_text.is_empty() {
+            let list_title = if filter_active {
                 let shown = visible
                     .iter()
                     .filter(|&&i| menu.items[i].filter_text.is_some())
@@ -1232,7 +1255,7 @@ pub(crate) fn multi_select_menu(
                 );
             }
             let help = if has_filterable {
-                format!("{} | f filter", menu.help_text)
+                format!("{} | / filter", menu.help_text)
             } else {
                 menu.help_text.clone()
             };
@@ -1252,7 +1275,7 @@ pub(crate) fn multi_select_menu(
             }
 
             if !filter_active
-                && key.code == KeyCode::Char('f')
+                && key.code == KeyCode::Char('/')
                 && key.modifiers.is_empty()
                 && has_filterable
             {
@@ -1423,6 +1446,32 @@ pub(crate) fn adjust_focused_on_filter(visible: &[usize], focused: &mut usize) {
         && let Some(&first) = visible.first()
     {
         *focused = first;
+    }
+}
+
+pub(crate) fn highlighted_line(text: &str, query: &str, base_style: Style) -> Line<'static> {
+    if query.is_empty() {
+        return Line::from(Span::styled(text.to_string(), base_style));
+    }
+
+    let lower_text = text.to_lowercase();
+    let lower_query = query.to_lowercase();
+
+    if let Some(start) = lower_text.find(&lower_query) {
+        let end = start + query.len();
+        let match_style = base_style.add_modifier(Modifier::UNDERLINED);
+
+        let mut spans = Vec::new();
+        if start > 0 {
+            spans.push(Span::styled(text[..start].to_string(), base_style));
+        }
+        spans.push(Span::styled(text[start..end].to_string(), match_style));
+        if end < text.len() {
+            spans.push(Span::styled(text[end..].to_string(), base_style));
+        }
+        Line::from(spans)
+    } else {
+        Line::from(Span::styled(text.to_string(), base_style))
     }
 }
 
