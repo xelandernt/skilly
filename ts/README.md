@@ -248,33 +248,57 @@ Stateless discovery functions for one-shot reads:
 
 ```python
 from skilly import (
+    NodeSource,
+    PythonSource,
     discover_installed_skills,
-    discover_node_modules_skills,
-    discover_venv_skills,
+    discover_package_source_skills,
 )
 
 installed = discover_installed_skills()
-python_skills = discover_venv_skills()
-node_skills = discover_node_modules_skills()
+python_skills = discover_package_source_skills(PythonSource())
+node_skills = discover_package_source_skills(NodeSource())
 ```
 
-`ProjectSettings` accepts a `NodeProjectSettings` to control node scanning:
+`ProjectSettings` accepts `PythonSource`, `NodeSource`, and `MavenSource`:
 
 ```python
-from skilly import NodeProjectSettings, ProjectSettings, SkillRepository
+from skilly import (
+    MavenSource,
+    NodeSource,
+    ProjectSettings,
+    PythonSource,
+    SkillRepository,
+)
 
 repository = SkillRepository(
     directory=Path(".agents/skills"),
     project=ProjectSettings(
-        node=NodeProjectSettings(
-            include_dependencies=True,
-            include_dev_dependencies=False,
+        sources=(
+            NodeSource(
+                include_dependencies=True,
+                include_dev_dependencies=False,
+            ),
         ),
     ),
 )
 ```
 
-Set `node=None` to skip node ecosystem scanning entirely.
+Use `ProjectSettings(sources=())` to disable scanning, or pass
+individual `PackageSource` entries to scan only specific ecosystems.
+`SkillRepository()` defaults to Python, Node, and Maven sources.
+
+### Maven support
+
+Maven skills are discovered from JAR artifacts in the local Maven
+repository (`~/.m2/repository` by default). The scanner reads only
+direct `<dependencies>` from `pom.xml`, resolves `${property}`
+references, and loads skills from recognized archive layouts
+(`.agents/skills/<name>/SKILL.md` and `skills/<name>/SKILL.md`).
+Binary resources inside JARs are preserved.
+
+**Known limitations:** no remote artifact resolution, no POM
+inheritance, no Gradle support, no build execution. Scopes are
+controlled via `include_*_scope` flags.
 
 SkillsMP client with typed results:
 

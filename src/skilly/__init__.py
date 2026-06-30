@@ -1,9 +1,11 @@
 from skilly.filesystem import FileSystem
 from skilly.repository import (
     InstalledSkillUpdate,
-    NodeProjectSettings,
+    MavenSource,
+    NodeSource,
+    PackageSource,
     ProjectSettings,
-    PythonProjectSettings,
+    PythonSource,
     SkillMatch,
     SkillRepository,
 )
@@ -13,8 +15,7 @@ from skilly.skills import (
     SkillOrigin,
     SkillResource,
     discover_installed_skills,
-    discover_node_modules_skills,
-    discover_venv_skills,
+    discover_package_source_skills,
     parse_github_skill_url,
     resolve_skills_directory,
 )
@@ -27,13 +28,14 @@ __all__ = [
     "SkillRepository",
     "SkillResource",
     "discover_installed_skills",
-    "discover_venv_skills",
-    "discover_node_modules_skills",
+    "discover_package_source_skills",
     "FileSystem",
     "InstalledSkillUpdate",
-    "NodeProjectSettings",
+    "MavenSource",
+    "NodeSource",
+    "PackageSource",
     "parse_github_skill_url",
     "ProjectSettings",
-    "PythonProjectSettings",
+    "PythonSource",
     "resolve_skills_directory",
 ]

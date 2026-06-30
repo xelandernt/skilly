@@ -37,15 +37,27 @@ pub const SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY: &str = "skilly-package
 pub const SKILLY_PACKAGE_ECOSYSTEM_METADATA_KEY: &str = "skilly-package-ecosystem";
 pub const PACKAGE_ECOSYSTEM_PYTHON: &str = "python";
 pub const PACKAGE_ECOSYSTEM_NODE: &str = "node";
+pub const PACKAGE_ECOSYSTEM_MAVEN: &str = "maven";
 
 pub const STATUS_INSTALLED: &str = "installed";
 pub const STATUS_INSTALLABLE: &str = "installable";
 pub const STATUS_UPDATABLE: &str = "updatable";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum PackageEcosystem {
-    Python,
-    Node,
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PackageEcosystem(pub String);
+
+impl PackageEcosystem {
+    #[must_use]
+    #[inline]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 pub const MAX_DESCRIPTION_LENGTH: usize = 1024;
@@ -139,8 +151,8 @@ fn expand_home_path(path: &Path) -> Result<PathBuf> {
 pub struct SkillResourceData {
     pub relative_path: String,
     pub kind: String,
-    #[serde(default)]
-    pub content: String,
+    #[serde(default, with = "serde_bytes")]
+    pub content: Vec<u8>,
 }
 
 /// Parsed GitHub skill location: owner, repo, ref, path, and the original URL.
@@ -231,40 +243,79 @@ pub struct SkillSourceMetadata {
 
 /// Which part of a project produced a given dependency requirement.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-#[non_exhaustive]
-pub enum ProjectDependencyOrigin {
-    PythonProject,
-    PythonDependencyGroup { group: String },
-    PythonOptionalDependency { extra: String },
-    NodeDependencies,
-    NodeDevDependencies,
-    NodeOptionalDependencies,
+pub struct ProjectDependencyOrigin {
+    pub ecosystem: String,
+    pub scope: String,
 }
 
 impl ProjectDependencyOrigin {
     #[must_use]
-    pub fn scan_label(&self) -> String {
-        match self {
-            Self::PythonProject => "python:project".to_string(),
-            Self::PythonDependencyGroup { group } => format!("python:group:{group}"),
-            Self::PythonOptionalDependency { extra } => format!("python:extra:{extra}"),
-            Self::NodeDependencies => "node:dependencies".to_string(),
-            Self::NodeDevDependencies => "node:devDependencies".to_string(),
-            Self::NodeOptionalDependencies => "node:optionalDependencies".to_string(),
+    pub fn python_project() -> Self {
+        Self {
+            ecosystem: PACKAGE_ECOSYSTEM_PYTHON.to_string(),
+            scope: "project".to_string(),
         }
     }
 
     #[must_use]
+    pub fn python_dependency_group(group: impl Into<String>) -> Self {
+        Self {
+            ecosystem: PACKAGE_ECOSYSTEM_PYTHON.to_string(),
+            scope: format!("group:{}", group.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn python_optional_dependency(extra: impl Into<String>) -> Self {
+        Self {
+            ecosystem: PACKAGE_ECOSYSTEM_PYTHON.to_string(),
+            scope: format!("extra:{}", extra.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn node_dependencies() -> Self {
+        Self {
+            ecosystem: PACKAGE_ECOSYSTEM_NODE.to_string(),
+            scope: "dependencies".to_string(),
+        }
+    }
+
+    #[must_use]
+    pub fn node_dev_dependencies() -> Self {
+        Self {
+            ecosystem: PACKAGE_ECOSYSTEM_NODE.to_string(),
+            scope: "devDependencies".to_string(),
+        }
+    }
+
+    #[must_use]
+    pub fn node_optional_dependencies() -> Self {
+        Self {
+            ecosystem: PACKAGE_ECOSYSTEM_NODE.to_string(),
+            scope: "optionalDependencies".to_string(),
+        }
+    }
+
+    #[must_use]
+    pub fn scan_label(&self) -> String {
+        format!("{}:{}", self.ecosystem, self.scope)
+    }
+
+    #[must_use]
     pub fn detail_label(&self) -> String {
-        match self {
-            Self::PythonProject => "python project dependency".to_string(),
-            Self::PythonDependencyGroup { group } => format!("python dependency group: {group}"),
-            Self::PythonOptionalDependency { extra } => {
+        match (self.ecosystem.as_str(), self.scope.as_str()) {
+            ("python", "project") => "python project dependency".to_string(),
+            ("python", scope) if let Some(group) = scope.strip_prefix("group:") => {
+                format!("python dependency group: {group}")
+            }
+            ("python", scope) if let Some(extra) = scope.strip_prefix("extra:") => {
                 format!("python optional dependency: {extra}")
             }
-            Self::NodeDependencies => "node runtime dependency".to_string(),
-            Self::NodeDevDependencies => "node development dependency".to_string(),
-            Self::NodeOptionalDependencies => "node optional dependency".to_string(),
+            ("node", "dependencies") => "node runtime dependency".to_string(),
+            ("node", "devDependencies") => "node development dependency".to_string(),
+            ("node", "optionalDependencies") => "node optional dependency".to_string(),
+            (ecosystem, scope) => format!("{ecosystem} {scope} dependency"),
         }
     }
 }
@@ -339,19 +390,24 @@ impl Default for ScanDependencySelection {
 
 impl ScanDependencySelection {
     fn includes(&self, origin: &ProjectDependencyOrigin) -> bool {
-        match origin {
-            ProjectDependencyOrigin::PythonProject => self.include_project_dependencies,
-            ProjectDependencyOrigin::PythonDependencyGroup { group } => {
-                self.dependency_groups.includes(group)
-            }
-            ProjectDependencyOrigin::PythonOptionalDependency { extra } => {
-                self.optional_dependencies.includes(extra)
-            }
-            ProjectDependencyOrigin::NodeDependencies => self.include_node_dependencies,
-            ProjectDependencyOrigin::NodeDevDependencies => self.include_node_dev_dependencies,
-            ProjectDependencyOrigin::NodeOptionalDependencies => {
-                self.include_node_optional_dependencies
-            }
+        match origin.ecosystem.as_str() {
+            "python" => match origin.scope.as_str() {
+                "project" => self.include_project_dependencies,
+                scope if let Some(group) = scope.strip_prefix("group:") => {
+                    self.dependency_groups.includes(group)
+                }
+                scope if let Some(extra) = scope.strip_prefix("extra:") => {
+                    self.optional_dependencies.includes(extra)
+                }
+                _ => false,
+            },
+            "node" => match origin.scope.as_str() {
+                "dependencies" => self.include_node_dependencies,
+                "devDependencies" => self.include_node_dev_dependencies,
+                "optionalDependencies" => self.include_node_optional_dependencies,
+                _ => false,
+            },
+            _ => false,
         }
     }
 }
@@ -432,13 +488,10 @@ impl SkillSourceMetadata {
                 package_version.clone(),
             );
         }
-        if let Some(package_ecosystem) = self.package_ecosystem {
+        if let Some(package_ecosystem) = self.package_ecosystem.as_ref() {
             metadata.insert(
                 SKILLY_PACKAGE_ECOSYSTEM_METADATA_KEY.to_string(),
-                match package_ecosystem {
-                    PackageEcosystem::Python => PACKAGE_ECOSYSTEM_PYTHON.to_string(),
-                    PackageEcosystem::Node => PACKAGE_ECOSYSTEM_NODE.to_string(),
-                },
+                package_ecosystem.as_str().to_string(),
             );
         }
         if let Some(github_url) = self.github_url.as_ref() {
@@ -463,41 +516,100 @@ impl SkillSourceMetadata {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectEnvironment {
     pub directory: PathBuf,
-    pub pyproject_toml_path: PathBuf,
-    pub venv_path: PathBuf,
-    pub package_json_path: PathBuf,
-    pub node_modules_path: PathBuf,
-    pub dependency_selection: ScanDependencySelection,
+    pub sources: Vec<ProjectSource>,
 }
 
 impl Default for ProjectEnvironment {
     fn default() -> Self {
         Self {
             directory: PathBuf::from(DEFAULT_SKILLS_PATH),
-            pyproject_toml_path: PathBuf::from("pyproject.toml"),
-            venv_path: PathBuf::from(".venv"),
-            package_json_path: PathBuf::from("package.json"),
-            node_modules_path: PathBuf::from("node_modules"),
-            dependency_selection: ScanDependencySelection::default(),
+            sources: vec![
+                ProjectSource::Python(PythonSourceSettings::default()),
+                ProjectSource::Node(NodeSourceSettings::default()),
+                ProjectSource::Maven(MavenSourceSettings::default()),
+            ],
         }
     }
 }
 
-impl ProjectEnvironment {
-    #[must_use = "constructs a ProjectEnvironment; assign to use it"]
-    pub fn with_paths(
-        directory: &Path,
-        pyproject_toml_path: &Path,
-        venv_path: &Path,
-        dependency_selection: ScanDependencySelection,
-    ) -> Self {
+impl ProjectEnvironment {}
+
+/// Built-in source of project dependencies that may provide skills.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProjectSource {
+    Python(PythonSourceSettings),
+    Node(NodeSourceSettings),
+    Maven(MavenSourceSettings),
+}
+
+/// Configuration for scanning a Python project for dependency-provided skills.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonSourceSettings {
+    pub pyproject_toml_path: PathBuf,
+    pub venv_path: PathBuf,
+    pub include_project_dependencies: bool,
+    pub dependency_groups: NamedSelection,
+    pub optional_dependencies: NamedSelection,
+}
+
+impl Default for PythonSourceSettings {
+    fn default() -> Self {
         Self {
-            directory: directory.to_path_buf(),
-            pyproject_toml_path: pyproject_toml_path.to_path_buf(),
-            venv_path: venv_path.to_path_buf(),
+            pyproject_toml_path: PathBuf::from("pyproject.toml"),
+            venv_path: PathBuf::from(".venv"),
+            include_project_dependencies: true,
+            dependency_groups: NamedSelection::All,
+            optional_dependencies: NamedSelection::All,
+        }
+    }
+}
+
+/// Configuration for scanning a Node.js project for dependency-provided skills.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeSourceSettings {
+    pub package_json_path: PathBuf,
+    pub node_modules_path: PathBuf,
+    pub include_dependencies: bool,
+    pub include_dev_dependencies: bool,
+    pub include_optional_dependencies: bool,
+}
+
+impl Default for NodeSourceSettings {
+    fn default() -> Self {
+        Self {
             package_json_path: PathBuf::from("package.json"),
             node_modules_path: PathBuf::from("node_modules"),
-            dependency_selection,
+            include_dependencies: true,
+            include_dev_dependencies: true,
+            include_optional_dependencies: true,
+        }
+    }
+}
+
+/// Configuration for scanning a Maven project for dependency-provided skills.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MavenSourceSettings {
+    pub pom_xml_path: PathBuf,
+    pub repository_path: PathBuf,
+    pub include_compile_scope: bool,
+    pub include_runtime_scope: bool,
+    pub include_provided_scope: bool,
+    pub include_test_scope: bool,
+    pub include_system_scope: bool,
+}
+
+impl Default for MavenSourceSettings {
+    fn default() -> Self {
+        Self {
+            pom_xml_path: PathBuf::from("pom.xml"),
+            repository_path: expand_home_path(Path::new("~/.m2/repository"))
+                .unwrap_or_else(|_| PathBuf::from("~/.m2/repository")),
+            include_compile_scope: true,
+            include_runtime_scope: true,
+            include_provided_scope: false,
+            include_test_scope: true,
+            include_system_scope: false,
         }
     }
 }
@@ -517,10 +629,17 @@ pub trait GitHubSnapshotFetcher {
     ) -> Result<GitHubRepositorySnapshotData>;
 }
 
+/// Maximum file size for binary reads (100 MB).
+pub const MAX_BINARY_READ_SIZE: u64 = 100 * 1024 * 1024;
+
 /// Abstract filesystem for pluggable backends (native, in-memory, remote).
+///
+/// Byte-level primitives. Use [`read_text`](FileSystem::read_text) and
+/// [`write_text`](FileSystem::write_text) when working with UTF-8 content
+/// such as SKILL.md, POM files, JSON, and TOML.
 pub trait FileSystem {
-    fn read_file(&self, path: &Path) -> Result<String>;
-    fn write_file(&self, path: &Path, content: &str) -> Result<()>;
+    fn read_bytes(&self, path: &Path, max_size: Option<u64>) -> Result<Vec<u8>>;
+    fn write_bytes(&self, path: &Path, content: &[u8]) -> Result<()>;
     fn list_files(&self, path: &Path) -> Result<Vec<String>>;
     fn exists(&self, path: &Path) -> Result<bool>;
     fn is_dir(&self, path: &Path) -> Result<bool>;
@@ -528,6 +647,19 @@ pub trait FileSystem {
     fn remove_tree(&self, path: &Path) -> Result<()>;
     fn replace_tree(&self, path: &Path, replacement: &Path) -> Result<()>;
     fn resolve(&self, path: &Path) -> Result<PathBuf>;
+
+    /// Read a file as UTF-8 text, bounded by [`MAX_BINARY_READ_SIZE`].
+    fn read_text(&self, path: &Path) -> Result<String> {
+        let bytes = self.read_bytes(path, Some(MAX_BINARY_READ_SIZE))?;
+        String::from_utf8(bytes)
+            .map_err(|error| anyhow!("invalid UTF-8 in {}: {error}", path.display()))
+    }
+
+    /// Write UTF-8 text to a file.
+    #[allow(dead_code)]
+    fn write_text(&self, path: &Path, content: &str) -> Result<()> {
+        self.write_bytes(path, content.as_bytes())
+    }
 }
 
 /// Native (std::fs) filesystem implementation.
@@ -538,11 +670,20 @@ pub struct NativeFileSystem;
 const NATIVE_FILE_SYSTEM: NativeFileSystem = NativeFileSystem;
 
 impl FileSystem for NativeFileSystem {
-    fn read_file(&self, path: &Path) -> Result<String> {
-        fs::read_to_string(path).map_err(Into::into)
+    fn read_bytes(&self, path: &Path, max_size: Option<u64>) -> Result<Vec<u8>> {
+        let limit = max_size.unwrap_or(MAX_BINARY_READ_SIZE);
+        let metadata = fs::metadata(path)?;
+        let file_size = metadata.len();
+        if file_size > limit {
+            bail!(
+                "file size {file_size} exceeds maximum {limit} bytes: {}",
+                path.display()
+            );
+        }
+        fs::read(path).map_err(Into::into)
     }
 
-    fn write_file(&self, path: &Path, content: &str) -> Result<()> {
+    fn write_bytes(&self, path: &Path, content: &[u8]) -> Result<()> {
         fs::write(path, content)?;
         Ok(())
     }
@@ -778,11 +919,7 @@ fn has_managed_metadata(metadata: &BTreeMap<String, String>) -> bool {
 
 fn infer_package_ecosystem(metadata: &BTreeMap<String, String>) -> Option<PackageEcosystem> {
     if let Some(eco) = metadata.get(SKILLY_PACKAGE_ECOSYSTEM_METADATA_KEY) {
-        return match eco.as_str() {
-            PACKAGE_ECOSYSTEM_PYTHON => Some(PackageEcosystem::Python),
-            PACKAGE_ECOSYSTEM_NODE => Some(PackageEcosystem::Node),
-            _ => None,
-        };
+        return Some(PackageEcosystem::new(eco.clone()));
     }
     None
 }
@@ -834,7 +971,7 @@ fn collect_resource_files_in(
         if relative_path.eq_ignore_ascii_case("SKILL.md") {
             continue;
         }
-        match file_system.read_file(&child_path) {
+        match file_system.read_bytes(&child_path, Some(MAX_BINARY_READ_SIZE)) {
             Ok(content) => {
                 let kind = classify_resource_kind(&relative_path);
                 resources.push(SkillResourceData {
@@ -895,10 +1032,10 @@ fn format_scalar(value: &str) -> String {
     }
 }
 
-fn write_text_file_in(
+fn write_file_in(
     file_system: &dyn FileSystem,
     path: &Path,
-    content: &str,
+    content: &[u8],
     overwrite: bool,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -907,8 +1044,17 @@ fn write_text_file_in(
     if file_system.exists(path)? && !overwrite {
         bail!("refusing to overwrite existing file: {}", path.display());
     }
-    file_system.write_file(path, content)?;
+    file_system.write_bytes(path, content)?;
     Ok(())
+}
+
+fn write_text_file_in(
+    file_system: &dyn FileSystem,
+    path: &Path,
+    content: &str,
+    overwrite: bool,
+) -> Result<()> {
+    write_file_in(file_system, path, content.as_bytes(), overwrite)
 }
 
 fn validate_skill_name(name: &str) -> Result<()> {
@@ -1044,7 +1190,7 @@ impl SkillData {
         )?;
         for resource in &self.resources {
             let destination = root.join(PathBuf::from(&resource.relative_path));
-            write_text_file_in(file_system, &destination, &resource.content, overwrite)?;
+            write_file_in(file_system, &destination, &resource.content, overwrite)?;
         }
         Self::from_dir_with_source_metadata_in(file_system, root, &SkillSourceMetadata::default())
     }
@@ -1062,7 +1208,7 @@ impl SkillData {
         let source = source_metadata.resolved_source(&metadata);
         let package_ecosystem = source_metadata.package_ecosystem.or_else(|| {
             if source == SKILLY_SOURCE_DEPENDENCY {
-                Some(PackageEcosystem::Python)
+                Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_PYTHON))
             } else {
                 None
             }
@@ -1135,7 +1281,7 @@ impl SkillData {
         path: &Path,
         source_metadata: &SkillSourceMetadata,
     ) -> Result<Self> {
-        let text = file_system.read_file(path)?;
+        let text = file_system.read_text(path)?;
         Self::from_text_in(file_system, &text, Some(path), source_metadata)
     }
 
@@ -1287,7 +1433,7 @@ impl SkillData {
             github_url: self.github_url.clone(),
             github_commit_sha: self.github_commit_sha.clone(),
             skillsmp_id: self.skillsmp_id.clone(),
-            package_ecosystem: self.package_ecosystem,
+            package_ecosystem: self.package_ecosystem.clone(),
         }
     }
 
@@ -1308,10 +1454,17 @@ impl SkillData {
         match (
             &self.package_name,
             &self.package_version,
-            self.package_ecosystem,
+            self.package_ecosystem.as_ref(),
         ) {
-            (Some(name), Some(version), Some(PackageEcosystem::Node)) if !version.is_empty() => {
+            (Some(name), Some(version), Some(eco))
+                if !version.is_empty() && eco.as_str() == PACKAGE_ECOSYSTEM_NODE =>
+            {
                 Some(format!("{name}@{version}"))
+            }
+            (Some(name), Some(version), Some(eco))
+                if !version.is_empty() && eco.as_str() == PACKAGE_ECOSYSTEM_MAVEN =>
+            {
+                Some(format!("{name}:{version}"))
             }
             (Some(name), Some(version), _) if !version.is_empty() => {
                 Some(format!("{name}=={version}"))
@@ -1328,8 +1481,12 @@ impl SkillData {
         if let (Some(package_name), Some(other_package_name)) =
             (&self.package_name, &other.package_name)
         {
-            return (self.package_ecosystem, package_name, &self.name)
-                == (other.package_ecosystem, other_package_name, &other.name);
+            return (self.package_ecosystem.as_ref(), package_name, &self.name)
+                == (
+                    other.package_ecosystem.as_ref(),
+                    other_package_name,
+                    &other.name,
+                );
         }
         if let (Some(github_url), Some(other_github_url)) = (&self.github_url, &other.github_url) {
             return github_url == other_github_url;
@@ -1511,7 +1668,7 @@ pub fn read_distribution_info_in(
     file_system: &dyn FileSystem,
     dist_info: &Path,
 ) -> Result<Option<DistributionInfo>> {
-    let text = match file_system.read_file(&dist_info.join("METADATA")) {
+    let text = match file_system.read_text(&dist_info.join("METADATA")) {
         Ok(text) => text,
         Err(_) => return Ok(None),
     };
@@ -1533,9 +1690,19 @@ pub fn read_distribution_info_in(
 pub fn is_skill_record(installed_path: &str) -> bool {
     let normalized = installed_path.replace('\\', "/");
     let parts = normalized.split('/').collect::<Vec<_>>();
+    if parts.last() != Some(&"SKILL.md") {
+        return false;
+    }
+    // Reject paths that would escape the package root.
+    if parts.contains(&".") || parts.contains(&"..") || parts.contains(&"") {
+        return false;
+    }
     for (index, part) in parts.iter().enumerate() {
-        if *part == ".agents" && parts.len() > index + 3 {
-            return parts[index + 1] == "skills" && parts.last() == Some(&"SKILL.md");
+        if *part == ".agents" && parts.len() > index + 3 && parts[index + 1] == "skills" {
+            return true;
+        }
+        if *part == "skills" && parts.len() == index + 3 {
+            return true;
         }
     }
     false
@@ -1551,13 +1718,13 @@ pub fn resolve_record_path(site_packages: &Path, installed_path: &str) -> PathBu
 fn sort_dependency_skills(skills: &mut [SkillData]) {
     skills.sort_by(|left, right| {
         (
-            left.package_ecosystem,
+            left.package_ecosystem.as_ref(),
             left.package_name.as_deref().unwrap_or(""),
             left.package_version.as_deref().unwrap_or(""),
             left.name.as_str(),
         )
             .cmp(&(
-                right.package_ecosystem,
+                right.package_ecosystem.as_ref(),
                 right.package_name.as_deref().unwrap_or(""),
                 right.package_version.as_deref().unwrap_or(""),
                 right.name.as_str(),
@@ -1584,7 +1751,7 @@ pub fn discover_venv_skills_in(
         let Some(distribution) = read_distribution_info_in(file_system, &dist_info)? else {
             continue;
         };
-        let Ok(record_text) = file_system.read_file(&dist_info.join("RECORD")) else {
+        let Ok(record_text) = file_system.read_text(&dist_info.join("RECORD")) else {
             continue;
         };
         let mut reader = ReaderBuilder::new()
@@ -1614,7 +1781,7 @@ pub fn discover_venv_skills_in(
                     None,
                     None,
                     None,
-                    Some(PackageEcosystem::Python),
+                    Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_PYTHON)),
                 ),
             ) {
                 skills.push(skill);
@@ -1652,7 +1819,7 @@ fn parse_project_requirement_entries(text: &str) -> Result<Vec<ProjectRequiremen
         parsed
             .get("project")
             .and_then(|value| value.get("dependencies")),
-        ProjectDependencyOrigin::PythonProject,
+        ProjectDependencyOrigin::python_project(),
     );
 
     if let Some(groups) = parsed
@@ -1662,9 +1829,7 @@ fn parse_project_requirement_entries(text: &str) -> Result<Vec<ProjectRequiremen
         for (group_name, values) in groups {
             dependencies.extend(collect_project_requirement_values(
                 Some(values),
-                ProjectDependencyOrigin::PythonDependencyGroup {
-                    group: group_name.clone(),
-                },
+                ProjectDependencyOrigin::python_dependency_group(group_name),
             ));
         }
     }
@@ -1677,9 +1842,7 @@ fn parse_project_requirement_entries(text: &str) -> Result<Vec<ProjectRequiremen
         for (extra_name, values) in extras {
             dependencies.extend(collect_project_requirement_values(
                 Some(values),
-                ProjectDependencyOrigin::PythonOptionalDependency {
-                    extra: extra_name.clone(),
-                },
+                ProjectDependencyOrigin::python_optional_dependency(extra_name),
             ));
         }
     }
@@ -1700,9 +1863,21 @@ fn select_project_requirement_entries(
     requirements
         .into_iter()
         .filter(|requirement| match &requirement.origin {
-            ProjectDependencyOrigin::PythonProject => true,
-            ProjectDependencyOrigin::PythonDependencyGroup { group } => selected.contains(group),
-            ProjectDependencyOrigin::PythonOptionalDependency { extra } => selected.contains(extra),
+            origin if origin.ecosystem == PACKAGE_ECOSYSTEM_PYTHON && origin.scope == "project" => {
+                true
+            }
+            origin
+                if origin.ecosystem == PACKAGE_ECOSYSTEM_PYTHON
+                    && let Some(group) = origin.scope.strip_prefix("group:") =>
+            {
+                selected.contains(group)
+            }
+            origin
+                if origin.ecosystem == PACKAGE_ECOSYSTEM_PYTHON
+                    && let Some(extra) = origin.scope.strip_prefix("extra:") =>
+            {
+                selected.contains(extra)
+            }
             _ => false,
         })
         .collect()
@@ -1756,12 +1931,43 @@ fn parse_project_requirements(
 fn scan_project_requirements_in(
     file_system: &dyn FileSystem,
     pyproject_toml_path: &Path,
-    selection: &ScanDependencySelection,
+    settings: &PythonSourceSettings,
 ) -> Result<Vec<ProjectRequirementData>> {
-    let text = file_system.read_file(pyproject_toml_path)?;
+    let text = file_system.read_text(pyproject_toml_path)?;
+    let selection = ScanDependencySelection {
+        include_project_dependencies: settings.include_project_dependencies,
+        dependency_groups: settings.dependency_groups.clone(),
+        optional_dependencies: settings.optional_dependencies.clone(),
+        include_node_dependencies: false,
+        include_node_dev_dependencies: false,
+        include_node_optional_dependencies: false,
+    };
     Ok(filter_scan_requirement_entries(
         parse_project_requirement_entries(&text)?,
-        selection,
+        &selection,
+    ))
+}
+
+fn scan_node_requirements_in(
+    file_system: &dyn FileSystem,
+    package_json_path: &Path,
+    settings: &NodeSourceSettings,
+) -> Result<Vec<ProjectRequirementData>> {
+    if !file_system.exists(package_json_path)? {
+        return Ok(Vec::new());
+    }
+    let text = file_system.read_text(package_json_path)?;
+    let selection = ScanDependencySelection {
+        include_project_dependencies: false,
+        dependency_groups: NamedSelection::All,
+        optional_dependencies: NamedSelection::All,
+        include_node_dependencies: settings.include_dependencies,
+        include_node_dev_dependencies: settings.include_dev_dependencies,
+        include_node_optional_dependencies: settings.include_optional_dependencies,
+    };
+    Ok(filter_scan_requirement_entries(
+        parse_node_dependency_entries(&text)?,
+        &selection,
     ))
 }
 
@@ -1784,7 +1990,7 @@ pub fn project_requirements_in(
     include_dev: bool,
     include_extras: &[String],
 ) -> Result<Vec<String>> {
-    let text = file_system.read_file(pyproject_toml_path)?;
+    let text = file_system.read_text(pyproject_toml_path)?;
     parse_project_requirements(&text, include_dev, include_extras)
 }
 
@@ -1828,7 +2034,7 @@ fn parse_node_dependency_entries(text: &str) -> Result<Vec<ProjectRequirementDat
             validate_node_package_name(name)?;
             dependencies.push(ProjectRequirementData {
                 spec: name.to_string(),
-                origin: ProjectDependencyOrigin::NodeDependencies,
+                origin: ProjectDependencyOrigin::node_dependencies(),
             });
         }
     }
@@ -1838,7 +2044,7 @@ fn parse_node_dependency_entries(text: &str) -> Result<Vec<ProjectRequirementDat
             validate_node_package_name(name)?;
             dependencies.push(ProjectRequirementData {
                 spec: name.to_string(),
-                origin: ProjectDependencyOrigin::NodeDevDependencies,
+                origin: ProjectDependencyOrigin::node_dev_dependencies(),
             });
         }
     }
@@ -1851,27 +2057,12 @@ fn parse_node_dependency_entries(text: &str) -> Result<Vec<ProjectRequirementDat
             validate_node_package_name(name)?;
             dependencies.push(ProjectRequirementData {
                 spec: name.to_string(),
-                origin: ProjectDependencyOrigin::NodeOptionalDependencies,
+                origin: ProjectDependencyOrigin::node_optional_dependencies(),
             });
         }
     }
 
     Ok(dependencies)
-}
-
-fn scan_node_requirements_in(
-    file_system: &dyn FileSystem,
-    package_json_path: &Path,
-    selection: &ScanDependencySelection,
-) -> Result<Vec<ProjectRequirementData>> {
-    if !file_system.exists(package_json_path)? {
-        return Ok(Vec::new());
-    }
-    let text = file_system.read_file(package_json_path)?;
-    Ok(filter_scan_requirement_entries(
-        parse_node_dependency_entries(&text)?,
-        selection,
-    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1881,6 +2072,7 @@ struct NodePackageInfo {
 }
 
 #[cfg(feature = "python-bindings")]
+#[allow(dead_code)]
 pub fn discover_node_modules_skills(node_modules_path: &Path) -> Result<Vec<SkillData>> {
     discover_node_modules_skills_in(&NATIVE_FILE_SYSTEM, node_modules_path)
 }
@@ -1942,40 +2134,26 @@ fn load_node_package_skills_in(
     package_path: &Path,
     _full_name: &str,
 ) -> Result<Option<Vec<SkillData>>> {
-    let skills_dir = package_path.join("skills");
-    if !file_system.is_dir(&skills_dir)? {
-        return Ok(None);
-    }
-
     let package_json_path = package_path.join("package.json");
     let Some(package_info) = read_node_package_json_in(file_system, &package_json_path)? else {
         return Ok(None);
     };
 
-    let skill_dirs = file_system.list_files(&skills_dir)?;
-    let mut skills = Vec::new();
-    for skill_dir_name in skill_dirs {
-        let skill_dir = skills_dir.join(&skill_dir_name);
-        if !file_system.is_dir(&skill_dir)? {
-            continue;
-        }
-        let skill = SkillData::from_dir_with_source_metadata_in(
-            file_system,
-            &skill_dir,
-            &SkillSourceMetadata::new(
-                Some(SKILLY_SOURCE_DEPENDENCY),
-                Some(&package_info.name),
-                Some(&package_info.version),
-                None,
-                None,
-                None,
-                Some(PackageEcosystem::Node),
-            ),
-        );
-        match skill {
-            Ok(skill) => skills.push(skill),
-            Err(_) => continue,
-        }
+    let source_metadata = SkillSourceMetadata::new(
+        Some(SKILLY_SOURCE_DEPENDENCY),
+        Some(&package_info.name),
+        Some(&package_info.version),
+        None,
+        None,
+        None,
+        Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_NODE)),
+    );
+
+    let (skills, warnings) =
+        discover_package_skills_from_dir_in(file_system, package_path, &source_metadata);
+
+    for warning in warnings {
+        eprintln!("skilly: {warning}");
     }
 
     Ok(if skills.is_empty() {
@@ -1992,7 +2170,7 @@ fn read_node_package_json_in(
     if !file_system.exists(package_json_path)? {
         return Ok(None);
     }
-    let text = file_system.read_file(package_json_path)?;
+    let text = file_system.read_text(package_json_path)?;
     let parsed: serde_json::Value =
         serde_json::from_str(&text).map_err(|error| anyhow!("invalid package.json: {error}"))?;
     let name = parsed
@@ -2009,6 +2187,164 @@ fn read_node_package_json_in(
     }))
 }
 
+fn discover_package_skills_from_dir_in(
+    file_system: &dyn FileSystem,
+    package_root: &Path,
+    source_metadata: &SkillSourceMetadata,
+) -> (Vec<SkillData>, Vec<String>) {
+    let skill_layouts = [".agents/skills", "skills"];
+    let mut warnings = Vec::new();
+    let mut seen_names: BTreeMap<String, SkillData> = BTreeMap::new();
+    let mut duplicate_names = BTreeSet::new();
+
+    for layout_dir in skill_layouts {
+        let layout_path = package_root.join(layout_dir);
+        if !matches!(file_system.is_dir(&layout_path), Ok(true)) {
+            continue;
+        }
+
+        let Ok(child_names) = file_system.list_files(&layout_path) else {
+            continue;
+        };
+
+        for child_name in child_names {
+            let skill_dir = layout_path.join(&child_name);
+            if !matches!(file_system.is_dir(&skill_dir), Ok(true)) {
+                continue;
+            }
+
+            let normalized_name = child_name.to_ascii_lowercase();
+
+            match SkillData::from_dir_with_source_metadata_in(
+                file_system,
+                &skill_dir,
+                source_metadata,
+            ) {
+                Ok(skill) => {
+                    if let Some(_existing) = seen_names.get(&normalized_name) {
+                        duplicate_names.insert(normalized_name.clone());
+                    }
+                    seen_names.insert(normalized_name, skill);
+                }
+                Err(error) => {
+                    warnings.push(format!(
+                        "{}: could not load skill ({error})",
+                        skill_dir.display()
+                    ));
+                }
+            }
+        }
+    }
+
+    for dup in &duplicate_names {
+        seen_names.remove(dup);
+        warnings.push(format!(
+            "ambiguous duplicate skill directory name {dup:?} found in package {:?}; both copies ignored",
+            package_root.display()
+        ));
+    }
+
+    let mut skills: Vec<_> = seen_names.into_values().collect();
+    skills.sort_by(|left, right| left.name.cmp(&right.name));
+    (skills, warnings)
+}
+
+/// Discover skills from Maven JAR artifacts in the local repository.
+///
+/// Reads the POM, resolves direct dependencies, locates each JAR, and
+/// extracts skills from the archive. Returns discovered skills and any
+/// non-fatal warnings.
+pub fn discover_maven_skills_in(
+    file_system: &dyn FileSystem,
+    settings: &MavenSourceSettings,
+) -> Result<(Vec<SkillData>, Vec<String>)> {
+    let mut all_skills = Vec::new();
+    let mut all_warnings = Vec::new();
+
+    if !file_system.exists(&settings.pom_xml_path).unwrap_or(false) {
+        return Ok((all_skills, all_warnings));
+    }
+
+    let pom_text = file_system.read_text(&settings.pom_xml_path)?;
+    let (coordinates, pom_warnings) = parse_maven_dependencies(&pom_text)?;
+    all_warnings.extend(pom_warnings);
+
+    let selected: Vec<_> = coordinates
+        .into_iter()
+        .filter(|coord| {
+            let scope = coord.scope.as_deref().unwrap_or("compile");
+            match scope {
+                "compile" => settings.include_compile_scope,
+                "runtime" => settings.include_runtime_scope,
+                "provided" => settings.include_provided_scope,
+                "test" => settings.include_test_scope,
+                "system" => settings.include_system_scope,
+                _ => false,
+            }
+        })
+        .collect();
+
+    let mut seen_names = BTreeSet::new();
+    for coord in &selected {
+        let jar_path = maven_jar_path(&settings.repository_path, coord);
+        if !file_system.exists(&jar_path).unwrap_or(false) {
+            all_warnings.push(format!(
+                "Maven artifact not found: {} (expected at {})",
+                format_maven_ref(coord),
+                jar_path.display()
+            ));
+            continue;
+        }
+
+        let jar_bytes = match file_system.read_bytes(&jar_path, Some(MAX_ARCHIVE_SIZE)) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                all_warnings.push(format!(
+                    "could not read Maven artifact {} ({error})",
+                    jar_path.display()
+                ));
+                continue;
+            }
+        };
+
+        let source_metadata = SkillSourceMetadata::new(
+            Some(SKILLY_SOURCE_DEPENDENCY),
+            Some(&format_maven_package_name(coord)),
+            Some(&coord.version),
+            None,
+            None,
+            None,
+            Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_MAVEN)),
+        );
+
+        match load_skills_from_archive(&jar_bytes, &source_metadata) {
+            Ok((skills, archive_warnings)) => {
+                all_warnings.extend(archive_warnings);
+                for skill in skills {
+                    let key = (
+                        skill.name.clone(),
+                        skill.package_name.clone(),
+                        skill.package_version.clone(),
+                    );
+                    if !seen_names.insert(key) {
+                        continue;
+                    }
+                    all_skills.push(skill);
+                }
+            }
+            Err(error) => {
+                all_warnings.push(format!(
+                    "could not load skills from Maven artifact {} ({error})",
+                    jar_path.display()
+                ));
+            }
+        }
+    }
+
+    sort_dependency_skills(&mut all_skills);
+    Ok((all_skills, all_warnings))
+}
+
 fn project_skill_matches_in(
     file_system: &dyn FileSystem,
     environment: &ProjectEnvironment,
@@ -2016,61 +2352,85 @@ fn project_skill_matches_in(
     let installed = discover_installed_skills_in(file_system, &environment.directory)?;
     let mut matches = Vec::new();
 
-    // Python ecosystem scanning
-    if file_system
-        .exists(&environment.pyproject_toml_path)
-        .unwrap_or(false)
-    {
-        let requirements = scan_project_requirements_in(
-            file_system,
-            &environment.pyproject_toml_path,
-            &environment.dependency_selection,
-        )?;
-        let origins_by_package = package_dependency_origins(&requirements);
+    for source in &environment.sources {
+        match source {
+            ProjectSource::Python(settings) => {
+                if file_system
+                    .exists(&settings.pyproject_toml_path)
+                    .unwrap_or(false)
+                {
+                    let requirements = scan_project_requirements_in(
+                        file_system,
+                        &settings.pyproject_toml_path,
+                        settings,
+                    )?;
+                    let origins_by_package = package_dependency_origins(&requirements);
 
-        for skill in discover_venv_skills_in(file_system, &environment.venv_path)? {
-            let package_name = match skill.package_name.as_ref() {
-                Some(name) => name,
-                None => continue,
-            };
-            let dependency_origins = match origins_by_package.get(package_name) {
-                Some(origins) => origins.clone(),
-                None => continue,
-            };
-            matches.push(SkillMatchData {
-                installed: match_installed(&installed, &skill),
-                available: skill,
-                dependency_origins,
-            });
-        }
-    }
+                    for skill in discover_venv_skills_in(file_system, &settings.venv_path)? {
+                        let package_name = match skill.package_name.as_ref() {
+                            Some(name) => name,
+                            None => continue,
+                        };
+                        let dependency_origins = match origins_by_package.get(package_name) {
+                            Some(origins) => origins.clone(),
+                            None => continue,
+                        };
+                        matches.push(SkillMatchData {
+                            installed: match_installed(&installed, &skill),
+                            available: skill,
+                            dependency_origins,
+                        });
+                    }
+                }
+            }
+            ProjectSource::Node(settings) => {
+                if file_system
+                    .exists(&settings.package_json_path)
+                    .unwrap_or(false)
+                {
+                    let node_requirements = scan_node_requirements_in(
+                        file_system,
+                        &settings.package_json_path,
+                        settings,
+                    )?;
+                    let node_origins_by_package = package_dependency_origins(&node_requirements);
 
-    // Node ecosystem scanning
-    if file_system
-        .exists(&environment.package_json_path)
-        .unwrap_or(false)
-    {
-        let node_requirements = scan_node_requirements_in(
-            file_system,
-            &environment.package_json_path,
-            &environment.dependency_selection,
-        )?;
-        let node_origins_by_package = package_dependency_origins(&node_requirements);
-
-        for skill in discover_node_modules_skills_in(file_system, &environment.node_modules_path)? {
-            let package_name = match skill.package_name.as_ref() {
-                Some(name) => name,
-                None => continue,
-            };
-            let dependency_origins = match node_origins_by_package.get(package_name) {
-                Some(origins) => origins.clone(),
-                None => continue,
-            };
-            matches.push(SkillMatchData {
-                installed: match_installed(&installed, &skill),
-                available: skill,
-                dependency_origins,
-            });
+                    for skill in
+                        discover_node_modules_skills_in(file_system, &settings.node_modules_path)?
+                    {
+                        let package_name = match skill.package_name.as_ref() {
+                            Some(name) => name,
+                            None => continue,
+                        };
+                        let dependency_origins = match node_origins_by_package.get(package_name) {
+                            Some(origins) => origins.clone(),
+                            None => continue,
+                        };
+                        matches.push(SkillMatchData {
+                            installed: match_installed(&installed, &skill),
+                            available: skill,
+                            dependency_origins,
+                        });
+                    }
+                }
+            }
+            ProjectSource::Maven(settings) => {
+                let (skills, warnings) = discover_maven_skills_in(file_system, settings)?;
+                for warning in warnings {
+                    eprintln!("skilly: {warning}");
+                }
+                let dependency_origins = vec![ProjectDependencyOrigin {
+                    ecosystem: PACKAGE_ECOSYSTEM_MAVEN.to_string(),
+                    scope: "compile".to_string(),
+                }];
+                for skill in skills {
+                    matches.push(SkillMatchData {
+                        installed: match_installed(&installed, &skill),
+                        available: skill,
+                        dependency_origins: dependency_origins.clone(),
+                    });
+                }
+            }
         }
     }
 
@@ -2100,13 +2460,13 @@ pub fn scan_project_with_file_system(
     let mut matches = project_skill_matches_in(file_system, environment)?;
     matches.sort_by(|left, right| {
         (
-            left.available.package_ecosystem,
+            left.available.package_ecosystem.as_ref(),
             left.available.package_name.as_deref().unwrap_or(""),
             left.available.name.as_str(),
             left.available.package_version.as_deref().unwrap_or(""),
         )
             .cmp(&(
-                right.available.package_ecosystem,
+                right.available.package_ecosystem.as_ref(),
                 right.available.package_name.as_deref().unwrap_or(""),
                 right.available.name.as_str(),
                 right.available.package_version.as_deref().unwrap_or(""),
@@ -2307,7 +2667,7 @@ pub fn build_skill_from_github_files(
             Some(SkillResourceData {
                 relative_path: relative_path.clone(),
                 kind: classify_resource_kind(&relative_path),
-                content: blob.content.clone(),
+                content: blob.content.clone().into_bytes(),
             })
         })
         .collect();
@@ -2363,6 +2723,485 @@ fn skill_dirs_len_eq_location(location_path: &str, skill_dir: &str) -> bool {
     (location_path == "." && skill_dir == ".") || location_path == skill_dir
 }
 
+/// Maximum total archive size for skill loading (200 MB).
+pub const MAX_ARCHIVE_SIZE: u64 = 200 * 1024 * 1024;
+/// Maximum number of entries in an archive.
+pub const MAX_ARCHIVE_ENTRIES: usize = 100_000;
+/// Maximum uncompressed size for a single resource within an archive (10 MB).
+pub const MAX_ARCHIVE_RESOURCE_SIZE: u64 = 10 * 1024 * 1024;
+/// Maximum cumulative uncompressed size across all extracted entries (500 MB).
+pub const MAX_ARCHIVE_CUMULATIVE_SIZE: u64 = 500 * 1024 * 1024;
+
+/// Discover skills from a raw ZIP/JAR archive without extracting to disk.
+///
+/// Scans entries under both `skills/<name>/SKILL.md` and `.agents/skills/<name>/SKILL.md`
+/// layouts, enforces size and entry limits, and returns complete [`SkillData`] records
+/// including bundled resources read from the same archive.
+pub fn load_skills_from_archive(
+    archive_bytes: &[u8],
+    source_metadata: &SkillSourceMetadata,
+) -> Result<(Vec<SkillData>, Vec<String>)> {
+    let total_size = archive_bytes.len() as u64;
+    if total_size > MAX_ARCHIVE_SIZE {
+        bail!("archive size {total_size} exceeds maximum {MAX_ARCHIVE_SIZE} bytes");
+    }
+
+    let cursor = std::io::Cursor::new(archive_bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|error| anyhow!("invalid ZIP archive: {error}"))?;
+
+    if archive.len() > MAX_ARCHIVE_ENTRIES {
+        bail!(
+            "archive entry count {} exceeds maximum {MAX_ARCHIVE_ENTRIES}",
+            archive.len()
+        );
+    }
+
+    let mut warnings = Vec::new();
+    let mut skill_entries: BTreeMap<String, Vec<(String, Vec<u8>)>> = BTreeMap::new();
+    let skill_layout_prefixes = [".agents/skills/", "skills/"];
+    let mut seen_entry_paths = BTreeSet::new();
+    let mut cumulative_size: u64 = 0;
+
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| anyhow!("could not read archive entry {index}: {error}"))?;
+
+        let name = entry.name().to_string();
+        let normalized = name.replace('\\', "/");
+
+        if !validate_archive_entry_path(&normalized) {
+            warnings.push(format!("skipping unsafe archive entry path: {name:?}"));
+            continue;
+        }
+
+        // Reject duplicate entry paths
+        if !seen_entry_paths.insert(normalized.clone()) {
+            bail!("duplicate archive entry path: {name:?}");
+        }
+
+        if entry.is_dir() {
+            continue;
+        }
+
+        // Only decompress entries that belong to a skill layout directory
+        let mut matched_layout = false;
+        for prefix in skill_layout_prefixes {
+            if let Some(remainder) = normalized.strip_prefix(prefix) {
+                if remainder.is_empty() || !remainder.contains('/') {
+                    break;
+                }
+                matched_layout = true;
+                break;
+            }
+        }
+        if !matched_layout {
+            continue;
+        }
+
+        let uncompressed_size = entry.size();
+        if uncompressed_size > MAX_ARCHIVE_RESOURCE_SIZE {
+            warnings.push(format!(
+                "skipping oversized archive entry {name:?} ({uncompressed_size} bytes)"
+            ));
+            continue;
+        }
+
+        cumulative_size += uncompressed_size;
+        if cumulative_size > MAX_ARCHIVE_CUMULATIVE_SIZE {
+            bail!(
+                "cumulative uncompressed size {cumulative_size} exceeds maximum {MAX_ARCHIVE_CUMULATIVE_SIZE} bytes"
+            );
+        }
+
+        let mut buf = Vec::with_capacity(uncompressed_size as usize);
+        std::io::copy(&mut entry, &mut buf)
+            .map_err(|error| anyhow!("could not read archive entry {name:?}: {error}"))?;
+
+        for prefix in skill_layout_prefixes {
+            if let Some(remainder) = normalized.strip_prefix(prefix) {
+                if let Some((skill_name, rest)) = remainder.split_once('/') {
+                    if rest.is_empty() {
+                        continue;
+                    }
+                    let key = format!("{prefix}{skill_name}");
+                    skill_entries
+                        .entry(key)
+                        .or_default()
+                        .push((rest.to_string(), buf.clone()));
+                }
+                break;
+            }
+        }
+    }
+
+    let mut seen_dirs = BTreeSet::new();
+    let mut duplicate_names = BTreeSet::new();
+    let mut pending: Vec<(String, SkillData)> = Vec::new();
+
+    for (dir_path, resources) in skill_entries {
+        let Some(skill_dir_name) = dir_path.rsplit('/').next() else {
+            continue;
+        };
+        let normalized_name = skill_dir_name.to_ascii_lowercase();
+        if !seen_dirs.insert(normalized_name.clone()) {
+            duplicate_names.insert(normalized_name.clone());
+            continue;
+        }
+
+        let skill_md_entry = resources.iter().find(|(path, _)| path == "SKILL.md");
+        let Some((_, skill_md_content)) = skill_md_entry else {
+            warnings.push(format!(
+                "no SKILL.md found in archive skill directory {dir_path:?}; skipping"
+            ));
+            continue;
+        };
+
+        let skill_md_text = String::from_utf8(skill_md_content.clone())
+            .map_err(|error| anyhow!("SKILL.md in {dir_path:?} is not valid UTF-8: {error}"))?;
+
+        let mut skill = SkillData::from_text_parts(&skill_md_text, None, source_metadata)?;
+
+        let mut skill_resources = Vec::new();
+        for (rel_path, content_bytes) in &resources {
+            if rel_path == "SKILL.md" {
+                continue;
+            }
+            skill_resources.push(SkillResourceData {
+                relative_path: rel_path.clone(),
+                kind: classify_resource_kind(rel_path),
+                content: content_bytes.clone(),
+            });
+        }
+        skill_resources.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+        skill.resources = skill_resources;
+
+        pending.push((normalized_name, skill));
+    }
+
+    // Remove ambiguous dual-layout skills (same name in both layouts)
+    for dup in &duplicate_names {
+        warnings.push(format!(
+            "ambiguous duplicate skill directory name {dup:?} found in archive; both copies ignored"
+        ));
+    }
+    pending.retain(|(name, _)| !duplicate_names.contains(name));
+
+    let mut skills: Vec<_> = pending.into_iter().map(|(_, skill)| skill).collect();
+    skills.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok((skills, warnings))
+}
+
+/// Validate that an archive entry path is safe: no traversal, no absolute roots,
+/// no backslashes, no empty segments.
+fn validate_archive_entry_path(path: &str) -> bool {
+    if path.is_empty() || path.starts_with('/') || path.contains('\\') {
+        return false;
+    }
+    for segment in path.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return false;
+        }
+    }
+    true
+}
+
+/// A Maven coordinate parsed from a `pom.xml` dependency entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MavenCoordinate {
+    pub group_id: String,
+    pub artifact_id: String,
+    pub version: String,
+    pub scope: Option<String>,
+}
+
+/// Parse direct Maven dependencies from a `pom.xml` string using a
+/// structured XML reader.
+///
+/// Supports concrete versions and `${property}` values defined in the same
+/// POM's `<properties>` block. Returns coordinates and any warnings for
+/// unresolved or unsupported constructs.
+pub fn parse_maven_dependencies(pom_xml: &str) -> Result<(Vec<MavenCoordinate>, Vec<String>)> {
+    use quick_xml::Reader;
+    use quick_xml::events::Event;
+
+    let mut reader = Reader::from_str(pom_xml);
+    reader.config_mut().trim_text(true);
+
+    let mut warnings = Vec::new();
+    let mut properties = BTreeMap::new();
+    let mut coordinates = Vec::new();
+
+    // Depth tracking so we only process direct-child <dependencies> of <project>.
+    let mut depth = 0u32;
+    let mut in_project = false;
+    let mut in_dependencies = false;
+    let mut in_dependency = false;
+    // Skip sections whose dependencies we ignore.
+    let mut skip_depth = None::<u32>;
+    // Current dependency fields
+    let mut current_group_id: Option<String> = None;
+    let mut current_artifact_id: Option<String> = None;
+    let mut current_version: Option<String> = None;
+    let mut current_scope: Option<String> = None;
+    // Track current text content
+    let mut current_text = String::new();
+    let mut in_properties = false;
+    let mut prop_name: Option<String> = None;
+
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                depth += 1;
+                let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+
+                if skip_depth.is_none()
+                    && matches!(
+                        tag_name.as_str(),
+                        "dependencyManagement" | "profiles" | "build" | "plugin" | "plugins"
+                    )
+                {
+                    skip_depth = Some(depth);
+                }
+
+                if tag_name == "project" && depth == 1 {
+                    in_project = true;
+                }
+
+                if in_project && tag_name == "properties" && skip_depth.is_none() {
+                    in_properties = true;
+                }
+
+                if in_properties && tag_name != "properties" {
+                    prop_name = Some(tag_name.clone());
+                }
+
+                if in_project && tag_name == "dependencies" && skip_depth.is_none() {
+                    in_dependencies = true;
+                }
+
+                if in_dependencies && tag_name == "dependency" {
+                    in_dependency = true;
+                    current_group_id = None;
+                    current_artifact_id = None;
+                    current_version = None;
+                    current_scope = None;
+                }
+
+                current_text.clear();
+            }
+            Ok(Event::End(ref e)) => {
+                let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+
+                if skip_depth == Some(depth) {
+                    skip_depth = None;
+                }
+
+                if in_properties && tag_name == "properties" {
+                    in_properties = false;
+                    prop_name = None;
+                }
+
+                if in_properties {
+                    if let Some(ref name) = prop_name {
+                        let text = current_text.trim().to_string();
+                        if !text.is_empty() {
+                            properties.insert(name.clone(), text);
+                        }
+                    }
+                    prop_name = None;
+                }
+
+                if in_dependency {
+                    match tag_name.as_str() {
+                        "groupId" => {
+                            current_group_id = Some(std::mem::take(&mut current_text));
+                        }
+                        "artifactId" => {
+                            current_artifact_id = Some(std::mem::take(&mut current_text));
+                        }
+                        "version" => {
+                            current_version = Some(std::mem::take(&mut current_text));
+                        }
+                        "scope" => {
+                            let text = std::mem::take(&mut current_text);
+                            current_scope = if text.trim().is_empty() {
+                                None
+                            } else {
+                                Some(text.trim().to_string())
+                            };
+                        }
+                        "dependency" => {
+                            in_dependency = false;
+                            match (
+                                current_group_id.take(),
+                                current_artifact_id.take(),
+                                current_version.take(),
+                            ) {
+                                (Some(g), Some(a), Some(v)) => {
+                                    let resolved = if v.starts_with("${") && v.ends_with('}') {
+                                        let key = &v[2..v.len() - 1];
+                                        match properties.get(key) {
+                                            Some(val) => val.clone(),
+                                            None => {
+                                                warnings.push(format!(
+                                                    "skipping Maven dependency {g}:{a}: could not resolve version {v:?}"
+                                                ));
+                                                current_text.clear();
+                                                continue;
+                                            }
+                                        }
+                                    } else {
+                                        v
+                                    };
+
+                                    match validate_maven_coordinate(&g, &a, &resolved) {
+                                        Ok(()) => {}
+                                        Err(error) => {
+                                            warnings.push(format!(
+                                                "rejecting unsafe Maven dependency {g}:{a}:{resolved}: {error}"
+                                            ));
+                                            current_text.clear();
+                                            continue;
+                                        }
+                                    }
+
+                                    coordinates.push(MavenCoordinate {
+                                        group_id: g,
+                                        artifact_id: a,
+                                        version: resolved,
+                                        scope: current_scope.take(),
+                                    });
+                                }
+                                (Some(g), Some(a), None) => {
+                                    warnings.push(format!(
+                                        "skipping Maven dependency {g}:{a}: missing version"
+                                    ));
+                                }
+                                _ => {
+                                    warnings.push(
+                                        "skipping malformed Maven dependency entry".to_string(),
+                                    );
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                if in_project && tag_name == "project" {
+                    in_project = false;
+                }
+
+                if in_dependencies && tag_name == "dependencies" && skip_depth.is_none() {
+                    in_dependencies = false;
+                }
+
+                current_text.clear();
+                depth -= 1;
+            }
+            Ok(Event::Text(ref e)) => {
+                let text = e.unescape().unwrap_or_default().to_string();
+                current_text.push_str(&text);
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => {
+                return Err(anyhow!(
+                    "malformed pom.xml at position {}: {error}",
+                    reader.buffer_position()
+                ));
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    // Treat unclosed elements as malformed XML.
+    if depth != 0 || in_project {
+        bail!("malformed pom.xml: unclosed elements detected (depth {depth})");
+    }
+
+    Ok((coordinates, warnings))
+}
+
+/// Validate a Maven coordinate component for path traversal safety.
+fn validate_maven_coordinate_component(component: &str, label: &str) -> Result<()> {
+    if component.is_empty() {
+        bail!("{label} must not be empty");
+    }
+    if component.contains("..") {
+        bail!("{label} must not contain \"..\"");
+    }
+    if component.contains('/') || component.contains('\\') {
+        bail!("{label} must not contain path separators");
+    }
+    if component.starts_with('.') {
+        bail!("{label} must not start with \".\"");
+    }
+    if component.contains(':') {
+        bail!("{label} must not contain \":\"");
+    }
+    Ok(())
+}
+
+/// Validate that groupId, artifactId, and version are safe for
+/// filesystem path construction.
+fn validate_maven_coordinate(group_id: &str, artifact_id: &str, version: &str) -> Result<()> {
+    validate_maven_coordinate_component(group_id, "groupId")?;
+    // Allow dots in groupId (they map to path separators)
+    for part in group_id.split('.') {
+        if part.is_empty() {
+            bail!("groupId must not contain empty segments");
+        }
+    }
+    validate_maven_coordinate_component(artifact_id, "artifactId")?;
+    validate_maven_coordinate_component(version, "version")?;
+    if version.contains('.') {
+        // Dots in version are fine (they're version separators, not path)
+        for part in version.split('.') {
+            if part.is_empty() {
+                bail!("version must not contain empty segments");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Format a Maven coordinate as `groupId:artifactId:version`.
+#[must_use]
+pub fn format_maven_ref(coordinate: &MavenCoordinate) -> String {
+    format!(
+        "{}:{}:{}",
+        coordinate.group_id, coordinate.artifact_id, coordinate.version
+    )
+}
+
+/// Format a Maven package name as `groupId:artifactId` (without version).
+#[must_use]
+pub fn format_maven_package_name(coordinate: &MavenCoordinate) -> String {
+    format!("{}:{}", coordinate.group_id, coordinate.artifact_id)
+}
+
+/// Resolve the local repository path for a Maven coordinate.
+///
+/// Maps `groupId:artifactId:version` to the standard Maven repository layout:
+/// `{repo}/{groupId with . as /}/{artifactId}/{version}/{artifactId}-{version}.jar`
+#[must_use]
+pub fn maven_jar_path(repository: &Path, coordinate: &MavenCoordinate) -> PathBuf {
+    let group_path = coordinate.group_id.replace('.', "/");
+    repository
+        .join(group_path)
+        .join(&coordinate.artifact_id)
+        .join(&coordinate.version)
+        .join(format!(
+            "{}-{}.jar",
+            coordinate.artifact_id, coordinate.version
+        ))
+}
+
 /// Check whether installed and available GitHub skills share the same commit SHA.
 #[must_use]
 #[inline]
@@ -2374,9 +3213,10 @@ pub fn github_versions_match(installed: &SkillData, available: &SkillData) -> bo
 #[cfg(test)]
 mod tests {
     use super::{
-        NamedSelection, PackageEcosystem, ProjectDependencyOrigin, ScanDependencySelection,
-        SkillData, SkillSourceMetadata, parse_node_dependency_entries,
-        parse_project_requirement_entries, parse_project_requirements, validate_node_package_name,
+        NamedSelection, PACKAGE_ECOSYSTEM_NODE, PACKAGE_ECOSYSTEM_PYTHON, PackageEcosystem,
+        ProjectDependencyOrigin, ScanDependencySelection, SkillData, SkillSourceMetadata,
+        parse_node_dependency_entries, parse_project_requirement_entries,
+        parse_project_requirements, validate_node_package_name,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -2437,10 +3277,7 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
 
         assert_eq!(selected.len(), 2);
         assert!(selected.iter().all(|requirement| {
-            requirement.origin
-                == ProjectDependencyOrigin::PythonDependencyGroup {
-                    group: "dev".to_string(),
-                }
+            requirement.origin == ProjectDependencyOrigin::python_dependency_group("dev")
         }));
     }
 
@@ -2575,11 +3412,14 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             .collect();
         assert_eq!(
             specs[0],
-            ("shared-lib", ProjectDependencyOrigin::NodeDependencies)
+            ("shared-lib", ProjectDependencyOrigin::node_dependencies())
         );
         assert_eq!(
             specs[1],
-            ("shared-lib", ProjectDependencyOrigin::NodeDevDependencies)
+            (
+                "shared-lib",
+                ProjectDependencyOrigin::node_dev_dependencies()
+            )
         );
     }
 
@@ -2623,15 +3463,15 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
     #[test]
     fn node_dependency_origin_labels_include_ecosystem() {
         assert_eq!(
-            ProjectDependencyOrigin::NodeDependencies.scan_label(),
+            ProjectDependencyOrigin::node_dependencies().scan_label(),
             "node:dependencies"
         );
         assert_eq!(
-            ProjectDependencyOrigin::NodeDevDependencies.detail_label(),
+            ProjectDependencyOrigin::node_dev_dependencies().detail_label(),
             "node development dependency"
         );
         assert_eq!(
-            ProjectDependencyOrigin::NodeOptionalDependencies.scan_label(),
+            ProjectDependencyOrigin::node_optional_dependencies().scan_label(),
             "node:optionalDependencies"
         );
     }
@@ -2662,8 +3502,18 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
 
     #[test]
     fn ecosystem_prevents_cross_ecosystem_matches() {
-        let python_skill = make_skill("lint", "ruff", "1.0.0", Some(PackageEcosystem::Python));
-        let node_skill = make_skill("lint", "ruff", "1.0.0", Some(PackageEcosystem::Node));
+        let python_skill = make_skill(
+            "lint",
+            "ruff",
+            "1.0.0",
+            Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_PYTHON)),
+        );
+        let node_skill = make_skill(
+            "lint",
+            "ruff",
+            "1.0.0",
+            Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_NODE)),
+        );
 
         assert!(!python_skill.matches(&node_skill));
         assert!(!node_skill.matches(&python_skill));
@@ -2671,8 +3521,18 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
 
     #[test]
     fn ecosystem_same_type_allows_match() {
-        let skill_a = make_skill("lint", "ruff", "1.0.0", Some(PackageEcosystem::Python));
-        let skill_b = make_skill("lint", "ruff", "2.0.0", Some(PackageEcosystem::Python));
+        let skill_a = make_skill(
+            "lint",
+            "ruff",
+            "1.0.0",
+            Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_PYTHON)),
+        );
+        let skill_b = make_skill(
+            "lint",
+            "ruff",
+            "2.0.0",
+            Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_PYTHON)),
+        );
 
         assert!(skill_a.matches(&skill_b));
     }
@@ -2702,12 +3562,15 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
         let source = source_md.resolved_source(&metadata);
         let inferred = source_md.package_ecosystem.or_else(|| {
             if source == "dependency" {
-                Some(PackageEcosystem::Python)
+                Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_PYTHON))
             } else {
                 None
             }
         });
-        assert_eq!(inferred, Some(PackageEcosystem::Python));
+        assert_eq!(
+            inferred,
+            Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_PYTHON))
+        );
     }
 
     #[test]
@@ -2716,14 +3579,19 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             "lint",
             "@scope/my-pkg",
             "2.1.0",
-            Some(PackageEcosystem::Node),
+            Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_NODE)),
         );
         assert_eq!(
             node.package_reference(),
             Some("@scope/my-pkg@2.1.0".to_string())
         );
 
-        let unscoped = make_skill("lint", "typescript", "5.0.0", Some(PackageEcosystem::Node));
+        let unscoped = make_skill(
+            "lint",
+            "typescript",
+            "5.0.0",
+            Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_NODE)),
+        );
         assert_eq!(
             unscoped.package_reference(),
             Some("typescript@5.0.0".to_string())
@@ -2732,13 +3600,23 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
 
     #[test]
     fn package_reference_formats_python_with_double_equals() {
-        let python = make_skill("lint", "ruff", "0.12.0", Some(PackageEcosystem::Python));
+        let python = make_skill(
+            "lint",
+            "ruff",
+            "0.12.0",
+            Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_PYTHON)),
+        );
         assert_eq!(python.package_reference(), Some("ruff==0.12.0".to_string()));
     }
 
     #[test]
     fn package_reference_omits_version_when_empty() {
-        let no_version = make_skill("lint", "ruff", "", Some(PackageEcosystem::Python));
+        let no_version = make_skill(
+            "lint",
+            "ruff",
+            "",
+            Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_PYTHON)),
+        );
         assert_eq!(no_version.package_reference(), Some("ruff".to_string()));
     }
 
@@ -2752,7 +3630,7 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             None,
             None,
             None,
-            Some(PackageEcosystem::Node),
+            Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_NODE)),
         );
 
         source_metadata.insert_source_metadata(&mut metadata);
@@ -2810,7 +3688,10 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             SkillSourceMetadata::new(Some("dependency"), None, None, None, None, None, None);
         source_md.apply_missing_from_metadata(&metadata);
 
-        assert_eq!(source_md.package_ecosystem, Some(PackageEcosystem::Node));
+        assert_eq!(
+            source_md.package_ecosystem,
+            Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_NODE))
+        );
     }
 
     #[test]
@@ -2822,9 +3703,9 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             ..Default::default()
         };
 
-        assert!(selection.includes(&ProjectDependencyOrigin::NodeDependencies));
-        assert!(!selection.includes(&ProjectDependencyOrigin::NodeDevDependencies));
-        assert!(selection.includes(&ProjectDependencyOrigin::NodeOptionalDependencies));
+        assert!(selection.includes(&ProjectDependencyOrigin::node_dependencies()));
+        assert!(!selection.includes(&ProjectDependencyOrigin::node_dev_dependencies()));
+        assert!(selection.includes(&ProjectDependencyOrigin::node_optional_dependencies()));
     }
 
     #[test]
@@ -2840,26 +3721,282 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             include_node_optional_dependencies: false,
         };
 
-        assert!(selection.includes(&ProjectDependencyOrigin::PythonProject));
-        assert!(
-            selection.includes(&ProjectDependencyOrigin::PythonDependencyGroup {
-                group: "dev".to_string()
-            })
+        assert!(selection.includes(&ProjectDependencyOrigin::python_project()));
+        assert!(selection.includes(&ProjectDependencyOrigin::python_dependency_group("dev")));
+        assert!(!selection.includes(&ProjectDependencyOrigin::python_dependency_group("test")));
+        assert!(selection.includes(&ProjectDependencyOrigin::python_optional_dependency("lint")));
+        assert!(!selection.includes(&ProjectDependencyOrigin::python_optional_dependency("docs")));
+    }
+
+    // --- Maven POM parsing tests ---
+
+    use super::{
+        MavenCoordinate, load_skills_from_archive, maven_jar_path, parse_maven_dependencies,
+        validate_maven_coordinate,
+    };
+
+    const MINIMAL_POM: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <groupId>com.example</groupId>
+    <artifactId>demo</artifactId>
+    <version>1.0.0</version>
+    <dependencies>
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>33.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.0</version>
+            <scope>compile</scope>
+        </dependency>
+    </dependencies>
+</project>"#;
+
+    #[test]
+    fn parse_maven_dependencies_reads_direct_project_dependencies() {
+        let (coords, warnings) = parse_maven_dependencies(MINIMAL_POM).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(coords.len(), 2);
+        assert_eq!(coords[0].group_id, "com.google.guava");
+        assert_eq!(coords[0].artifact_id, "guava");
+        assert_eq!(coords[0].version, "33.0.0");
+        assert_eq!(coords[0].scope, None);
+        assert_eq!(coords[1].group_id, "org.slf4j");
+        assert_eq!(coords[1].scope.as_deref(), Some("compile"));
+    }
+
+    #[test]
+    fn parse_maven_dependencies_resolves_property_versions() {
+        let pom = r#"<project>
+            <properties>
+                <guava.version>33.0.0</guava.version>
+            </properties>
+            <dependencies>
+                <dependency>
+                    <groupId>com.google.guava</groupId>
+                    <artifactId>guava</artifactId>
+                    <version>${guava.version}</version>
+                </dependency>
+            </dependencies>
+        </project>"#;
+        let (coords, warnings) = parse_maven_dependencies(pom).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(coords.len(), 1);
+        assert_eq!(coords[0].version, "33.0.0");
+    }
+
+    #[test]
+    fn parse_maven_dependencies_skips_dependency_management() {
+        let pom = r#"<project>
+            <dependencyManagement>
+                <dependencies>
+                    <dependency>
+                        <groupId>managed</groupId>
+                        <artifactId>lib</artifactId>
+                        <version>1.0</version>
+                    </dependency>
+                </dependencies>
+            </dependencyManagement>
+            <dependencies>
+                <dependency>
+                    <groupId>direct</groupId>
+                    <artifactId>lib</artifactId>
+                    <version>2.0</version>
+                </dependency>
+            </dependencies>
+        </project>"#;
+        let (coords, _) = parse_maven_dependencies(pom).unwrap();
+        assert_eq!(coords.len(), 1);
+        assert_eq!(coords[0].group_id, "direct");
+    }
+
+    #[test]
+    fn parse_maven_dependencies_rejects_malformed_xml() {
+        // Truncated POM: unclosed <dependencies>
+        let truncated = r#"<project><dependencies><dependency><groupId>g</groupId>"#;
+        let result = parse_maven_dependencies(truncated);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_maven_dependencies_skips_missing_version() {
+        let pom = r#"<project>
+            <dependencies>
+                <dependency>
+                    <groupId>com.example</groupId>
+                    <artifactId>lib</artifactId>
+                </dependency>
+            </dependencies>
+        </project>"#;
+        let (coords, warnings) = parse_maven_dependencies(pom).unwrap();
+        assert!(coords.is_empty());
+        assert!(!warnings.is_empty());
+    }
+
+    // --- Maven coordinate validation ---
+
+    #[test]
+    fn validate_maven_coordinate_rejects_path_traversal() {
+        assert!(validate_maven_coordinate("com.example", "lib", "../1.0").is_err());
+        assert!(validate_maven_coordinate("com.example", "lib", "1.0/evil").is_err());
+        assert!(validate_maven_coordinate("com..example", "lib", "1.0").is_err());
+        assert!(validate_maven_coordinate("com.example", "lib..", "1.0").is_err());
+    }
+
+    #[test]
+    fn validate_maven_coordinate_rejects_colons() {
+        assert!(validate_maven_coordinate("com:example", "lib", "1.0").is_err());
+        assert!(validate_maven_coordinate("com.example", "lib", "1:0").is_err());
+    }
+
+    #[test]
+    fn validate_maven_coordinate_accepts_valid_ids() {
+        assert!(validate_maven_coordinate("com.example.app", "my-lib", "1.0").is_ok());
+        assert!(validate_maven_coordinate("org.slf4j", "slf4j-api", "2.0.0").is_ok());
+        assert!(validate_maven_coordinate("com.google.code.gson", "gson", "2.11.0").is_ok());
+    }
+
+    #[test]
+    fn validate_maven_coordinate_allows_dots_in_artifact_id() {
+        assert!(validate_maven_coordinate("com.example", "my.lib", "1.0").is_ok());
+        assert!(validate_maven_coordinate("com.example", "commons.lang3", "3.17.0").is_ok());
+    }
+
+    #[test]
+    fn maven_jar_path_constructs_standard_layout() {
+        let repo = std::path::Path::new("/home/user/.m2/repository");
+        let coord = MavenCoordinate {
+            group_id: "com.google.guava".to_string(),
+            artifact_id: "guava".to_string(),
+            version: "33.0.0".to_string(),
+            scope: None,
+        };
+        let path = maven_jar_path(repo, &coord);
+        assert_eq!(
+            path,
+            std::path::Path::new(
+                "/home/user/.m2/repository/com/google/guava/guava/33.0.0/guava-33.0.0.jar"
+            )
         );
-        assert!(
-            !selection.includes(&ProjectDependencyOrigin::PythonDependencyGroup {
-                group: "test".to_string()
-            })
-        );
-        assert!(
-            selection.includes(&ProjectDependencyOrigin::PythonOptionalDependency {
-                extra: "lint".to_string()
-            })
-        );
-        assert!(
-            !selection.includes(&ProjectDependencyOrigin::PythonOptionalDependency {
-                extra: "docs".to_string()
-            })
-        );
+    }
+
+    // --- Archive loading tests ---
+
+    fn make_zip_with_skill(name: &str) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            let skill_md = format!("---\nname: {name}\ndescription: Test skill.\n---\nBody\n");
+            zip.start_file(format!("skills/{name}/SKILL.md"), options)
+                .unwrap();
+            zip.write_all(skill_md.as_bytes()).unwrap();
+            zip.start_file(format!("skills/{name}/scripts/run.py"), options)
+                .unwrap();
+            zip.write_all(b"print('hello')\n").unwrap();
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn load_skills_from_archive_reads_valid_jar() {
+        let archive = make_zip_with_skill("my-skill");
+        let metadata = SkillSourceMetadata::default();
+        let (skills, warnings) = load_skills_from_archive(&archive, &metadata).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "my-skill");
+        assert_eq!(skills[0].resources.len(), 1);
+        assert_eq!(skills[0].resources[0].relative_path, "scripts/run.py");
+        assert_eq!(skills[0].resources[0].content, b"print('hello')\n");
+    }
+
+    #[test]
+    fn load_skills_from_archive_rejects_path_traversal_entries() {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("../escape/SKILL.md", options).unwrap();
+            zip.write_all(b"---\nname: escape\ndescription: Test.\n---\nBody\n")
+                .unwrap();
+            zip.finish().unwrap();
+        }
+        let metadata = SkillSourceMetadata::default();
+        let (skills, warnings) = load_skills_from_archive(&buf, &metadata).unwrap();
+        assert!(skills.is_empty());
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn load_skills_from_archive_preserves_binary_resources() {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("skills/bin-skill/SKILL.md", options)
+                .unwrap();
+            zip.write_all(b"---\nname: bin-skill\ndescription: Binary test.\n---\nBody\n")
+                .unwrap();
+            // Binary resource (non-UTF-8)
+            zip.start_file("skills/bin-skill/assets/data.bin", options)
+                .unwrap();
+            zip.write_all(&[0x00, 0xFF, 0xFE, 0xFD]).unwrap();
+            zip.finish().unwrap();
+        }
+        let metadata = SkillSourceMetadata::default();
+        let (skills, warnings) = load_skills_from_archive(&buf, &metadata).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].resources.len(), 1);
+        assert_eq!(skills[0].resources[0].content, vec![0x00, 0xFF, 0xFE, 0xFD]);
+    }
+
+    #[test]
+    fn load_skills_from_archive_removes_dual_layout_duplicates() {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            let skill_md = "---\nname: dup-skill\ndescription: Dual layout.\n---\nBody\n";
+            // First layout
+            zip.start_file(".agents/skills/dup-skill/SKILL.md", options)
+                .unwrap();
+            zip.write_all(skill_md.as_bytes()).unwrap();
+            // Second layout (same skill name = ambiguous)
+            zip.start_file("skills/dup-skill/SKILL.md", options)
+                .unwrap();
+            zip.write_all(skill_md.as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+        let metadata = SkillSourceMetadata::default();
+        let (skills, warnings) = load_skills_from_archive(&buf, &metadata).unwrap();
+        assert_eq!(skills.len(), 0);
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn is_skill_record_rejects_traversal() {
+        use super::is_skill_record;
+        // Valid record
+        assert!(is_skill_record(".agents/skills/test-skill/SKILL.md"));
+        // Traversal attempt
+        assert!(!is_skill_record("../outside/skills/escaped/SKILL.md"));
+        // Empty segment
+        assert!(!is_skill_record("skills//test/SKILL.md"));
+        // Dot segment
+        assert!(!is_skill_record("skills/./test/SKILL.md"));
     }
 }

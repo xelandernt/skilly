@@ -2317,7 +2317,7 @@ fn configure_dir_preview(dir: &str, global: bool) -> String {
 pub(crate) struct FileViewEntry {
     pub(crate) name: String,
     pub(crate) relative_path: String,
-    pub(crate) content: String,
+    pub(crate) content: Vec<u8>,
     pub(crate) depth: u32,
     pub(crate) is_dir: bool,
 }
@@ -2364,7 +2364,7 @@ pub(crate) fn build_file_tree(skill: &SkillData) -> Vec<FileViewEntry> {
     entries.push(FileViewEntry {
         name: "SKILL.md".to_string(),
         relative_path: "SKILL.md".to_string(),
-        content: skill.content.clone(),
+        content: skill.content.clone().into_bytes(),
         depth: 0,
         is_dir: false,
     });
@@ -2390,7 +2390,7 @@ pub(crate) fn build_file_tree(skill: &SkillData) -> Vec<FileViewEntry> {
                 entries.push(FileViewEntry {
                     name: parts[i].to_string(),
                     relative_path: dir_path,
-                    content: String::new(),
+                    content: Vec::new(),
                     depth: i as u32,
                     is_dir: true,
                 });
@@ -2649,7 +2649,7 @@ pub(crate) fn run_file_viewer(session: &mut TerminalSession, skill: &SkillData) 
 
     let max_lines = entries
         .iter()
-        .map(|e| e.content.lines().count())
+        .map(|e| String::from_utf8_lossy(&e.content).lines().count())
         .max()
         .unwrap_or(0);
     let line_number_digits = if max_lines == 0 {
@@ -2668,8 +2668,7 @@ pub(crate) fn run_file_viewer(session: &mut TerminalSession, skill: &SkillData) 
             selected_index = *visible.first().unwrap();
         }
 
-        let content_lines: Vec<String> = entries[selected_index]
-            .content
+        let content_lines: Vec<String> = String::from_utf8_lossy(&entries[selected_index].content)
             .lines()
             .map(str::to_string)
             .collect();

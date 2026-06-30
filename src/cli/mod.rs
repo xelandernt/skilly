@@ -15,7 +15,8 @@ use crate::cli::tui::{
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery, SkillsMpSkill};
 use crate::config::SkillyConfig;
 use crate::core::{
-    ProjectDependencyOrigin, ProjectEnvironment, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP,
+    MavenSourceSettings, NodeSourceSettings, ProjectDependencyOrigin, ProjectEnvironment,
+    ProjectSource, PythonSourceSettings, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP,
     SKILLY_UNKNOWN_SOURCE, STATUS_INSTALLABLE, STATUS_INSTALLED, STATUS_UPDATABLE,
     ScanDependencySelection, SkillData, SkillMatchData, SkillSourceMetadata,
     available_dependency_skill_in, discover_github_skills, github_versions_match,
@@ -342,21 +343,43 @@ fn run_create(directory: &Path, mut options: CreateOptions) -> Result<()> {
     Ok(())
 }
 
+fn build_project_environment(
+    skills_directory: &Path,
+    selection: &ScanDependencySelection,
+) -> ProjectEnvironment {
+    let sources = vec![
+        ProjectSource::Python(PythonSourceSettings {
+            pyproject_toml_path: PathBuf::from("pyproject.toml"),
+            venv_path: PathBuf::from(".venv"),
+            include_project_dependencies: selection.include_project_dependencies,
+            dependency_groups: selection.dependency_groups.clone(),
+            optional_dependencies: selection.optional_dependencies.clone(),
+        }),
+        ProjectSource::Node(NodeSourceSettings {
+            package_json_path: PathBuf::from("package.json"),
+            node_modules_path: PathBuf::from("node_modules"),
+            include_dependencies: selection.include_node_dependencies,
+            include_dev_dependencies: selection.include_node_dev_dependencies,
+            include_optional_dependencies: selection.include_node_optional_dependencies,
+        }),
+        ProjectSource::Maven(MavenSourceSettings::default()),
+    ];
+    ProjectEnvironment {
+        directory: skills_directory.to_path_buf(),
+        sources,
+    }
+}
+
 fn run_scan(
     destination: &DestinationArgs,
     dependency_selection: ScanDependencySelection,
     skilly_config: &SkillyConfig,
 ) -> Result<()> {
     let single_directory = destination.resolve()?;
-    let environment = ProjectEnvironment::with_paths(
-        &single_directory,
-        Path::new("pyproject.toml"),
-        Path::new(".venv"),
-        dependency_selection.clone(),
-    );
+    let environment = build_project_environment(&single_directory, &dependency_selection);
     let matches = scan_project_in(&environment)?;
     if matches.is_empty() {
-        println!("No dependency skills found in pyproject.toml and .venv");
+        println!("No dependency skills found in project");
         return Ok(());
     }
 
@@ -383,18 +406,14 @@ fn run_scan(
         let all_matches_by_tab = destinations
             .iter()
             .map(|destination| {
-                let environment = ProjectEnvironment::with_paths(
-                    &destination.path,
-                    Path::new("pyproject.toml"),
-                    Path::new(".venv"),
-                    dependency_selection.clone(),
-                );
+                let environment =
+                    build_project_environment(&destination.path, &dependency_selection);
                 scan_project_in(&environment)
             })
             .collect::<Result<Vec<_>>>()?;
         let all_empty = all_matches_by_tab.iter().all(Vec::is_empty);
         if all_empty {
-            println!("No dependency skills found in pyproject.toml and .venv");
+            println!("No dependency skills found in project");
             break;
         }
         if active_tab >= destinations.len() {
@@ -1376,12 +1395,7 @@ struct PendingSkillUpdate {
 fn run_update(directory: &Path, config: ClientConfig, yes: bool) -> Result<()> {
     let client = SkillsMpClient::new(config)?;
     let installed_skills = discover_installed_skills_report(directory)?.valid_skills;
-    let environment = ProjectEnvironment::with_paths(
-        directory,
-        Path::new("pyproject.toml"),
-        Path::new(".venv"),
-        ScanDependencySelection::default(),
-    );
+    let environment = build_project_environment(directory, &ScanDependencySelection::default());
 
     let mut updates = Vec::new();
     for item in crate::core::dependency_updates_in(&environment)? {
@@ -1971,7 +1985,7 @@ fn run_util_venv(path: &Path, detailed: bool) -> Result<()> {
         if detailed {
             println!("\tResources:");
             for resource in skill.resources {
-                let content_length = resource.content.lines().count();
+                let content_length = String::from_utf8_lossy(&resource.content).lines().count();
                 println!(
                     "\t\t{} [{}]: {} lines.",
                     resource.relative_path, resource.kind, content_length
@@ -2005,12 +2019,7 @@ fn install_available_skill(
 
 fn update_skill(directory: &Path, skill: &SkillData, client: &SkillsMpClient) -> Result<String> {
     if skill.is_dependency() {
-        let environment = ProjectEnvironment::with_paths(
-            directory,
-            Path::new("pyproject.toml"),
-            Path::new(".venv"),
-            ScanDependencySelection::default(),
-        );
+        let environment = build_project_environment(directory, &ScanDependencySelection::default());
         let Some(available) = available_dependency_skill_in(skill, &environment)? else {
             return Ok(format!(
                 "No dependency source found for {}",
@@ -2083,12 +2092,7 @@ fn skill_update_available(
     client: &SkillsMpClient,
 ) -> Result<bool> {
     if skill.is_dependency() {
-        let environment = ProjectEnvironment::with_paths(
-            directory,
-            Path::new("pyproject.toml"),
-            Path::new(".venv"),
-            ScanDependencySelection::default(),
-        );
+        let environment = build_project_environment(directory, &ScanDependencySelection::default());
         return Ok(available_dependency_skill_in(skill, &environment)?
             .is_some_and(|available| available.package_version != skill.package_version));
     }
@@ -3247,13 +3251,9 @@ mod tests {
     #[test]
     fn scan_choice_label_and_preview_include_dependency_origins() {
         let item = dependency_match(vec![
-            ProjectDependencyOrigin::PythonProject,
-            ProjectDependencyOrigin::PythonDependencyGroup {
-                group: "dev".to_string(),
-            },
-            ProjectDependencyOrigin::PythonOptionalDependency {
-                extra: "docs".to_string(),
-            },
+            ProjectDependencyOrigin::python_project(),
+            ProjectDependencyOrigin::python_dependency_group("dev"),
+            ProjectDependencyOrigin::python_optional_dependency("docs"),
         ]);
 
         let label = scan_choice_label(&item);
@@ -3290,7 +3290,7 @@ mod tests {
         SkillResourceData {
             relative_path: path.to_string(),
             kind: "other".to_string(),
-            content: content.to_string(),
+            content: content.as_bytes().to_vec(),
         }
     }
 
@@ -3305,7 +3305,7 @@ mod tests {
         let tree = build_file_tree(&skill);
         assert_eq!(tree.len(), 1);
         assert_eq!(tree[0].name, "SKILL.md");
-        assert_eq!(tree[0].content, "# Title\n\nBody");
+        assert_eq!(tree[0].content, b"# Title\n\nBody");
         assert_eq!(tree[0].depth, 0);
         assert!(!tree[0].is_dir);
     }
@@ -3329,7 +3329,7 @@ mod tests {
         // Then files in sorted order
         assert_eq!(tree[1].name, "README.md");
         assert_eq!(tree[1].depth, 0);
-        assert_eq!(tree[1].content, "readme content");
+        assert_eq!(tree[1].content, b"readme content");
         assert!(!tree[1].is_dir);
         assert_eq!(tree[2].name, "setup.py");
         assert_eq!(tree[2].depth, 0);

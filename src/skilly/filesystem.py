@@ -8,11 +8,11 @@ StrPath: TypeAlias = str | PathLike[str]
 
 
 class FileSystem(Protocol):
-    def read_file(self, path: StrPath) -> str:
-        """Read a file and return its contents."""
+    def read_bytes(self, path: StrPath, max_size: int) -> bytes:
+        """Read a file and return its raw bytes, bounded by max_size."""
 
-    def write_file(self, path: StrPath, content: str) -> None:
-        """Write text to a file path."""
+    def write_bytes(self, path: StrPath, content: bytes) -> None:
+        """Write bytes to a file path."""
 
     def list_files(self, path: StrPath) -> Sequence[str]:
         """List child entry names in a directory."""

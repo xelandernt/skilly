@@ -1,4 +1,6 @@
+import io
 import os
+import zipfile
 from importlib.metadata import version
 from pathlib import Path
 import subprocess
@@ -758,3 +760,115 @@ def test_run_cli_scan_no_skills_found_without_manifests(
     assert exit_code == 0
     output = capfd.readouterr().out
     assert "No dependency skills found" in output
+
+
+# --- Maven CLI tests ---
+
+
+def _write_maven_cli_fixture(
+    root: Path,
+    group_id: str,
+    artifact_id: str,
+    version: str,
+    skill_name: str,
+) -> None:
+    """Create pom.xml and fake Maven JAR for CLI scan tests."""
+    pom = root / "pom.xml"
+    pom.write_text(
+        f"""<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <groupId>com.example</groupId>
+    <artifactId>demo</artifactId>
+    <version>1.0.0</version>
+    <dependencies>
+        <dependency>
+            <groupId>{group_id}</groupId>
+            <artifactId>{artifact_id}</artifactId>
+            <version>{version}</version>
+        </dependency>
+    </dependencies>
+</project>""",
+        encoding="utf-8",
+    )
+
+    jar_dir = (
+        Path.home()
+        / ".m2"
+        / "repository"
+        / group_id.replace(".", "/")
+        / artifact_id
+        / version
+    )
+    jar_dir.mkdir(parents=True, exist_ok=True)
+    jar_path = jar_dir / f"{artifact_id}-{version}.jar"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            f"skills/{skill_name}/SKILL.md",
+            f"---\nname: {skill_name}\ndescription: CLI Maven skill.\n---\nBody\n",
+        )
+    jar_path.write_bytes(buf.getvalue())
+
+
+def test_run_cli_scan_detects_maven_skills_in_non_interactive_mode(
+    tmp_path: Path, monkeypatch, capfd
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_maven_cli_fixture(
+        tmp_path, "com.example", "maven-cli-lib", "1.0.0", "maven-cli-skill"
+    )
+
+    exit_code = run_cli(["scan"])
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "maven-cli-skill" in output
+    assert "com.example:maven-cli-lib" in output
+    assert "maven:compile" in output
+
+
+def test_run_cli_scan_maven_and_python_together(
+    tmp_path: Path, monkeypatch, capfd
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    # Python
+    pyproject_toml = tmp_path / "pyproject.toml"
+    pyproject_toml.write_text(
+        """
+[project]
+name = "demo"
+version = "0.1.0"
+dependencies = ["sample-pkg==1.0.0"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    _, site_packages = make_venv(tmp_path)
+    write_skill(
+        site_packages / "sample_pkg/.agents/skills/python-skill/SKILL.md",
+        """---
+name: python-skill
+description: Python skill.
+---
+Body
+""",
+    )
+    write_distribution(
+        site_packages=site_packages,
+        package_name="sample-pkg",
+        package_version="1.0.0",
+        record_rows=["sample_pkg/.agents/skills/python-skill/SKILL.md,,"],
+    )
+    # Maven
+    _write_maven_cli_fixture(
+        tmp_path, "com.example", "maven-lib", "1.0.0", "maven-skill"
+    )
+
+    exit_code = run_cli(["scan"])
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "python-skill" in output
+    assert "maven-skill" in output
+    assert "python:project" in output
+    assert "maven:compile" in output
