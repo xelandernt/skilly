@@ -47,6 +47,7 @@ features = [
     "navigation.top",
     "toc.follow",
     "search.highlight",
+    "content.code.copy"
 
 ]
 # Palette toggle for automatic mode
