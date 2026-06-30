@@ -64,8 +64,19 @@ skilly list
 
 ## CLI Commands
 
-Full [CLI reference](https://xelandernt.github.io/skilly/cli/) with command
-descriptions, options, and workflow guides.
+| Command                   | Purpose                                                            |
+|---------------------------|--------------------------------------------------------------------|
+| `scan`                    | Find skills provided by Python and Node project dependencies       |
+| `download <github-url>`   | Install one or more skills from GitHub                             |
+| `list`                    | Browse, update, or remove installed skills                         |
+| `update`                  | Preview available updates; `--yes` applies all                     |
+| `remove <name>`           | Remove an installed skill by directory name                        |
+| `skillsmp search <query>` | Search SkillsMP and install a selected result                      |
+| `create`                  | Create a valid skill through a terminal wizard or explicit options |
+| `configure`               | Set which directories skilly manages via TUI or CLI flags          |
+
+Run `skilly <command> --help` for all options.
+Run `skilly --version` to print the installed package version.
 
 ### Create Skills
 
@@ -81,11 +92,77 @@ See [installing and managing](https://xelandernt.github.io/skilly/cli/installing
 
 ### Destinations
 
-See [destinations reference](https://xelandernt.github.io/skilly/cli/destinations-and-configuration/).
+All management commands accept the same destination options:
+
+```shell
+uvx skilly list --local        # .agents/skills
+uvx skilly list --global       # ~/.agents/skills
+uvx skilly list --claude       # .claude/skills
+uvx skilly list --codex        # .codex/skills
+uvx skilly list --copilot      # .github/skills (local), ~/.copilot/skills (global)
+uvx skilly list --directory ~/custom     # Explicit directory
+```
+
+| Flags                | Resolved destination                                          |
+|----------------------|---------------------------------------------------------------|
+| _none_               | `SKILLY_DEFAULT_DIRECTORY` if set, otherwise `.agents/skills` |
+| `--local`            | `.agents/skills`                                              |
+| `--global`           | `~/.agents/skills`                                            |
+| `--claude`           | `.claude/skills`                                              |
+| `--claude --global`  | `~/.claude/skills`                                            |
+| `--codex`            | `.codex/skills`                                               |
+| `--codex --global`   | `~/.codex/skills`                                             |
+| `--copilot`          | `.github/skills`                                              |
+| `--copilot --global` | `~/.copilot/skills`                                           |
+| `--directory <path>` | That directory (after `~` expansion)                          |
+
+Set a default destination:
+
+```shell
+export SKILLY_DEFAULT_DIRECTORY="$HOME/.config/skilly/skills"
+```
+
+`--directory` overrides all other destination options and `SKILLY_DEFAULT_DIRECTORY`.
 
 ### Configure Destinations
 
-See [configuration docs](https://xelandernt.github.io/skilly/cli/destinations-and-configuration/).
+`skilly configure` lets you choose which directories skilly should manage and which one opens by default. Interactive terminals open a two-tab TUI (Global / Local) showing all known agent directories as toggleable checkboxes (agents, claude, codex, copilot). Non-interactive runs accept flags.
+
+```shell
+uvx skilly configure                 # Open the TUI
+uvx skilly configure --show          # Print current config as TOML
+uvx skilly configure --reset         # Restore defaults
+```
+
+In the TUI:
+- **Space** toggles a known directory on or off, or removes a custom one.
+- **Enter** sets the highlighted directory as the default (marked with a star).
+- **Ctrl+S** saves; you must have a default directory selected before saving.
+
+Skill-selection menus support `/` to filter by skill name. Press `/`, type a substring, and the list narrows to matching items. `Backspace` edits the filter, `Esc` clears it.
+
+Add or remove custom directories via CLI:
+
+```shell
+uvx skilly configure --add-global /opt/skills
+uvx skilly configure --add-local .project/skills
+uvx skilly configure --remove-global /opt/skills
+uvx skilly configure --remove-local .project/skills
+```
+
+Configuration is stored in `~/.skilly.toml`:
+
+```toml
+default_directory = ".agents/skills"
+
+[global]
+directories = ["~/.agents/skills", "/opt/skills"]
+
+[local]
+directories = [".agents/skills", ".project/skills"]
+```
+
+The default directory opens first in interactive menus (`list`, `scan`, etc.).
 
 ### GitHub Authentication
 
