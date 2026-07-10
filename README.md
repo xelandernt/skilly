@@ -15,6 +15,8 @@ Manage [Agent Skills](https://agentskills.io/specification) from the command lin
 ## Table of Contents
 
 - [Installation](#installation)
+  - [Shell (macOS / Linux)](#shell-macos--linux)
+  - [PowerShell (Windows)](#powershell-windows)
   - [Python](#python)
   - [Node](#node)
   - [Homebrew](#homebrew)
@@ -33,6 +35,33 @@ Manage [Agent Skills](https://agentskills.io/specification) from the command lin
 
 ## Installation
 
+### Shell (macOS / Linux)
+
+Download a prebuilt binary, verify its checksum, and install it to `~/.local/bin`. No Python, Node, or Homebrew required.
+
+```shell
+curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/xelandernt/skilly/main/install.sh | sh
+```
+
+Pin a version or change the install directory:
+
+```shell
+curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/xelandernt/skilly/main/install.sh | sh -s -- --version 0.0.32 --to /usr/local/bin
+```
+
+Run with `-s -- --help` to see all options (`--version`, `--to`, `--no-modify-path`, `--dry-run`, `--verbose`).
+
+### PowerShell (Windows)
+
+```powershell
+irm https://raw.githubusercontent.com/xelandernt/skilly/main/install.ps1 | iex
+```
+
+Pin a version:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/xelandernt/skilly/main/install.ps1))) -Version 0.0.32
+```
 
 ### Python
 ```shell
@@ -55,6 +84,7 @@ brew install xelandernt/skilly/skilly
 
 | Method        | Ships                                                                                                |
 |---------------|------------------------------------------------------------------------------------------------------|
+| `install.sh` / `install.ps1` | Native Rust CLI from GitHub releases (macOS arm64/x64, Linux x64 glibc, Windows x64)   |
 | `uvx` / `pip` | Python package with import surface + CLI (pre-built wheels: Linux x64, macOS arm64/x64, Windows x64) |
 | `npx`         | Native Rust CLI (macOS arm64/x64, Linux x64 glibc, Windows x64)                                      |
 | `brew`        | Native Rust CLI (macOS arm64/x64, Linux x64)                                                         |
