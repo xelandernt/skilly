@@ -9,8 +9,7 @@
 skilly create [OPTIONS] [NAME]
 ```
 
-The `NAME` argument is required outside an interactive terminal. In a TTY, you
-can omit it and the wizard will prompt for one.
+The `NAME` argument is required in non-interactive runs.
 
 ## Options
 
@@ -58,12 +57,3 @@ skilly create deployment-checks \
 ```shell
 skilly create code-review --overwrite --yes
 ```
-
-## Interactive behavior
-
-In a TTY without sufficient flags, `skilly create` opens a full-screen editor:
-
--   `Ctrl+S` — creates the skill.
--   `Ctrl+X` — cancels without writing.
-
-Existing skills are rejected unless `--overwrite` is passed.

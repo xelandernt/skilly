@@ -19,7 +19,7 @@ just typecheck
 ## Documentation
 
 ```shell
-just docs-serve    # Preview site at http://localhost:8000
+just docs          # Preview site at http://localhost:8000
 just docs-build    # Strict production build
 ```
 

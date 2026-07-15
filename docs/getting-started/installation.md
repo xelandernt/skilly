@@ -14,6 +14,7 @@ Or install into a project:
 
 ```shell
 uv add skilly
+# or
 pip install skilly
 ```
 

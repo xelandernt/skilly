@@ -7,7 +7,13 @@ stores, remote storage, or test fixtures).
 ## FileSystem protocol
 
 ```python
+from collections.abc import Sequence
+from os import PathLike
+from typing import Protocol, TypeAlias
+
 from skilly import FileSystem
+
+StrPath: TypeAlias = str | PathLike[str]
 
 class FileSystem(Protocol):
     def read_bytes(self, path: StrPath, max_size: int) -> bytes: ...
@@ -39,7 +45,8 @@ class FileSystem(Protocol):
 
 ## Using a custom filesystem
 
-Pass `file_system=` to `SkillRepository` or any discovery function:
+Pass `file_system=` to `SkillRepository` or filesystem-backed discovery
+functions:
 
 ```python
 from skilly import SkillRepository

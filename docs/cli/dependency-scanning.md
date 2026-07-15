@@ -71,8 +71,9 @@ local Maven repository (`~/.m2/repository` by default) for bundled skills.
 
 ### Scopes
 
-Controlled via `include_*_scope` flags (default: compile, runtime, test;
-provided and system are excluded).
+Maven scanning includes compile, runtime, and test scopes by default. Provided
+and system scopes are excluded. The Python `MavenSource` options configure
+these choices programmatically.
 
 ### Limitations
 
