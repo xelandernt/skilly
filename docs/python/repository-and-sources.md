@@ -59,7 +59,7 @@ for match in repository.scan_project():
 for update in repository.dependency_updates():
     print(update.installed.name, "->", update.available.name)
 
-# Check GitHub/SkillsMP updates
+# Check repository and SkillsMP updates
 for update in repository.updates():
     print(update.installed.name, "is updatable")
 ```
@@ -191,7 +191,7 @@ from skilly import (
     PythonSource,
     discover_installed_skills,
     discover_package_source_skills,
-    parse_github_skill_url,
+    parse_repository_location,
     resolve_skills_directory,
 )
 
@@ -202,8 +202,8 @@ installed = discover_installed_skills()
 python_skills = discover_package_source_skills(PythonSource())
 node_skills = discover_package_source_skills(NodeSource())
 
-# Parse a GitHub URL into a skill location
-location = parse_github_skill_url(
+# Parse a supported repository URL into a skill location
+location = parse_repository_location(
     "https://github.com/example/project/tree/main/skills/code-review"
 )
 

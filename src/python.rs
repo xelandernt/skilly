@@ -1,20 +1,25 @@
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery};
 use crate::core::{
     FileSystem, MavenSourceSettings, NamedSelection, NodeSourceSettings, ProjectEnvironment,
-    ProjectSource, PythonSourceSettings, SkillData, SkillDirectoryFlavor, SkillResourceData,
-    SkillSourceMetadata, available_dependency_skill_in as rust_available_dependency_skill,
+    ProjectSource, PythonSourceSettings, RepositoryProvider, SkillData, SkillDirectoryFlavor,
+    SkillResourceData, SkillSourceMetadata,
+    available_dependency_skill_in as rust_available_dependency_skill,
     available_dependency_skill_with_file_system as rust_available_dependency_skill_with_file_system,
     default_skills_directory as rust_default_skills_directory,
     discover_github_skills as rust_discover_github_skills,
     discover_installed_skills as rust_discover_installed_skills,
     discover_installed_skills_in as rust_discover_installed_skills_in,
     discover_node_modules_skills_in as rust_discover_node_modules_skills_in,
+    discover_repository_skills as rust_discover_repository_skills,
     discover_venv_skills_in as rust_discover_venv_skills_in,
     github_versions_match as rust_github_versions_match,
     parse_github_skill_url as rust_parse_github_skill_url,
+    parse_repository_location as rust_parse_repository_location,
     project_requirements as rust_project_requirements,
     project_requirements_in as rust_project_requirements_in, remove_skill as rust_remove_skill,
-    remove_skill_in as rust_remove_skill_in, scan_project_in as rust_scan_project,
+    remove_skill_in as rust_remove_skill_in,
+    repository_versions_match as rust_repository_versions_match,
+    scan_project_in as rust_scan_project,
     scan_project_with_file_system as rust_scan_project_with_file_system,
     skills_directory as rust_skills_directory,
 };
@@ -377,6 +382,9 @@ fn skill_source_metadata(
         package_version,
         github_url,
         github_commit_sha,
+        repository_provider: None,
+        repository_url: None,
+        repository_commit_sha: None,
         skillsmp_id,
         package_ecosystem,
     }
@@ -673,6 +681,28 @@ fn discover_github_skills_impl(
     Ok(skills.into_iter().map(PySkill::from_data).collect())
 }
 
+fn discover_repository_skills_impl(
+    py: Python<'_>,
+    repository_url: String,
+    provider: Option<String>,
+    token: Option<String>,
+) -> PyResult<Vec<PySkill>> {
+    let provider = provider
+        .as_deref()
+        .map(str::parse::<RepositoryProvider>)
+        .transpose()
+        .map_err(py_err)?;
+    let skills = py
+        .allow_threads(|| {
+            let client = SkillsMpClient::new(
+                ClientConfig::new(None, None, None, None).with_repository_token(token),
+            )?;
+            rust_discover_repository_skills(&client, &repository_url, provider)
+        })
+        .map_err(py_err)?;
+    Ok(skills.into_iter().map(PySkill::from_data).collect())
+}
+
 fn client_config_from_fetcher(fetcher: &Bound<'_, PyAny>) -> PyResult<ClientConfig> {
     Ok(client_config(
         optional_string_attr(fetcher, "base_url")?,
@@ -779,6 +809,9 @@ impl PySkill {
                 package_version,
                 github_url,
                 github_commit_sha,
+                repository_provider: None,
+                repository_url: None,
+                repository_commit_sha: None,
                 skillsmp_id,
                 package_ecosystem: package_ecosystem
                     .as_deref()
@@ -1014,6 +1047,23 @@ impl PySkill {
     #[getter]
     fn github_commit_sha(&self) -> Option<String> {
         self.inner.github_commit_sha.clone()
+    }
+
+    #[getter]
+    fn repository_provider(&self) -> Option<String> {
+        self.inner
+            .repository_provider
+            .map(|provider| provider.as_str().to_string())
+    }
+
+    #[getter]
+    fn repository_url(&self) -> Option<String> {
+        self.inner.repository_url.clone()
+    }
+
+    #[getter]
+    fn repository_commit_sha(&self) -> Option<String> {
+        self.inner.repository_commit_sha.clone()
     }
 
     #[getter]
@@ -1675,6 +1725,33 @@ fn parse_github_skill_url_py(py: Python<'_>, github_url: String) -> PyResult<Py<
 }
 
 #[pyfunction]
+#[pyo3(name = "parse_repository_location", signature = (repository_url, provider=None))]
+fn parse_repository_location_py(
+    py: Python<'_>,
+    repository_url: String,
+    provider: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let provider = provider
+        .as_deref()
+        .map(str::parse::<RepositoryProvider>)
+        .transpose()
+        .map_err(py_err)?;
+    let location = rust_parse_repository_location(&repository_url, provider).map_err(py_err)?;
+    to_py_serialized(py, &location)
+}
+
+#[pyfunction]
+#[pyo3(name = "discover_repository_skills", signature = (repository_url, provider=None, token=None))]
+fn discover_repository_skills_py(
+    py: Python<'_>,
+    repository_url: String,
+    provider: Option<String>,
+    token: Option<String>,
+) -> PyResult<Vec<PySkill>> {
+    discover_repository_skills_impl(py, repository_url, provider, token)
+}
+
+#[pyfunction]
 #[pyo3(name = "discover_github_skills", signature = (
     github_url,
     source=None,
@@ -1711,6 +1788,12 @@ fn discover_github_skills_py(
 #[pyo3(name = "github_versions_match")]
 fn github_versions_match_py(installed: &PySkill, available: &PySkill) -> bool {
     rust_github_versions_match(&installed.inner, &available.inner)
+}
+
+#[pyfunction]
+#[pyo3(name = "repository_versions_match")]
+fn repository_versions_match_py(installed: &PySkill, available: &PySkill) -> bool {
+    rust_repository_versions_match(&installed.inner, &available.inner)
 }
 
 #[pyfunction]
@@ -1936,8 +2019,11 @@ fn python_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(scan_project_py, m)?)?;
     m.add_function(wrap_pyfunction!(available_dependency_skill_py, m)?)?;
     m.add_function(wrap_pyfunction!(parse_github_skill_url_py, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_repository_location_py, m)?)?;
     m.add_function(wrap_pyfunction!(discover_github_skills_py, m)?)?;
+    m.add_function(wrap_pyfunction!(discover_repository_skills_py, m)?)?;
     m.add_function(wrap_pyfunction!(github_versions_match_py, m)?)?;
+    m.add_function(wrap_pyfunction!(repository_versions_match_py, m)?)?;
     m.add_function(wrap_pyfunction!(remove_skill_py, m)?)?;
     m.add_function(wrap_pyfunction!(project_requirements_py, m)?)?;
     m.add_function(wrap_pyfunction!(skillsmp_search_py, m)?)?;

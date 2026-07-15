@@ -9,8 +9,9 @@
 # skilly
 
 Manage [Agent Skills](https://agentskills.io/specification) from the command
-line or Python. Creates specification-compliant skills, installs from GitHub or
-dependencies, and keeps them up to date.
+line or Python. Creates specification-compliant skills, installs from GitHub,
+Bitbucket Cloud, Bitbucket Data Center, or dependencies, and keeps them up to
+date.
 
 ## Installation
 
@@ -67,13 +68,13 @@ skilly list
 | Command                   | Purpose                                                            |
 |---------------------------|--------------------------------------------------------------------|
 | `scan`                    | Find skills provided by Python and Node project dependencies       |
-| `download <github-url>`   | Install one or more skills from GitHub                             |
+| `download <repository-url>` | Install one or more skills from a supported repository           |
 | `list`                    | Browse, update, or remove installed skills                         |
 | `update`                  | Preview available updates; `--yes` applies all                     |
 | `remove <name>`           | Remove an installed skill by directory name                        |
 | `skillsmp search <query>` | Search SkillsMP and install a selected result                      |
-| `create`                  | Create a valid skill through a terminal wizard or explicit options |
-| `configure`               | Set which directories skilly manages via TUI or CLI flags          |
+| `create`                  | Create a valid skill directory                                     |
+| `configure`               | Manage directories and repository credentials                      |
 
 Run `skilly <command> --help` for all options.
 Run `skilly --version` to print the installed package version.
@@ -86,7 +87,7 @@ See [creating skills](https://xelandernt.github.io/skilly/cli/creating-skills/).
 
 See [dependency scanning](https://xelandernt.github.io/skilly/cli/dependency-scanning/).
 
-### Install GitHub Skills
+### Install Repository Skills
 
 See [installing and managing](https://xelandernt.github.io/skilly/cli/installing-and-managing/).
 
@@ -124,22 +125,15 @@ export SKILLY_DEFAULT_DIRECTORY="$HOME/.config/skilly/skills"
 
 `--directory` overrides all other destination options and `SKILLY_DEFAULT_DIRECTORY`.
 
-### Configure Destinations
+### Configuration
 
-`skilly configure` lets you choose which directories skilly should manage and which one opens by default. Interactive terminals open a two-tab TUI (Global / Local) showing all known agent directories as toggleable checkboxes (agents, claude, codex, copilot). Non-interactive runs accept flags.
+`skilly configure` manages directories and saved repository credentials.
 
 ```shell
-uvx skilly configure                 # Open the TUI
+uvx skilly configure
 uvx skilly configure --show          # Print current config as TOML
 uvx skilly configure --reset         # Restore defaults
 ```
-
-In the TUI:
-- **Space** toggles a known directory on or off, or removes a custom one.
-- **Enter** sets the highlighted directory as the default (marked with a star).
-- **Ctrl+S** saves; you must have a default directory selected before saving.
-
-Skill-selection menus support `/` to filter by skill name. Press `/`, type a substring, and the list narrows to matching items. `Backspace` edits the filter, `Esc` clears it.
 
 Add or remove custom directories via CLI:
 
@@ -164,16 +158,44 @@ directories = [".agents/skills", ".project/skills"]
 
 The default directory opens first in interactive menus (`list`, `scan`, etc.).
 
-### GitHub Authentication
+### Repository Authentication
 
-Set a token for higher API rate limits (first available wins:
-`SKILLY_GITHUB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`):
+For `download`, `list`, and `update`, Skilly resolves credentials in this order:
+
+1. `--token <TOKEN>` for a one-off command.
+2. A saved provider credential with the exact provider and base URL.
+3. A provider environment variable.
+
+| Provider | Environment fallback | Saved base URL example |
+|---|---|---|
+| GitHub | `SKILLY_GITHUB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN` | `https://github.com` |
+| Bitbucket Cloud | `SKILLY_BITBUCKET_CLOUD_TOKEN` | `https://bitbucket.org` |
+| Bitbucket Data Center | `SKILLY_BITBUCKET_DATA_CENTER_TOKEN` | `https://git.example.com/bitbucket` |
+
+Save a reusable credential with `skilly configure`, or use the
+non-interactive command:
 
 ```shell
-export SKILLY_GITHUB_TOKEN=ghp_your_token
+skilly configure --add-provider bitbucket-data-center \
+  --provider-url https://git.example.com/bitbucket \
+  --provider-token "$BITBUCKET_TOKEN"
 ```
 
-All GitHub-fetching commands also accept `--github-token`.
+Saved tokens are redacted from `skilly configure --show`, never written to
+installed skill metadata, and stored in `~/.skilly.toml`; on Unix that file is
+owner-only. Remove a saved credential with:
+
+```shell
+skilly configure --remove-provider bitbucket-data-center \
+  --provider-url https://git.example.com/bitbucket
+```
+
+Use `--provider bitbucket-data-center` for Bitbucket Data Center repositories:
+
+```shell
+uvx skilly download https://git.example.com/bitbucket/projects/ENG/repos/skills \
+  --provider bitbucket-data-center --token "$SKILLY_BITBUCKET_DATA_CENTER_TOKEN"
+```
 
 ## Python API
 
@@ -232,6 +254,8 @@ node_skills = discover_package_source_skills(NodeSource())
 `ProjectSettings` accepts `PythonSource`, `NodeSource`, and `MavenSource`:
 
 ```python
+from pathlib import Path
+
 from skilly import (
     MavenSource,
     NodeSource,
@@ -276,8 +300,8 @@ repository (`~/.m2/repository` by default). The scanner:
 - No POM inheritance or effective-model merging.
 - No Gradle build file support.
 - Build execution and dependency graph traversal are not performed.
-- Scopes are controlled via `include_*_scope` flags (default: compile,
-  runtime, and test; provided and system are excluded).
+- MavenSource includes compile, runtime, and test scopes by default; provided
+  and system scopes are excluded.
 
 SkillsMP client with typed results:
 

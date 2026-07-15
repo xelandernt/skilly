@@ -4,7 +4,8 @@ Manage [Agent Skills](https://agentskills.io/specification) from the command lin
 or Python.
 
 skilly creates specification-compliant skills, installs skills from GitHub,
-Python, or Node dependencies, and keeps managed skills up to date.
+Bitbucket Cloud, Bitbucket Data Center, and Python, Node, or Maven
+dependencies, and keeps managed skills up to date.
 
 ## Supported interfaces
 
@@ -20,14 +21,14 @@ Python, or Node dependencies, and keeps managed skills up to date.
     instructions, and optional scripts or references.
 -   [Scan dependencies](cli/dependency-scanning.md) — discover skills shipped by
     your project's Python, Node, and Maven dependencies.
--   [Install from GitHub](cli/installing-and-managing.md) — download skills
-    directly from any GitHub repository.
+-   [Install from a repository](cli/installing-and-managing.md) — download
+    skills from GitHub, Bitbucket Cloud, or Bitbucket Data Center.
 -   [Search SkillsMP](cli/installing-and-managing.md) — find and install skills
     from the SkillsMP registry.
 -   [Update skills](cli/installing-and-managing.md) — check for updates to
     installed skills and apply them.
--   [Configure destinations](cli/destinations-and-configuration.md) — choose
-    which agent directories skilly manages.
+-   [Configure skilly](cli/destinations-and-configuration.md) — manage agent
+    directories and repository credentials.
 
 ## Related resources
 

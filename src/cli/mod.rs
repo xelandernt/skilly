@@ -13,14 +13,15 @@ use crate::cli::tui::{
     run_create_tui, run_file_viewer, select_menu, show_loading_message,
 };
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery, SkillsMpSkill};
-use crate::config::SkillyConfig;
+use crate::config::{ProviderCredential, SkillyConfig};
 use crate::core::{
     MavenSourceSettings, NodeSourceSettings, ProjectDependencyOrigin, ProjectEnvironment,
-    ProjectSource, PythonSourceSettings, SKILLY_SOURCE_GITHUB, SKILLY_SOURCE_SKILLSMP,
-    SKILLY_UNKNOWN_SOURCE, STATUS_INSTALLABLE, STATUS_INSTALLED, STATUS_UPDATABLE,
-    ScanDependencySelection, SkillData, SkillMatchData, SkillSourceMetadata,
-    available_dependency_skill_in, discover_github_skills, github_versions_match,
-    project_requirements, remove_skill, scan_match_status, scan_project_in,
+    ProjectSource, PythonSourceSettings, RepositoryProvider, SKILLY_SOURCE_GITHUB,
+    SKILLY_SOURCE_SKILLSMP, SKILLY_UNKNOWN_SOURCE, STATUS_INSTALLABLE, STATUS_INSTALLED,
+    STATUS_UPDATABLE, ScanDependencySelection, SkillData, SkillMatchData, SkillSourceMetadata,
+    available_dependency_skill_in, discover_github_skills, discover_repository_skills,
+    github_versions_match, project_requirements, remove_skill, repository_versions_match,
+    scan_match_status, scan_project_in,
 };
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -109,36 +110,43 @@ fn try_run(args: Vec<String>) -> Result<i32> {
             dependencies,
         } => run_scan(&destination, dependencies.selection()?, &skilly_config)?,
         Commands::Download {
-            github_url,
+            repository_url,
+            provider,
             destination,
             skill_name,
             all,
             overwrite,
-            github_token,
+            token,
         } => run_download(
-            &github_url,
+            &DownloadRequest {
+                repository_url,
+                provider,
+                skill_name,
+                all,
+                overwrite,
+            },
             &destination,
-            skill_name.as_deref(),
-            all,
-            overwrite,
-            client_config(None, None, github_token, None),
+            ClientConfig::new(None, None, None, None)
+                .with_repository_token(token)
+                .with_repository_credentials(skilly_config.repositories.providers.clone()),
             &skilly_config,
         )?,
-        Commands::List {
-            destination,
-            github_token,
-        } => run_list(
+        Commands::List { destination, token } => run_list(
             &destination,
-            client_config(None, None, github_token, None),
+            ClientConfig::new(None, None, None, None)
+                .with_repository_token(token)
+                .with_repository_credentials(skilly_config.repositories.providers.clone()),
             &skilly_config,
         )?,
         Commands::Update {
             destination,
             yes,
-            github_token,
+            token,
         } => run_update(
             &destination.resolve()?,
-            client_config(None, None, github_token, None),
+            ClientConfig::new(None, None, None, None)
+                .with_repository_token(token)
+                .with_repository_credentials(skilly_config.repositories.providers.clone()),
             yes,
         )?,
         Commands::Remove { name, destination } => {
@@ -184,6 +192,10 @@ fn try_run(args: Vec<String>) -> Result<i32> {
             remove_global,
             add_local,
             remove_local,
+            add_provider,
+            provider_url,
+            provider_token,
+            remove_provider,
         } => run_configure(
             &skilly_config,
             ConfigureFlags {
@@ -193,6 +205,10 @@ fn try_run(args: Vec<String>) -> Result<i32> {
                 remove_global,
                 add_local,
                 remove_local,
+                add_provider,
+                provider_url,
+                provider_token,
+                remove_provider,
             },
         )?,
     }
@@ -207,6 +223,10 @@ struct ConfigureFlags {
     remove_global: Vec<String>,
     add_local: Vec<String>,
     remove_local: Vec<String>,
+    add_provider: Option<RepositoryProvider>,
+    provider_url: Option<String>,
+    provider_token: Option<String>,
+    remove_provider: Option<RepositoryProvider>,
 }
 
 fn run_configure(skilly_config: &SkillyConfig, flags: ConfigureFlags) -> Result<()> {
@@ -220,7 +240,13 @@ fn run_configure(skilly_config: &SkillyConfig, flags: ConfigureFlags) -> Result<
     let has_modifications = !flags.add_global.is_empty()
         || !flags.remove_global.is_empty()
         || !flags.add_local.is_empty()
-        || !flags.remove_local.is_empty();
+        || !flags.remove_local.is_empty()
+        || flags.add_provider.is_some()
+        || flags.remove_provider.is_some();
+
+    if flags.add_provider.is_some() && flags.remove_provider.is_some() {
+        bail!("use either --add-provider or --remove-provider, not both");
+    }
 
     let config_to_display = if has_modifications {
         let mut config = skilly_config.clone();
@@ -236,6 +262,24 @@ fn run_configure(skilly_config: &SkillyConfig, flags: ConfigureFlags) -> Result<
         for path in &flags.remove_local {
             config.remove_local_dir(path)?;
         }
+        if let Some(provider) = flags.add_provider {
+            let url = flags
+                .provider_url
+                .as_deref()
+                .context("--add-provider requires --provider-url")?;
+            let token = flags
+                .provider_token
+                .as_deref()
+                .context("--add-provider requires --provider-token")?;
+            config.add_provider_credential(ProviderCredential::new(provider, url, token)?);
+        }
+        if let Some(provider) = flags.remove_provider {
+            let url = flags
+                .provider_url
+                .as_deref()
+                .context("--remove-provider requires --provider-url")?;
+            config.remove_provider_credential(provider, url)?;
+        }
         config.save()?;
         config
     } else {
@@ -243,8 +287,7 @@ fn run_configure(skilly_config: &SkillyConfig, flags: ConfigureFlags) -> Result<
     };
 
     if flags.show {
-        let content = toml::to_string_pretty(&config_to_display)
-            .context("failed to serialize configuration")?;
+        let content = config_to_display.display_toml()?;
         print!("{content}");
         if has_modifications {
             println!("Configuration updated (saved to ~/.skilly.toml)");
@@ -266,8 +309,7 @@ fn run_configure(skilly_config: &SkillyConfig, flags: ConfigureFlags) -> Result<
     }
 
     // Non-interactive terminal with no flags: print current config
-    let content =
-        toml::to_string_pretty(skilly_config).context("failed to serialize configuration")?;
+    let content = skilly_config.display_toml()?;
     print!("{content}");
     Ok(())
 }
@@ -315,6 +357,9 @@ fn run_create(directory: &Path, mut options: CreateOptions) -> Result<()> {
         package_version: None,
         github_url: None,
         github_commit_sha: None,
+        repository_provider: None,
+        repository_url: None,
+        repository_commit_sha: None,
         skillsmp_id: None,
         package_ecosystem: None,
     };
@@ -628,19 +673,25 @@ fn run_scan(
     Ok(())
 }
 
-fn run_download(
-    github_url: &str,
-    destination: &DestinationArgs,
-    skill_name: Option<&str>,
+struct DownloadRequest {
+    repository_url: String,
+    provider: Option<RepositoryProvider>,
+    skill_name: Option<String>,
     all: bool,
     overwrite: bool,
+}
+
+fn run_download(
+    request: &DownloadRequest,
+    destination: &DestinationArgs,
     config: ClientConfig,
     skilly_config: &SkillyConfig,
 ) -> Result<()> {
     let client = SkillsMpClient::new(config)?;
-    let mut skills = discover_github_skills(&client, github_url, SKILLY_SOURCE_GITHUB, None)?;
+    let mut skills =
+        discover_repository_skills(&client, &request.repository_url, request.provider)?;
     let directory = destination.resolve()?;
-    if all && skill_name.is_some() && skills.len() != 1 {
+    if request.all && request.skill_name.is_some() && skills.len() != 1 {
         bail!("use either --skill-name or --all when downloading multiple skills");
     }
     let interactive_destinations = if is_interactive_terminal() {
@@ -649,25 +700,30 @@ fn run_download(
         Vec::new()
     };
     if is_interactive_terminal() && (skills.len() > 1 || interactive_destinations.len() > 1) {
-        if skills.len() > 1 && !all && skill_name.is_none() {
+        if skills.len() > 1 && !request.all && request.skill_name.is_none() {
             return download_selected_skills(
                 &client,
                 &interactive_destinations,
-                overwrite,
+                request.overwrite,
                 &skills,
             );
         }
-        if let Some(skill_name) = skill_name {
-            if skills.len() != 1 && all {
+        if let Some(skill_name) = request.skill_name.as_deref() {
+            if skills.len() != 1 && request.all {
                 bail!("custom skill names can only be used when downloading a single skill");
             }
             if skills.len() != 1 {
                 skills = vec![select_download_skill(&skills, skill_name)?];
             }
         }
-        return download_selected_skills(&client, &interactive_destinations, overwrite, &skills);
+        return download_selected_skills(
+            &client,
+            &interactive_destinations,
+            request.overwrite,
+            &skills,
+        );
     }
-    if skills.len() > 1 && !all && skill_name.is_none() {
+    if skills.len() > 1 && !request.all && request.skill_name.is_none() {
         if !is_interactive_terminal() {
             bail!("multiple skills found; use --skill-name <name> or --all");
         }
@@ -678,12 +734,12 @@ fn run_download(
                 path: directory.clone(),
                 color: ratatui::style::Color::White,
             }],
-            overwrite,
+            request.overwrite,
             &skills,
         );
     }
-    if let Some(skill_name) = skill_name {
-        if skills.len() != 1 && all {
+    if let Some(skill_name) = request.skill_name.as_deref() {
+        if skills.len() != 1 && request.all {
             bail!("custom skill names can only be used when downloading a single skill");
         }
         if skills.len() != 1 {
@@ -696,8 +752,12 @@ fn run_download(
         .map(|skill| {
             skill.install_to(
                 &directory,
-                if skills.len() == 1 { skill_name } else { None },
-                overwrite,
+                if skills.len() == 1 {
+                    request.skill_name.as_deref()
+                } else {
+                    None
+                },
+                request.overwrite,
             )
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1411,14 +1471,13 @@ fn run_update(directory: &Path, config: ClientConfig, yes: bool) -> Result<()> {
         .map(|item| skill_directory_name(&item.installed))
         .collect::<std::collections::BTreeSet<_>>();
     let mut errors = Vec::new();
-    for installed in installed_skills
-        .into_iter()
-        .filter(|skill| skill.github_url.is_some() && !skill.is_dependency())
-    {
+    for installed in installed_skills.into_iter().filter(|skill| {
+        (skill.repository_url.is_some() || skill.github_url.is_some()) && !skill.is_dependency()
+    }) {
         if dependency_names.contains(&skill_directory_name(&installed)) {
             continue;
         }
-        match available_github_update(&installed, &client) {
+        match available_repository_update(&installed, &client) {
             Ok(Some(available)) => updates.push(PendingSkillUpdate {
                 installed,
                 available,
@@ -1478,10 +1537,19 @@ fn run_update(directory: &Path, config: ClientConfig, yes: bool) -> Result<()> {
     Ok(())
 }
 
-fn available_github_update(
+fn available_repository_update(
     skill: &SkillData,
     client: &SkillsMpClient,
 ) -> Result<Option<SkillData>> {
+    if let (Some(repository_url), Some(provider)) =
+        (skill.repository_url.as_deref(), skill.repository_provider)
+    {
+        let refreshed = discover_repository_skills(client, repository_url, Some(provider))?
+            .into_iter()
+            .next()
+            .context("repository URL resolves to no skills")?;
+        return Ok((!repository_versions_match(skill, &refreshed)).then_some(refreshed));
+    }
     let Some(github_url) = skill.github_url.as_deref() else {
         return Ok(None);
     };
@@ -1541,11 +1609,25 @@ fn format_pending_update(update: &PendingSkillUpdate) -> String {
         skill_directory_name(&update.installed),
         if update.installed.is_skillsmp() {
             "skillsmp/github"
+        } else if let Some(provider) = update.installed.repository_provider {
+            provider.as_str()
         } else {
             "github"
         },
-        short_revision(update.installed.github_commit_sha.as_deref()),
-        short_revision(update.available.github_commit_sha.as_deref())
+        short_revision(
+            update
+                .installed
+                .repository_commit_sha
+                .as_deref()
+                .or(update.installed.github_commit_sha.as_deref()),
+        ),
+        short_revision(
+            update
+                .available
+                .repository_commit_sha
+                .as_deref()
+                .or(update.available.github_commit_sha.as_deref()),
+        )
     )
 }
 
@@ -1561,7 +1643,12 @@ fn format_applied_update(previous: &SkillData, updated: &SkillData) -> String {
     format!(
         "Updated {} to commit {}",
         skill_directory_name(updated),
-        short_revision(updated.github_commit_sha.as_deref())
+        short_revision(
+            updated
+                .repository_commit_sha
+                .as_deref()
+                .or(updated.github_commit_sha.as_deref()),
+        )
     )
 }
 
@@ -2046,6 +2133,33 @@ fn update_skill(directory: &Path, skill: &SkillData, client: &SkillsMpClient) ->
         ));
     }
 
+    if let (Some(repository_url), Some(provider)) =
+        (skill.repository_url.as_deref(), skill.repository_provider)
+    {
+        let refreshed = discover_repository_skills(client, repository_url, Some(provider))?
+            .into_iter()
+            .next()
+            .context("repository URL resolves to no skills")?;
+        if repository_versions_match(skill, &refreshed) {
+            return Ok(format!(
+                "{} is already up to date ({})",
+                skill_directory_name(skill),
+                skill.repository_commit_sha.as_deref().unwrap_or("unknown")
+            ));
+        }
+        let updated = install_available_skill(
+            directory,
+            &refreshed,
+            Some(&skill_directory_name(skill)),
+            true,
+        )?;
+        return Ok(format!(
+            "Updated {} with {} files",
+            skill_directory_name(&updated),
+            updated.resources.len() + 1
+        ));
+    }
+
     if let Some(github_url) = skill.github_url.as_deref() {
         let refreshed = discover_github_skills(
             client,
@@ -2095,6 +2209,15 @@ fn skill_update_available(
         let environment = build_project_environment(directory, &ScanDependencySelection::default());
         return Ok(available_dependency_skill_in(skill, &environment)?
             .is_some_and(|available| available.package_version != skill.package_version));
+    }
+    if let (Some(repository_url), Some(provider)) =
+        (skill.repository_url.as_deref(), skill.repository_provider)
+    {
+        let refreshed = discover_repository_skills(client, repository_url, Some(provider))?
+            .into_iter()
+            .next()
+            .context("repository URL resolves to no skills")?;
+        return Ok(!repository_versions_match(skill, &refreshed));
     }
     let Some(github_url) = skill.github_url.as_deref() else {
         return Ok(false);
@@ -2684,6 +2807,9 @@ mod tests {
             package_version: None,
             github_url: github_url.map(str::to_string),
             github_commit_sha: Some("0123456789abcdef0123456789abcdef01234567".to_string()),
+            repository_provider: None,
+            repository_url: None,
+            repository_commit_sha: None,
             skillsmp_id: skillsmp_id.map(str::to_string),
             package_ecosystem: None,
         }
@@ -2707,6 +2833,9 @@ mod tests {
                 package_version: Some("0.12.0".to_string()),
                 github_url: None,
                 github_commit_sha: None,
+                repository_provider: None,
+                repository_url: None,
+                repository_commit_sha: None,
                 skillsmp_id: None,
                 package_ecosystem: None,
             },
@@ -2996,18 +3125,15 @@ mod tests {
     }
 
     #[test]
-    fn update_command_accepts_yes_and_github_token() {
-        let cli = Cli::try_parse_from(["skilly", "update", "--yes", "--github-token", "token"])
+    fn update_command_accepts_yes_and_repository_token() {
+        let cli = Cli::try_parse_from(["skilly", "update", "--yes", "--token", "token"])
             .expect("update command should parse");
-        let Commands::Update {
-            yes, github_token, ..
-        } = cli.command
-        else {
+        let Commands::Update { yes, token, .. } = cli.command else {
             panic!("expected update command");
         };
 
         assert!(yes);
-        assert_eq!(github_token.as_deref(), Some("token"));
+        assert_eq!(token.as_deref(), Some("token"));
     }
 
     #[test]
@@ -3195,6 +3321,9 @@ mod tests {
                         "https://github.com/example/project/tree/main/skills/python".to_string(),
                     ),
                     github_commit_sha: None,
+                    repository_provider: None,
+                    repository_url: None,
+                    repository_commit_sha: None,
                     skillsmp_id: None,
                     package_ecosystem: None,
                 },

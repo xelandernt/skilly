@@ -44,6 +44,28 @@ skill = Skill(
 | `resources` | `list[SkillResource]` | Bundled resources. |
 | `directory_name` | `str` | Normalized directory name for the skill. |
 | `source` | `str` | Origin source identifier. |
+| `repository_provider` | `str \| None` | Repository provider for repository-backed installs. |
+| `repository_url` | `str \| None` | Canonical repository skill URL used for updates. |
+| `repository_commit_sha` | `str \| None` | Immutable repository revision used for installation. |
+
+### Repository discovery
+
+```python
+from skilly import discover_repository_skills, parse_repository_location
+
+location = parse_repository_location("https://bitbucket.org/example/skills")
+skills = discover_repository_skills("https://bitbucket.org/example/skills")
+
+data_center = parse_repository_location(
+    "https://git.example.com/bitbucket/projects/ENG/repos/skills",
+    provider="bitbucket-data-center",
+)
+```
+
+Supported providers are `"github"`, `"bitbucket-cloud"`, and
+`"bitbucket-data-center"`. GitHub and Bitbucket Cloud are detected from their
+public URLs. Pass `provider="bitbucket-data-center"` for Bitbucket Data Center.
+Pass `token=` for a one-off credential or use a provider environment variable.
 
 ### Class methods
 
@@ -85,11 +107,11 @@ skill.install_to(directory=".agents/skills", skill_name="my-skill")
 ## SkillResource
 
 ```python
-from skilly import ResourceKind, SkillResource
+from skilly import SkillResource
 
 resource = SkillResource(
     relative_path="scripts/deploy.sh",
-    kind=ResourceKind("script"),
+    kind="script",
     content=b"#!/bin/sh\necho Deploying...",
 )
 ```
@@ -106,6 +128,10 @@ Type alias for `Literal["script", "reference", "asset", "other"]`.
 
 ## SkillOrigin
 
+`SkillOrigin` supplies package and SkillsMP provenance when constructing or
+discovering a skill. Repository installs populate `repository_provider`,
+`repository_url`, and `repository_commit_sha` automatically.
+
 ```python
 from skilly import SkillOrigin
 
@@ -118,10 +144,10 @@ origin = SkillOrigin(
 
 | Field | Type | Description |
 |---|---|---|
-| `source` | `str \| None` | Origin identifier (e.g. `"github"`, `"skillsmp"`). |
+| `source` | `str \| None` | Origin identifier (for example, `"github"` or `"skillsmp"`). |
 | `package_name` | `str \| None` | Name of the source package. |
 | `package_version` | `str \| None` | Version of the source package. |
 | `package_ecosystem` | `str \| None` | Ecosystem (`"python"`, `"node"`, `"maven"`). |
-| `github_url` | `str \| None` | GitHub URL for GitHub-backed skills. |
-| `github_commit_sha` | `str \| None` | Commit SHA for GitHub-backed skills. |
+| `github_url` | `str \| None` | GitHub URL for SkillsMP-backed skills. |
+| `github_commit_sha` | `str \| None` | Commit SHA for SkillsMP-backed skills. |
 | `skillsmp_id` | `str \| None` | SkillsMP registry ID. |

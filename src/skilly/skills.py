@@ -14,6 +14,7 @@ if TYPE_CHECKING:
         GitHubFileBlobData,
         GitHubRepositorySnapshotData,
         GitHubSkillLocationData,
+        RepositoryLocationData,
     )
     from .filesystem import FileSystem
     from .repository import PackageSource
@@ -67,6 +68,29 @@ class GitHubSkillLocation:
             repo=data["repo"],
             ref=None if data.get("ref") is None else data["ref"],
             path=PurePosixPath(data.get("path", ".")),
+            url=data["url"],
+        )
+
+
+@dataclass(frozen=True)
+class RepositoryLocation:
+    provider: Literal["github", "bitbucket-cloud", "bitbucket-data-center"]
+    base_url: str
+    namespace: str
+    repo: str
+    ref: str | None
+    path: PurePosixPath
+    url: str
+
+    @classmethod
+    def from_data(cls, data: RepositoryLocationData) -> "RepositoryLocation":
+        return cls(
+            provider=data["provider"],
+            base_url=data["base_url"],
+            namespace=data["namespace"],
+            repo=data["repo"],
+            ref=data.get("ref"),
+            path=PurePosixPath(data["path"]),
             url=data["url"],
         )
 
@@ -187,9 +211,38 @@ def discover_github_skills(
     )
 
 
+def discover_repository_skills(
+    repository_url: str,
+    *,
+    provider: Literal["github", "bitbucket-cloud", "bitbucket-data-center"]
+    | None = None,
+    token: str | None = None,
+) -> list[Skill]:
+    return bridge.discover_repository_skills(
+        repository_url,
+        provider=provider,
+        token=token,
+    )
+
+
+def parse_repository_location(
+    repository_url: str,
+    *,
+    provider: Literal["github", "bitbucket-cloud", "bitbucket-data-center"]
+    | None = None,
+) -> RepositoryLocation:
+    return RepositoryLocation.from_data(
+        bridge.parse_repository_location(repository_url, provider=provider)
+    )
+
+
 def parse_github_skill_url(github_url: str) -> GitHubSkillLocation:
     return GitHubSkillLocation.from_data(bridge.parse_github_skill_url(github_url))
 
 
 def github_versions_match(installed: Skill, available: Skill) -> bool:
     return bool(bridge.github_versions_match(installed, available))
+
+
+def repository_versions_match(installed: Skill, available: Skill) -> bool:
+    return bool(bridge.repository_versions_match(installed, available))

@@ -1,10 +1,13 @@
-//! Blocking HTTP transport for SkillsMP search and GitHub repository content fetching.
+//! Blocking HTTP transport for SkillsMP search and repository snapshot fetching.
 
+use crate::config::ProviderCredential;
 #[cfg(feature = "python-bindings")]
 use crate::core::GitHubContentItemData;
 use crate::core::{
     GitHubFileBlobData, GitHubRepositorySnapshotData, GitHubSkillLocationData,
-    GitHubSnapshotFetcher,
+    GitHubSnapshotFetcher, MAX_ARCHIVE_CUMULATIVE_SIZE, MAX_ARCHIVE_ENTRIES,
+    MAX_ARCHIVE_RESOURCE_SIZE, MAX_ARCHIVE_SIZE, RepositoryFileBlobData, RepositoryLocationData,
+    RepositoryProvider, RepositorySnapshotData, RepositorySnapshotFetcher,
 };
 use anyhow::{Context, Result, bail};
 #[cfg(feature = "python-bindings")]
@@ -20,6 +23,7 @@ use std::env;
 use std::io::Read;
 use std::time::Duration;
 use tar::Archive;
+use url::Url;
 
 const SKILLSMP_API_KEY_ENV_VAR: &str = "SKILLSMP_API_KEY";
 const SKILLY_GITHUB_TOKEN_ENV_VAR: &str = "SKILLY_GITHUB_TOKEN";
@@ -27,6 +31,10 @@ const GITHUB_TOKEN_ENV_VARS: [&str; 3] = [SKILLY_GITHUB_TOKEN_ENV_VAR, "GITHUB_T
 const DEFAULT_SKILLSMP_API_BASE_URL: &str = "https://skillsmp.com/api/v1";
 const DEFAULT_GITHUB_API_BASE_URL: &str = "https://api.github.com";
 const GITHUB_API_BASE_URL_ENV_VAR: &str = "SKILLY_GITHUB_API_BASE_URL";
+const BITBUCKET_CLOUD_API_BASE_URL_ENV_VAR: &str = "SKILLY_BITBUCKET_CLOUD_API_BASE_URL";
+const DEFAULT_BITBUCKET_CLOUD_API_BASE_URL: &str = "https://api.bitbucket.org/2.0";
+const SKILLY_BITBUCKET_CLOUD_TOKEN_ENV_VAR: &str = "SKILLY_BITBUCKET_CLOUD_TOKEN";
+const SKILLY_BITBUCKET_DATA_CENTER_TOKEN_ENV_VAR: &str = "SKILLY_BITBUCKET_DATA_CENTER_TOKEN";
 const SKILLY_USER_AGENT: &str = concat!("skilly/", env!("CARGO_PKG_VERSION"));
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -35,6 +43,8 @@ pub struct ClientConfig {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub github_token: Option<String>,
+    pub repository_token: Option<String>,
+    repository_credentials: Vec<ProviderCredential>,
     pub proxy: Option<String>,
 }
 
@@ -49,6 +59,8 @@ impl ClientConfig {
             base_url,
             api_key,
             github_token,
+            repository_token: None,
+            repository_credentials: Vec::new(),
             proxy,
         }
     }
@@ -76,9 +88,67 @@ impl ClientConfig {
         if let Some(token) = self.github_token.clone() {
             return Some(token);
         }
-        GITHUB_TOKEN_ENV_VARS
+        self.saved_repository_token(RepositoryProvider::GitHub, "https://github.com")
+            .or_else(|| {
+                GITHUB_TOKEN_ENV_VARS
+                    .iter()
+                    .find_map(|name| env::var(name).ok().filter(|value| !value.is_empty()))
+            })
+    }
+
+    #[must_use]
+    pub fn with_repository_token(mut self, token: Option<String>) -> Self {
+        self.repository_token = token;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_repository_credentials(
+        mut self,
+        credentials: Vec<ProviderCredential>,
+    ) -> Self {
+        self.repository_credentials = credentials;
+        self
+    }
+
+    pub fn repository_token(&self, provider: RepositoryProvider, base_url: &str) -> Option<String> {
+        self.repository_token
+            .clone()
+            .or_else(|| self.saved_repository_token(provider, base_url))
+            .or_else(|| match provider {
+                RepositoryProvider::GitHub => self.github_token(),
+                RepositoryProvider::BitbucketCloud => {
+                    env::var(SKILLY_BITBUCKET_CLOUD_TOKEN_ENV_VAR)
+                        .ok()
+                        .filter(|value| !value.is_empty())
+                }
+                RepositoryProvider::BitbucketDataCenter => {
+                    env::var(SKILLY_BITBUCKET_DATA_CENTER_TOKEN_ENV_VAR)
+                        .ok()
+                        .filter(|value| !value.is_empty())
+                }
+            })
+    }
+
+    fn saved_repository_token(
+        &self,
+        provider: RepositoryProvider,
+        base_url: &str,
+    ) -> Option<String> {
+        self.repository_credentials
             .iter()
-            .find_map(|name| env::var(name).ok().filter(|value| !value.is_empty()))
+            .rev()
+            .find(|credential| {
+                credential.provider == provider && credential.url == base_url.trim_end_matches('/')
+            })
+            .map(|credential| credential.token.clone())
+    }
+
+    pub fn bitbucket_cloud_api_base_url(&self) -> String {
+        env::var(BITBUCKET_CLOUD_API_BASE_URL_ENV_VAR)
+            .ok()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| DEFAULT_BITBUCKET_CLOUD_API_BASE_URL.to_string())
     }
 }
 
@@ -233,6 +303,43 @@ struct GitHubCommitInfo {
     sha: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct BitbucketCloudRepositoryInfo {
+    mainbranch: Option<BitbucketCloudMainBranch>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BitbucketCloudMainBranch {
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BitbucketCloudCommit {
+    hash: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BitbucketCloudSourcePage {
+    values: Vec<BitbucketCloudSourceEntry>,
+    next: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BitbucketCloudSourceEntry {
+    r#type: String,
+    path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BitbucketDataCenterRef {
+    id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BitbucketDataCenterCommit {
+    id: String,
+}
+
 pub struct SkillsMpClient {
     config: ClientConfig,
     client: Client,
@@ -276,6 +383,26 @@ impl SkillsMpClient {
         );
         headers.insert(USER_AGENT, HeaderValue::from_static(SKILLY_USER_AGENT));
         if let Some(token) = self.config.github_token() {
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {token}"))?,
+            );
+        }
+        Ok(headers)
+    }
+
+    fn repository_headers(
+        &self,
+        provider: RepositoryProvider,
+        base_url: &str,
+    ) -> Result<HeaderMap> {
+        if provider == RepositoryProvider::GitHub {
+            return self.github_headers();
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        headers.insert(USER_AGENT, HeaderValue::from_static(SKILLY_USER_AGENT));
+        if let Some(token) = self.config.repository_token(provider, base_url) {
             headers.insert(
                 AUTHORIZATION,
                 HeaderValue::from_str(&format!("Bearer {token}"))?,
@@ -469,6 +596,261 @@ impl SkillsMpClient {
             files: extract_github_archive_files(&archive_bytes, &commit_sha)?,
         })
     }
+
+    fn fetch_repository_snapshot(
+        &self,
+        location: &RepositoryLocationData,
+    ) -> Result<RepositorySnapshotData> {
+        match location.provider {
+            RepositoryProvider::GitHub => self.fetch_github_repository_snapshot(location),
+            RepositoryProvider::BitbucketCloud => self.fetch_bitbucket_cloud_snapshot(location),
+            RepositoryProvider::BitbucketDataCenter => {
+                self.fetch_bitbucket_data_center_snapshot(location)
+            }
+        }
+    }
+
+    fn fetch_github_repository_snapshot(
+        &self,
+        location: &RepositoryLocationData,
+    ) -> Result<RepositorySnapshotData> {
+        let snapshot = self.fetch_github_snapshot(&GitHubSkillLocationData {
+            owner: location.namespace.clone(),
+            repo: location.repo.clone(),
+            r#ref: location.r#ref.clone(),
+            path: location.path.clone(),
+            url: location.url.clone(),
+        })?;
+        Ok(RepositorySnapshotData {
+            ref_name: snapshot.ref_name,
+            commit_sha: snapshot.commit_sha,
+            files: snapshot
+                .files
+                .into_iter()
+                .map(|(path, blob)| {
+                    (
+                        path,
+                        RepositoryFileBlobData {
+                            path: blob.path,
+                            content: blob.content.into_bytes(),
+                            commit_sha: blob.commit_sha,
+                        },
+                    )
+                })
+                .collect(),
+        })
+    }
+
+    fn fetch_bitbucket_cloud_snapshot(
+        &self,
+        location: &RepositoryLocationData,
+    ) -> Result<RepositorySnapshotData> {
+        let repository_url = self.bitbucket_cloud_repository_url(location, "");
+        let reference = match location.r#ref.as_ref() {
+            Some(reference) => reference.clone(),
+            None => self
+                .get_json::<BitbucketCloudRepositoryInfo>(
+                    &repository_url,
+                    self.repository_headers(
+                        RepositoryProvider::BitbucketCloud,
+                        &location.base_url,
+                    )?,
+                    &[],
+                )?
+                .mainbranch
+                .map(|branch| branch.name)
+                .context("Bitbucket Cloud repository does not define a main branch")?,
+        };
+        let commit = self.get_json::<BitbucketCloudCommit>(
+            &self.bitbucket_cloud_repository_url(location, &format!("commit/{reference}")),
+            self.repository_headers(RepositoryProvider::BitbucketCloud, &location.base_url)?,
+            &[],
+        )?;
+        let files = self.fetch_bitbucket_cloud_files(location, &commit.hash)?;
+        Ok(RepositorySnapshotData {
+            ref_name: reference,
+            commit_sha: commit.hash,
+            files,
+        })
+    }
+
+    fn fetch_bitbucket_cloud_files(
+        &self,
+        location: &RepositoryLocationData,
+        commit_sha: &str,
+    ) -> Result<BTreeMap<String, RepositoryFileBlobData>> {
+        let mut files = BTreeMap::new();
+        let mut cumulative_size = 0_u64;
+        let root = normalize_repository_path(&location.path)?;
+        let mut directories = vec![root.clone()];
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(directory) = directories.pop() {
+            if !visited.insert(directory.clone()) {
+                continue;
+            }
+            let mut page_url = self.bitbucket_cloud_source_url(location, commit_sha, &directory);
+            loop {
+                let page = self.get_json::<BitbucketCloudSourcePage>(
+                    &page_url,
+                    self.repository_headers(
+                        RepositoryProvider::BitbucketCloud,
+                        &location.base_url,
+                    )?,
+                    &[],
+                )?;
+                for entry in page.values {
+                    let path = normalize_repository_path(&entry.path)?;
+                    if !repository_path_is_within_root(&path, &root) {
+                        bail!(
+                            "Bitbucket Cloud returned a path outside the requested repository root: {path}"
+                        );
+                    }
+                    match entry.r#type.as_str() {
+                        "commit_file" => {
+                            if files.len() >= MAX_ARCHIVE_ENTRIES {
+                                bail!(
+                                    "Bitbucket Cloud source tree exceeds maximum {MAX_ARCHIVE_ENTRIES} files"
+                                );
+                            }
+                            let bytes = self.get_bytes(
+                                &self.bitbucket_cloud_source_url(location, commit_sha, &path),
+                                self.repository_headers(
+                                    RepositoryProvider::BitbucketCloud,
+                                    &location.base_url,
+                                )?,
+                                &[],
+                            )?;
+                            if bytes.len() as u64 > MAX_ARCHIVE_RESOURCE_SIZE {
+                                bail!(
+                                    "Bitbucket Cloud file {path} exceeds maximum {MAX_ARCHIVE_RESOURCE_SIZE} bytes"
+                                );
+                            }
+                            cumulative_size = cumulative_size
+                                .checked_add(bytes.len() as u64)
+                                .context("Bitbucket Cloud source tree size overflow")?;
+                            if cumulative_size > MAX_ARCHIVE_CUMULATIVE_SIZE {
+                                bail!(
+                                    "Bitbucket Cloud source tree exceeds maximum {MAX_ARCHIVE_CUMULATIVE_SIZE} bytes"
+                                );
+                            }
+                            files.insert(
+                                path.clone(),
+                                RepositoryFileBlobData {
+                                    path,
+                                    content: bytes,
+                                    commit_sha: Some(commit_sha.to_string()),
+                                },
+                            );
+                        }
+                        "commit_directory" => directories.push(path),
+                        other => bail!("unsupported Bitbucket Cloud source entry type: {other}"),
+                    }
+                }
+                let Some(next) = page.next else {
+                    break;
+                };
+                if !same_url_origin(&next, &self.config.bitbucket_cloud_api_base_url()) {
+                    bail!("Bitbucket Cloud returned a pagination URL outside its API origin");
+                }
+                page_url = next;
+            }
+        }
+        Ok(files)
+    }
+
+    fn fetch_bitbucket_data_center_snapshot(
+        &self,
+        location: &RepositoryLocationData,
+    ) -> Result<RepositorySnapshotData> {
+        let repository_url = self.bitbucket_data_center_repository_url(location, "");
+        let reference = match location.r#ref.as_ref() {
+            Some(reference) => reference.clone(),
+            None => {
+                self.get_json::<BitbucketDataCenterRef>(
+                    &format!("{repository_url}/default-branch"),
+                    self.repository_headers(
+                        RepositoryProvider::BitbucketDataCenter,
+                        &location.base_url,
+                    )?,
+                    &[],
+                )?
+                .id
+            }
+        };
+        let commit = self.get_json::<BitbucketDataCenterCommit>(
+            &format!("{repository_url}/commits/{reference}"),
+            self.repository_headers(RepositoryProvider::BitbucketDataCenter, &location.base_url)?,
+            &[],
+        )?;
+        let archive_bytes = self.get_bytes(
+            &format!("{repository_url}/archive"),
+            self.repository_headers(RepositoryProvider::BitbucketDataCenter, &location.base_url)?,
+            &[
+                ("at".to_string(), commit.id.clone()),
+                ("format".to_string(), "tar.gz".to_string()),
+            ],
+        )?;
+        if archive_bytes.len() as u64 > MAX_ARCHIVE_SIZE {
+            bail!("Bitbucket Data Center archive exceeds maximum {MAX_ARCHIVE_SIZE} bytes");
+        }
+        Ok(RepositorySnapshotData {
+            ref_name: reference,
+            commit_sha: commit.id.clone(),
+            files: extract_repository_archive_files(&archive_bytes, &commit.id)?,
+        })
+    }
+
+    fn bitbucket_cloud_repository_url(
+        &self,
+        location: &RepositoryLocationData,
+        suffix: &str,
+    ) -> String {
+        let base = format!(
+            "{}/repositories/{}/{}",
+            self.config
+                .bitbucket_cloud_api_base_url()
+                .trim_end_matches('/'),
+            location.namespace,
+            location.repo
+        );
+        if suffix.is_empty() {
+            base
+        } else {
+            format!("{base}/{}", suffix.trim_start_matches('/'))
+        }
+    }
+
+    fn bitbucket_cloud_source_url(
+        &self,
+        location: &RepositoryLocationData,
+        commit_sha: &str,
+        path: &str,
+    ) -> String {
+        let suffix = if path == "." || path.is_empty() {
+            format!("src/{commit_sha}/")
+        } else {
+            format!("src/{commit_sha}/{path}")
+        };
+        self.bitbucket_cloud_repository_url(location, &suffix)
+    }
+
+    fn bitbucket_data_center_repository_url(
+        &self,
+        location: &RepositoryLocationData,
+        suffix: &str,
+    ) -> String {
+        let base = format!(
+            "{}/rest/api/latest/projects/{}/repos/{}",
+            location.base_url.trim_end_matches('/'),
+            location.namespace,
+            location.repo
+        );
+        if suffix.is_empty() {
+            base
+        } else {
+            format!("{base}/{}", suffix.trim_start_matches('/'))
+        }
+    }
 }
 
 impl GitHubSnapshotFetcher for SkillsMpClient {
@@ -477,6 +859,15 @@ impl GitHubSnapshotFetcher for SkillsMpClient {
         location: &GitHubSkillLocationData,
     ) -> Result<GitHubRepositorySnapshotData> {
         SkillsMpClient::fetch_github_snapshot(self, location)
+    }
+}
+
+impl RepositorySnapshotFetcher for SkillsMpClient {
+    fn fetch_repository_snapshot(
+        &self,
+        location: &RepositoryLocationData,
+    ) -> Result<RepositorySnapshotData> {
+        SkillsMpClient::fetch_repository_snapshot(self, location)
     }
 }
 
@@ -517,6 +908,92 @@ fn extract_commit_sha_from_html_url(html_url: Option<&str>) -> Option<String> {
 
 fn looks_like_commit_sha(value: &str) -> bool {
     value.len() == 40 && value.chars().all(|character| character.is_ascii_hexdigit())
+}
+
+fn normalize_repository_path(path: &str) -> Result<String> {
+    let normalized = path.trim_matches('/');
+    if normalized.is_empty() || normalized == "." {
+        return Ok(".".to_string());
+    }
+    if normalized
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        bail!("repository response contains an unsafe path: {path}");
+    }
+    Ok(normalized.to_string())
+}
+
+fn repository_path_is_within_root(path: &str, root: &str) -> bool {
+    root == "." || path == root || path.starts_with(&format!("{root}/"))
+}
+
+fn same_url_origin(candidate: &str, base: &str) -> bool {
+    let Ok(candidate) = Url::parse(candidate) else {
+        return false;
+    };
+    let Ok(base) = Url::parse(base) else {
+        return false;
+    };
+    candidate.scheme() == base.scheme()
+        && candidate.host_str() == base.host_str()
+        && candidate.port_or_known_default() == base.port_or_known_default()
+}
+
+fn extract_repository_archive_files(
+    archive_bytes: &[u8],
+    commit_sha: &str,
+) -> Result<BTreeMap<String, RepositoryFileBlobData>> {
+    if archive_bytes.len() as u64 > MAX_ARCHIVE_SIZE {
+        bail!("repository archive exceeds maximum {MAX_ARCHIVE_SIZE} bytes");
+    }
+    let mut files = BTreeMap::new();
+    let mut entry_count = 0_usize;
+    let mut cumulative_size = 0_u64;
+    let decoder = GzDecoder::new(archive_bytes);
+    let mut archive = Archive::new(decoder);
+    for entry in archive
+        .entries()
+        .context("invalid repository archive response")?
+    {
+        let mut entry = entry?;
+        entry_count += 1;
+        if entry_count > MAX_ARCHIVE_ENTRIES {
+            bail!("repository archive exceeds maximum {MAX_ARCHIVE_ENTRIES} entries");
+        }
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let path = entry.path()?.to_string_lossy().to_string();
+        let parts = path.split('/').collect::<Vec<_>>();
+        if parts.len() < 2 {
+            continue;
+        }
+        let relative_path = normalize_repository_path(&parts[1..].join("/"))?;
+        let size = entry.size();
+        if size > MAX_ARCHIVE_RESOURCE_SIZE {
+            bail!(
+                "repository archive entry {relative_path} exceeds maximum {MAX_ARCHIVE_RESOURCE_SIZE} bytes"
+            );
+        }
+        cumulative_size = cumulative_size
+            .checked_add(size)
+            .context("repository archive size overflow")?;
+        if cumulative_size > MAX_ARCHIVE_CUMULATIVE_SIZE {
+            bail!("repository archive exceeds maximum {MAX_ARCHIVE_CUMULATIVE_SIZE} bytes");
+        }
+        let mut content = Vec::new();
+        entry.read_to_end(&mut content)?;
+        files.insert(
+            relative_path.clone(),
+            RepositoryFileBlobData {
+                path: relative_path,
+                content,
+                commit_sha: Some(commit_sha.to_string()),
+            },
+        );
+    }
+    Ok(files)
 }
 
 fn extract_github_archive_files(

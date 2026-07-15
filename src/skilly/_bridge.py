@@ -12,6 +12,7 @@ if TYPE_CHECKING:
         GitHubFileBlobData,
         GitHubRepositorySnapshotData,
         GitHubSkillLocationData,
+        RepositoryLocationData,
         Skill,
         SkillsMpAiSearchApiResponseData,
         SkillsMpSearchApiResponseData,
@@ -22,6 +23,9 @@ BridgeObject: TypeAlias = Mapping[str, "BridgeValue"]
 BridgeArray: TypeAlias = Sequence["BridgeValue"]
 BridgeValue: TypeAlias = BridgeScalar | BridgeObject | BridgeArray
 AgentName: TypeAlias = Literal["agents", "claude", "codex", "copilot"]
+RepositoryProvider: TypeAlias = Literal[
+    "github", "bitbucket-cloud", "bitbucket-data-center"
+]
 
 
 class ClientConfigSource(Protocol):
@@ -309,6 +313,13 @@ def parse_github_skill_url(github_url: str) -> GitHubSkillLocationData:
     return _core.parse_github_skill_url(github_url)
 
 
+def parse_repository_location(
+    repository_url: str,
+    provider: RepositoryProvider | None = None,
+) -> RepositoryLocationData:
+    return _core.parse_repository_location(repository_url, provider=provider)
+
+
 def discover_github_skills(
     github_url: str,
     origin: SkillOriginSource | None = None,
@@ -333,6 +344,22 @@ def discover_github_skills(
 
 def github_versions_match(installed: Skill, available: Skill) -> bool:
     return _core.github_versions_match(installed, available)
+
+
+def discover_repository_skills(
+    repository_url: str,
+    provider: RepositoryProvider | None = None,
+    token: str | None = None,
+) -> list[Skill]:
+    return _core.discover_repository_skills(
+        repository_url,
+        provider=provider,
+        token=token,
+    )
+
+
+def repository_versions_match(installed: Skill, available: Skill) -> bool:
+    return _core.repository_versions_match(installed, available)
 
 
 def remove_skill(

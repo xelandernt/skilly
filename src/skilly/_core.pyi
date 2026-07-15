@@ -5,6 +5,9 @@ from typing import Literal, Protocol, TypeAlias, TypedDict
 from .filesystem import FileSystem
 
 ResourceKind: TypeAlias = Literal["script", "reference", "asset", "other"]
+RepositoryProvider: TypeAlias = Literal[
+    "github", "bitbucket-cloud", "bitbucket-data-center"
+]
 StrPath: TypeAlias = str | PathLike[str]
 
 class SkillResourceLike(Protocol):
@@ -33,6 +36,15 @@ class SkillsMpInstallableSkillLike(Protocol):
 
 class GitHubSkillLocationData(TypedDict):
     owner: str
+    repo: str
+    ref: str | None
+    path: str
+    url: str
+
+class RepositoryLocationData(TypedDict):
+    provider: RepositoryProvider
+    base_url: str
+    namespace: str
     repo: str
     ref: str | None
     path: str
@@ -160,6 +172,12 @@ class Skill:
     def github_url(self) -> str | None: ...
     @property
     def github_commit_sha(self) -> str | None: ...
+    @property
+    def repository_provider(self) -> RepositoryProvider | None: ...
+    @property
+    def repository_url(self) -> str | None: ...
+    @property
+    def repository_commit_sha(self) -> str | None: ...
     @property
     def skillsmp_id(self) -> str | None: ...
     @property
@@ -329,6 +347,10 @@ def available_dependency_skill(
     file_system: FileSystem | None = ...,
 ) -> Skill | None: ...
 def parse_github_skill_url(github_url: str) -> GitHubSkillLocationData: ...
+def parse_repository_location(
+    repository_url: str,
+    provider: RepositoryProvider | None = ...,
+) -> RepositoryLocationData: ...
 def discover_github_skills(
     github_url: str,
     source: str | None = ...,
@@ -339,6 +361,12 @@ def discover_github_skills(
     proxy: str | None = ...,
 ) -> list[Skill]: ...
 def github_versions_match(installed: Skill, available: Skill) -> bool: ...
+def discover_repository_skills(
+    repository_url: str,
+    provider: RepositoryProvider | None = ...,
+    token: str | None = ...,
+) -> list[Skill]: ...
+def repository_versions_match(installed: Skill, available: Skill) -> bool: ...
 def remove_skill(
     name: str,
     directory: StrPath | None = ...,

@@ -27,7 +27,8 @@ timestamp so skilly can detect updates and track provenance.
 
 skilly tracks where each installed skill came from:
 
--   **GitHub** — downloaded from a GitHub repository URL.
+-   **Repository** — downloaded from GitHub, Bitbucket Cloud, or Bitbucket
+    Data Center.
 -   **SkillsMP** — installed via the SkillsMP registry.
 -   **Dependency** — discovered via `scan` from a Python, Node, or Maven
     dependency.

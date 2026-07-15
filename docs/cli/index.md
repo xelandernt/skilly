@@ -1,9 +1,7 @@
 # CLI
 
-`skilly` provides a set of commands for managing Agent Skills. All commands
-work in both interactive terminals and non-interactive automation. When a TTY
-is detected, some commands enhance their output with a TUI; otherwise output is
-suitable for non-interactive automation.
+`skilly` provides commands for managing Agent Skills in interactive terminals
+and non-interactive automation.
 
 ## Global options
 
@@ -18,7 +16,7 @@ suitable for non-interactive automation.
 |---|---|
 | `create` | Create a specification-compliant skill. |
 | `scan` | Scan dependencies for skills from `pyproject.toml`, `package.json`, and `pom.xml`. |
-| `download` | Download one or more skills from a GitHub repository URL. |
+| `download` | Download one or more skills from a supported repository URL. |
 | `list` | Browse, update, or remove installed skills. |
 | `update` | Check installed skill updates in bulk and optionally apply them. |
 | `remove` | Remove one installed skill by directory name. |
@@ -26,7 +24,7 @@ suitable for non-interactive automation.
 | `skillsmp list` | Browse installed SkillsMP skills and manage updates. |
 | `util dependencies` | Print dependency names resolved from `pyproject.toml`. |
 | `util venv` | List skills discovered inside a virtual environment. |
-| `configure` | Configure which directories skilly manages. |
+| `configure` | Manage directories and repository credentials. |
 
 ## Destination options
 
@@ -52,9 +50,9 @@ Every management command (`scan`, `download`, `list`, `update`, `remove`,
 ## Workflow guides
 
 -   [Creating skills](creating-skills.md) — create skills from the CLI.
--   [Installing and managing skills](installing-and-managing.md) — download from
-    GitHub, SkillsMP, dependency scanning, updates, and removal.
+-   [Installing and managing skills](installing-and-managing.md) — download
+    from repositories or SkillsMP, scan dependencies, update, and remove.
 -   [Dependency scanning](dependency-scanning.md) — discover skills in your
     project's Python, Node, and Maven dependencies.
 -   [Destinations and configuration](destinations-and-configuration.md) —
-    configure directories and manage agent paths.
+    configure directories and repository credentials.

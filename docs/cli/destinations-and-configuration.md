@@ -30,8 +30,8 @@ export SKILLY_DEFAULT_DIRECTORY="$HOME/.config/skilly/skills"
 
 ## Configure command
 
-`skilly configure` lets you choose which directories skilly manages and which
-one opens by default.
+`skilly configure` manages the directories Skilly uses and reusable repository
+credentials.
 
 ### Non-interactive usage
 
@@ -49,16 +49,16 @@ skilly configure --add-local .project/skills
 # Remove custom directories
 skilly configure --remove-global /opt/skills
 skilly configure --remove-local .project/skills
+
+# Store a repository credential
+skilly configure --add-provider bitbucket-data-center \
+  --provider-url https://git.example.com/bitbucket \
+  --provider-token "$BITBUCKET_TOKEN"
+
+# Remove a repository credential
+skilly configure --remove-provider bitbucket-data-center \
+  --provider-url https://git.example.com/bitbucket
 ```
-
-### Interactive behavior
-
-In a TTY without flags, `skilly configure` opens a two-tab TUI (Global / Local)
-showing all known agent directories as toggleable checkboxes:
-
--   **Space** — toggles a directory on or off, or removes a custom one.
--   **Enter** — sets the highlighted directory as the default (marked with ★).
--   **Ctrl+S** — saves; you must have a default directory selected.
 
 ### Configuration file
 
@@ -76,13 +76,23 @@ directories = [".agents/skills", ".project/skills"]
 
 The default directory opens first in interactive menus (`list`, `scan`, etc.).
 
-## GitHub authentication
+## Repository authentication
 
-Set a token for higher API rate limits (first available wins:
-`SKILLY_GITHUB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`):
+`download`, `list`, and `update` resolve credentials in this order:
 
-```shell
-export SKILLY_GITHUB_TOKEN=ghp_your_token
-```
+1. An explicit `--token <TOKEN>`.
+2. A saved credential whose provider and base URL exactly match the repository.
+3. A provider environment variable.
 
-All GitHub-fetching commands also accept `--github-token <TOKEN>`.
+| Provider | Environment variables |
+|---|---|
+| GitHub | `SKILLY_GITHUB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN` |
+| Bitbucket Cloud | `SKILLY_BITBUCKET_CLOUD_TOKEN` |
+| Bitbucket Data Center | `SKILLY_BITBUCKET_DATA_CENTER_TOKEN` |
+
+Provider credentials contain a provider type, base URL, and repository-read
+token. Saving a provider in `skilly configure` persists it immediately. Tokens
+are redacted from `skilly configure --show`.
+
+Tokens are never written to installed skill metadata. On Unix, the
+configuration file is owner-only.

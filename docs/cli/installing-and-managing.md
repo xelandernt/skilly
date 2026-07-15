@@ -1,10 +1,21 @@
 # Installing and managing skills
 
-## Download skills from GitHub
+## Download skills from a repository
 
 ```shell
 skilly download https://github.com/example/project
 ```
+
+GitHub and Bitbucket Cloud URLs are detected automatically. Use
+`--provider bitbucket-data-center` for Bitbucket Data Center:
+
+```shell
+skilly download https://bitbucket.org/example/project
+skilly download https://git.example.com/bitbucket/projects/ENG/repos/skills \
+  --provider bitbucket-data-center
+```
+
+GitLab, generic Git URLs, and SSH URLs are not supported.
 
 When a repository contains multiple skills, select one or download all:
 
@@ -20,7 +31,8 @@ skilly download https://github.com/example/project --skill-name code-review
 | `--skill-name <NAME>` | Select a specific skill from a multi-skill repository. |
 | `--all` | Download every skill found at the URL. |
 | `--overwrite` | Overwrite existing files during installation. |
-| `--github-token <TOKEN>` | GitHub token for API requests (also reads `SKILLY_GITHUB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`). |
+| `--provider <PROVIDER>` | Explicit provider: `github`, `bitbucket-cloud`, or `bitbucket-data-center`; required for Data Center. |
+| `--token <TOKEN>` | One-off token for the selected/detected provider. Saved credentials and environment fallbacks are described in the [authentication reference](destinations-and-configuration.md#repository-authentication). |
 | *(destination flags)* | See [destinations reference](destinations-and-configuration.md). |
 
 ## Search SkillsMP
@@ -30,8 +42,13 @@ skilly skillsmp search python
 skilly skillsmp search "code review"
 ```
 
-Select a result from the interactive prompt, or use `--overwrite` to replace an
-already-installed skill.
+Use `--overwrite` to replace an already-installed skill.
+
+| Option | Description |
+|---|---|
+| `--overwrite` | Replace an installed skill with the selected result. |
+| `--github-token <TOKEN>` | GitHub token for resolving SkillsMP skill contents. |
+| *(destination flags)* | See [destinations reference](destinations-and-configuration.md). |
 
 ### Browse installed SkillsMP skills
 
@@ -41,15 +58,16 @@ skilly skillsmp list
 
 Shows all SkillsMP-installed skills with their update status.
 
+`skilly skillsmp list` accepts `--github-token <TOKEN>` when checking updates.
+
 ## List installed skills
 
 ```shell
 skilly list
 ```
 
-Shows every installed skill, its origin (GitHub, SkillsMP, local), and its
-status. In a TTY, this opens a browseable menu where you can select a skill to
-update or remove.
+Shows every installed skill, its origin (repository, SkillsMP, local), and its
+status.
 
 ## Update skills
 
@@ -57,15 +75,13 @@ update or remove.
 skilly update
 ```
 
-Checks every installed GitHub- and SkillsMP-backed skill for newer versions.
+Checks every installed repository- and SkillsMP-backed skill for newer versions.
 
 | Option | Description |
 |---|---|
 | `-y`, `--yes` | Apply every discovered update without prompting. |
-| `--github-token <TOKEN>` | GitHub token for API requests. |
+| `--token <TOKEN>` | One-off token for repository-backed skill update checks; saved credentials and environment fallbacks also apply. |
 | *(destination flags)* | See [destinations reference](destinations-and-configuration.md). |
-
-To update or remove a single skill interactively, use `skilly list`.
 
 ## Remove a skill
 

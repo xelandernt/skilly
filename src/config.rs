@@ -4,11 +4,13 @@
 //! The configuration stores two lists of directory paths: global (absolute or
 //! `~`-prefixed) and local (relative to the current working directory).
 
+use crate::core::RepositoryProvider;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use url::Url;
 
 const CONFIG_FILENAME: &str = ".skilly.toml";
 
@@ -58,6 +60,9 @@ pub(crate) struct SkillyConfig {
 
     #[serde(default)]
     pub(crate) local: LocalConfig,
+
+    #[serde(default)]
+    pub(crate) repositories: RepositoryConfig,
 }
 
 fn default_directory_path() -> String {
@@ -70,8 +75,56 @@ impl Default for SkillyConfig {
             default_directory: default_directory_path(),
             global: GlobalConfig::default(),
             local: LocalConfig::default(),
+            repositories: RepositoryConfig::default(),
         }
     }
+}
+
+/// Repository credentials selected by provider and repository base URL.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct RepositoryConfig {
+    pub(crate) providers: Vec<ProviderCredential>,
+}
+
+/// A persisted repository token. The token is never printed by normal commands.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ProviderCredential {
+    pub(crate) provider: RepositoryProvider,
+    pub(crate) url: String,
+    pub(crate) token: String,
+}
+
+impl ProviderCredential {
+    pub(crate) fn new(provider: RepositoryProvider, url: &str, token: &str) -> Result<Self> {
+        let url = normalize_provider_url(url)?;
+        if token.trim().is_empty() {
+            bail!("repository token must not be empty");
+        }
+        Ok(Self {
+            provider,
+            url,
+            token: token.to_string(),
+        })
+    }
+}
+
+fn normalize_provider_url(value: &str) -> Result<String> {
+    let mut url =
+        Url::parse(value.trim()).context("provider URL must be an absolute HTTP(S) URL")?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        bail!("provider URL must be an absolute HTTP(S) URL");
+    }
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        bail!("provider URL must not contain credentials, a query, or a fragment");
+    }
+    let path = url.path().trim_end_matches('/').to_string();
+    url.set_path(if path.is_empty() { "/" } else { &path });
+    Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,7 +195,49 @@ impl SkillyConfig {
         }
         let content = toml::to_string_pretty(self).context("failed to serialize configuration")?;
         fs::write(&path, content)
-            .with_context(|| format!("failed to write configuration to {}", path.display()))
+            .with_context(|| format!("failed to write configuration to {}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).with_context(|| {
+                format!("failed to protect configuration at {}", path.display())
+            })?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn display_toml(&self) -> Result<String> {
+        let mut safe = self.clone();
+        for credential in &mut safe.repositories.providers {
+            credential.token = "********".to_string();
+        }
+        toml::to_string_pretty(&safe).context("failed to serialize configuration")
+    }
+
+    pub(crate) fn add_provider_credential(&mut self, credential: ProviderCredential) {
+        self.repositories.providers.retain(|existing| {
+            existing.provider != credential.provider || existing.url != credential.url
+        });
+        self.repositories.providers.push(credential);
+    }
+
+    pub(crate) fn remove_provider_credential(
+        &mut self,
+        provider: RepositoryProvider,
+        url: &str,
+    ) -> Result<()> {
+        let url = normalize_provider_url(url)?;
+        let count = self.repositories.providers.len();
+        self.repositories
+            .providers
+            .retain(|existing| existing.provider != provider || existing.url != url);
+        if self.repositories.providers.len() == count {
+            bail!(
+                "repository provider configuration not found: {} {url}",
+                provider.as_str()
+            );
+        }
+        Ok(())
     }
 
     /// Return `true` when no directories are configured.
@@ -298,6 +393,7 @@ mod tests {
             local: LocalConfig {
                 directories: Vec::new(),
             },
+            repositories: RepositoryConfig::default(),
         };
         assert!(config.is_empty());
     }
@@ -334,6 +430,7 @@ mod tests {
             local: LocalConfig {
                 directories: Vec::new(),
             },
+            repositories: RepositoryConfig::default(),
         };
         config.add_global_dir("/opt/skills").unwrap();
         assert!(
@@ -373,6 +470,7 @@ mod tests {
             local: LocalConfig {
                 directories: Vec::new(),
             },
+            repositories: RepositoryConfig::default(),
         };
         assert!(config.remove_global_dir("/nonexistent").is_err());
     }
@@ -455,7 +553,49 @@ directories = ["/opt/a"]
             local: LocalConfig {
                 directories: Vec::new(),
             },
+            repositories: RepositoryConfig::default(),
         };
         assert!(config.remove_local_dir("/nonexistent").is_err());
+    }
+
+    #[test]
+    fn provider_credential_replaces_an_exact_provider_url_match() {
+        let mut config = SkillyConfig::default();
+        config.add_provider_credential(
+            ProviderCredential::new(
+                RepositoryProvider::BitbucketDataCenter,
+                "https://git.example.test/bitbucket/",
+                "first-token",
+            )
+            .unwrap(),
+        );
+        config.add_provider_credential(
+            ProviderCredential::new(
+                RepositoryProvider::BitbucketDataCenter,
+                "https://git.example.test/bitbucket",
+                "replacement-token",
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(config.repositories.providers.len(), 1);
+        assert_eq!(config.repositories.providers[0].token, "replacement-token");
+    }
+
+    #[test]
+    fn displayed_configuration_redacts_provider_tokens() {
+        let mut config = SkillyConfig::default();
+        config.add_provider_credential(
+            ProviderCredential::new(
+                RepositoryProvider::BitbucketCloud,
+                "https://bitbucket.org",
+                "secret-token",
+            )
+            .unwrap(),
+        );
+
+        let display = config.display_toml().unwrap();
+        assert!(display.contains("********"));
+        assert!(!display.contains("secret-token"));
     }
 }

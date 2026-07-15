@@ -17,7 +17,9 @@ from .skills import (
     SkillOrigin,
     discover_github_skills,
     discover_installed_skills,
+    discover_repository_skills,
     github_versions_match,
+    repository_versions_match,
 )
 
 if TYPE_CHECKING:
@@ -277,6 +279,26 @@ class SkillRepository:
                 directory=directory,
                 project=project,
                 file_system=file_system,
+            )
+
+        if (
+            installed_skill.repository_url is not None
+            and installed_skill.repository_provider is not None
+        ):
+            discovered = discover_repository_skills(
+                installed_skill.repository_url,
+                provider=installed_skill.repository_provider,
+            )
+            if not discovered:
+                raise ValueError(
+                    "Repository URL resolves to no skills: "
+                    f"{installed_skill.repository_url}"
+                )
+            refreshed = discovered[0]
+            return (
+                None
+                if repository_versions_match(installed_skill, refreshed)
+                else refreshed
             )
 
         if installed_skill.github_url is None or github_fetcher is None:

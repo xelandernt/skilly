@@ -36,7 +36,7 @@ def test_run_cli_root_help_describes_commands(capfd) -> None:
         "Scan dependency-provided skills from pyproject.toml/.venv, package.json/node_modules, and pom.xml"
         in output
     )
-    assert "Download one or more skills from a GitHub repository URL" in output
+    assert "Download one or more skills from a supported repository URL" in output
     assert "Browse, update, or remove installed skills" in output
 
 
@@ -166,9 +166,7 @@ def test_run_cli_update_help_describes_options(capfd) -> None:
     assert "use `skilly list` to review or update one skill at a time" in output
     assert "--yes" in output
     assert "-y" in output
-    assert (
-        "GitHub token used when checking for updates to GitHub-backed skills" in output
-    )
+    assert "Token used when checking repository-backed skill updates" in output
 
 
 def test_run_cli_create_help_describes_options(capfd) -> None:
@@ -275,7 +273,9 @@ def test_native_cli_root_help_describes_commands() -> None:
         "Scan dependency-provided skills from pyproject.toml/.venv, package.json/node_modules, and pom.xml"
         in result.stdout
     )
-    assert "Download one or more skills from a GitHub repository URL" in result.stdout
+    assert (
+        "Download one or more skills from a supported repository URL" in result.stdout
+    )
     assert "Browse, update, or remove installed skills" in result.stdout
 
 
@@ -543,6 +543,8 @@ def test_configure_help_shows_flags(capfd) -> None:
     assert "--remove-global" in output
     assert "--add-local" in output
     assert "--remove-local" in output
+    assert "--add-provider" in output
+    assert "--provider-token" in output
 
 
 def test_configure_show_prints_toml(capfd, tmp_path: Path, monkeypatch) -> None:
@@ -628,13 +630,40 @@ def test_configure_list_flag_does_not_conflict_with_modify(
     assert "/opt/x" in output
 
 
+def test_configure_stores_and_redacts_provider_credential(
+    capfd, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    exit_code = run_cli(
+        [
+            "configure",
+            "--add-provider",
+            "bitbucket-data-center",
+            "--provider-url",
+            "https://git.example.test/bitbucket",
+            "--provider-token",
+            "secret-token",
+            "--show",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "bitbucket-data-center" in output
+    assert "https://git.example.test/bitbucket" in output
+    assert "secret-token" not in output
+    assert "********" in output
+    saved = (tmp_path / ".skilly.toml").read_text()
+    assert "secret-token" in saved
+
+
 def test_root_help_lists_configure(capfd) -> None:
     exit_code = run_cli(["--help"])
 
     assert exit_code == 0
     output = capfd.readouterr().out
     assert "configure" in output
-    assert "Configure which directories skilly manages" in output
+    assert "Configure directories and repository credentials" in output
 
 
 # ── Node dependency CLI tests ────────────────────────────────────────────

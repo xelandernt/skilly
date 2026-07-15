@@ -41,11 +41,14 @@ flag when listing.
 skilly scan
 ```
 
-## 5. Install from GitHub
+## 5. Install from a repository
 
 ```shell
 skilly download https://github.com/example/skills-repo --all
 ```
+
+GitHub and Bitbucket Cloud are detected from their URLs. Use
+`--provider bitbucket-data-center` for Bitbucket Data Center.
 
 ## 6. Check for updates
 
@@ -53,7 +56,7 @@ skilly download https://github.com/example/skills-repo --all
 skilly update
 ```
 
-This checks every installed GitHub- and SkillsMP-backed skill for newer
+This checks every installed repository- and SkillsMP-backed skill for newer
 versions. Pass `--yes` to apply all discovered updates without prompting.
 
 ## Next steps

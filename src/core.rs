@@ -27,10 +27,14 @@ pub const RESOURCE_KIND_OTHER: &str = "other";
 pub const SKILLY_SOURCE_METADATA_KEY: &str = "skilly-source";
 pub const SKILLY_SOURCE_DEPENDENCY: &str = "dependency";
 pub const SKILLY_SOURCE_GITHUB: &str = "github";
+pub const SKILLY_SOURCE_REPOSITORY: &str = "repository";
 pub const SKILLY_SOURCE_SKILLSMP: &str = "skillsmp";
 pub const SKILLY_UNKNOWN_SOURCE: &str = "unknown";
 pub const SKILLY_GIT_URL_METADATA_KEY: &str = "skilly-git-url";
 pub const SKILLY_COMMIT_SHA_METADATA_KEY: &str = "skilly-commit-sha";
+pub const SKILLY_REPOSITORY_PROVIDER_METADATA_KEY: &str = "skilly-repository-provider";
+pub const SKILLY_REPOSITORY_URL_METADATA_KEY: &str = "skilly-repository-url";
+pub const SKILLY_REPOSITORY_COMMIT_SHA_METADATA_KEY: &str = "skilly-repository-commit-sha";
 pub const SKILLY_SKILLSMP_ID_METADATA_KEY: &str = "skilly-skillsmp-id";
 pub const SKILLY_DEPENDENCY_PACKAGE_NAME_METADATA_KEY: &str = "skilly-package-name";
 pub const SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY: &str = "skilly-package-version";
@@ -155,6 +159,74 @@ pub struct SkillResourceData {
     pub content: Vec<u8>,
 }
 
+/// A Git hosting provider supported by repository-backed skill discovery.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "kebab-case")]
+pub enum RepositoryProvider {
+    GitHub,
+    BitbucketCloud,
+    BitbucketDataCenter,
+}
+
+impl RepositoryProvider {
+    /// Stable identifier used by CLI, Python, and persisted provenance.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::GitHub => "github",
+            Self::BitbucketCloud => "bitbucket-cloud",
+            Self::BitbucketDataCenter => "bitbucket-data-center",
+        }
+    }
+}
+
+impl std::str::FromStr for RepositoryProvider {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "github" => Ok(Self::GitHub),
+            "bitbucket-cloud" => Ok(Self::BitbucketCloud),
+            "bitbucket-data-center" => Ok(Self::BitbucketDataCenter),
+            _ => bail!(
+                "unsupported repository provider {value}; expected github, bitbucket-cloud, or bitbucket-data-center"
+            ),
+        }
+    }
+}
+
+/// A validated repository location, independent of its Git hosting provider.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RepositoryLocationData {
+    pub provider: RepositoryProvider,
+    /// Web origin and any reverse-proxy path before a Data Center `projects` route.
+    pub base_url: String,
+    /// GitHub owner, Bitbucket Cloud workspace, or Bitbucket Data Center project.
+    pub namespace: String,
+    pub repo: String,
+    pub r#ref: Option<String>,
+    pub path: String,
+    pub url: String,
+}
+
+/// A binary file retrieved from a provider snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RepositoryFileBlobData {
+    pub path: String,
+    #[serde(with = "serde_bytes")]
+    pub content: Vec<u8>,
+    pub commit_sha: Option<String>,
+}
+
+/// A repository tree pinned to an immutable commit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RepositorySnapshotData {
+    #[serde(rename = "ref")]
+    pub ref_name: String,
+    pub commit_sha: String,
+    pub files: BTreeMap<String, RepositoryFileBlobData>,
+}
+
 /// Parsed GitHub skill location: owner, repo, ref, path, and the original URL.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GitHubSkillLocationData {
@@ -216,6 +288,9 @@ pub struct SkillData {
     pub package_version: Option<String>,
     pub github_url: Option<String>,
     pub github_commit_sha: Option<String>,
+    pub repository_provider: Option<RepositoryProvider>,
+    pub repository_url: Option<String>,
+    pub repository_commit_sha: Option<String>,
     pub skillsmp_id: Option<String>,
     pub package_ecosystem: Option<PackageEcosystem>,
 }
@@ -237,6 +312,9 @@ pub struct SkillSourceMetadata {
     pub package_version: Option<String>,
     pub github_url: Option<String>,
     pub github_commit_sha: Option<String>,
+    pub repository_provider: Option<RepositoryProvider>,
+    pub repository_url: Option<String>,
+    pub repository_commit_sha: Option<String>,
     pub skillsmp_id: Option<String>,
     pub package_ecosystem: Option<PackageEcosystem>,
 }
@@ -428,6 +506,9 @@ impl SkillSourceMetadata {
             package_version: package_version.map(str::to_string),
             github_url: github_url.map(str::to_string),
             github_commit_sha: github_commit_sha.map(str::to_string),
+            repository_provider: None,
+            repository_url: None,
+            repository_commit_sha: None,
             skillsmp_id: skillsmp_id.map(str::to_string),
             package_ecosystem,
         }
@@ -450,6 +531,24 @@ impl SkillSourceMetadata {
         if self.github_commit_sha.is_none() {
             self.github_commit_sha = metadata.get(SKILLY_COMMIT_SHA_METADATA_KEY).cloned();
         }
+        if self.repository_provider.is_none() {
+            self.repository_provider = metadata
+                .get(SKILLY_REPOSITORY_PROVIDER_METADATA_KEY)
+                .and_then(|value| match value.as_str() {
+                    "github" => Some(RepositoryProvider::GitHub),
+                    "bitbucket-cloud" => Some(RepositoryProvider::BitbucketCloud),
+                    "bitbucket-data-center" => Some(RepositoryProvider::BitbucketDataCenter),
+                    _ => None,
+                });
+        }
+        if self.repository_url.is_none() {
+            self.repository_url = metadata.get(SKILLY_REPOSITORY_URL_METADATA_KEY).cloned();
+        }
+        if self.repository_commit_sha.is_none() {
+            self.repository_commit_sha = metadata
+                .get(SKILLY_REPOSITORY_COMMIT_SHA_METADATA_KEY)
+                .cloned();
+        }
         if self.skillsmp_id.is_none() {
             self.skillsmp_id = metadata.get(SKILLY_SKILLSMP_ID_METADATA_KEY).cloned();
         }
@@ -470,6 +569,7 @@ impl SkillSourceMetadata {
                 *source,
                 SKILLY_SOURCE_DEPENDENCY
                     | SKILLY_SOURCE_GITHUB
+                    | SKILLY_SOURCE_REPOSITORY
                     | SKILLY_SOURCE_SKILLSMP
                     | SKILLY_UNKNOWN_SOURCE
             )
@@ -501,6 +601,24 @@ impl SkillSourceMetadata {
             metadata.insert(
                 SKILLY_COMMIT_SHA_METADATA_KEY.to_string(),
                 github_commit_sha.clone(),
+            );
+        }
+        if let Some(provider) = self.repository_provider {
+            metadata.insert(
+                SKILLY_REPOSITORY_PROVIDER_METADATA_KEY.to_string(),
+                provider.as_str().to_string(),
+            );
+        }
+        if let Some(repository_url) = self.repository_url.as_ref() {
+            metadata.insert(
+                SKILLY_REPOSITORY_URL_METADATA_KEY.to_string(),
+                repository_url.clone(),
+            );
+        }
+        if let Some(repository_commit_sha) = self.repository_commit_sha.as_ref() {
+            metadata.insert(
+                SKILLY_REPOSITORY_COMMIT_SHA_METADATA_KEY.to_string(),
+                repository_commit_sha.clone(),
             );
         }
         if let Some(skillsmp_id) = self.skillsmp_id.as_ref() {
@@ -627,6 +745,15 @@ pub trait GitHubSnapshotFetcher {
         &self,
         location: &GitHubSkillLocationData,
     ) -> Result<GitHubRepositorySnapshotData>;
+}
+
+/// Fetch a repository snapshot for a validated provider location.
+pub trait RepositorySnapshotFetcher {
+    /// Return all files beneath the requested repository revision.
+    fn fetch_repository_snapshot(
+        &self,
+        location: &RepositoryLocationData,
+    ) -> Result<RepositorySnapshotData>;
 }
 
 /// Maximum file size for binary reads (100 MB).
@@ -1232,6 +1359,9 @@ impl SkillData {
             package_version: source_metadata.package_version.clone(),
             github_url: source_metadata.github_url.clone(),
             github_commit_sha: source_metadata.github_commit_sha.clone(),
+            repository_provider: source_metadata.repository_provider,
+            repository_url: source_metadata.repository_url.clone(),
+            repository_commit_sha: source_metadata.repository_commit_sha.clone(),
             skillsmp_id: source_metadata.skillsmp_id.clone(),
             package_ecosystem,
         })
@@ -1432,6 +1562,9 @@ impl SkillData {
             package_version: self.package_version.clone(),
             github_url: self.github_url.clone(),
             github_commit_sha: self.github_commit_sha.clone(),
+            repository_provider: self.repository_provider,
+            repository_url: self.repository_url.clone(),
+            repository_commit_sha: self.repository_commit_sha.clone(),
             skillsmp_id: self.skillsmp_id.clone(),
             package_ecosystem: self.package_ecosystem.clone(),
         }
@@ -1491,6 +1624,14 @@ impl SkillData {
         if let (Some(github_url), Some(other_github_url)) = (&self.github_url, &other.github_url) {
             return github_url == other_github_url;
         }
+        if let (Some(provider), Some(url), Some(other_provider), Some(other_url)) = (
+            self.repository_provider,
+            self.repository_url.as_ref(),
+            other.repository_provider,
+            other.repository_url.as_ref(),
+        ) {
+            return (provider, url) == (other_provider, other_url);
+        }
         self.name == other.name
     }
 
@@ -1521,7 +1662,7 @@ impl SkillData {
     #[must_use]
     #[inline]
     pub fn can_update(&self) -> bool {
-        self.is_dependency() || self.github_url.is_some()
+        self.is_dependency() || self.repository_url.is_some() || self.github_url.is_some()
     }
 }
 
@@ -2564,6 +2705,168 @@ pub fn parse_github_skill_url(github_url: &str) -> Result<GitHubSkillLocationDat
     })
 }
 
+/// Parse a repository URL into a provider-neutral, validated location.
+///
+/// GitHub and Bitbucket Cloud are auto-detected from their public hosts.
+/// Bitbucket Data Center must be selected explicitly because a self-hosted URL
+/// cannot be identified safely from its host name alone.
+pub fn parse_repository_location(
+    repository_url: &str,
+    provider: Option<RepositoryProvider>,
+) -> Result<RepositoryLocationData> {
+    let parsed = Url::parse(repository_url)?;
+    let detected_provider = match parsed.host_str() {
+        Some("github.com") => Some(RepositoryProvider::GitHub),
+        Some("bitbucket.org") => Some(RepositoryProvider::BitbucketCloud),
+        _ => None,
+    };
+    let provider = match (provider, detected_provider) {
+        (Some(explicit), Some(detected)) if explicit != detected => bail!(
+            "repository URL host does not match explicit provider {}",
+            explicit.as_str()
+        ),
+        (Some(provider), _) => provider,
+        (None, Some(provider)) => provider,
+        (None, None) => bail!(
+            "could not detect repository provider; pass --provider bitbucket-data-center for a self-hosted Bitbucket URL"
+        ),
+    };
+
+    match provider {
+        RepositoryProvider::GitHub => parse_github_repository_location(repository_url),
+        RepositoryProvider::BitbucketCloud => parse_bitbucket_cloud_location(repository_url),
+        RepositoryProvider::BitbucketDataCenter => {
+            parse_bitbucket_data_center_location(repository_url)
+        }
+    }
+}
+
+fn parse_github_repository_location(repository_url: &str) -> Result<RepositoryLocationData> {
+    let location = parse_github_skill_url(repository_url)?;
+    Ok(RepositoryLocationData {
+        provider: RepositoryProvider::GitHub,
+        base_url: "https://github.com".to_string(),
+        namespace: location.owner,
+        repo: location.repo,
+        r#ref: location.r#ref,
+        path: location.path,
+        url: location.url,
+    })
+}
+
+fn parse_bitbucket_cloud_location(repository_url: &str) -> Result<RepositoryLocationData> {
+    let parsed = Url::parse(repository_url)?;
+    if parsed.host_str() != Some("bitbucket.org") {
+        bail!(
+            "unsupported Bitbucket Cloud URL host: {}",
+            parsed.host_str().unwrap_or_default()
+        );
+    }
+    let parts = decoded_path_segments(&parsed);
+    if parts.len() < 2 {
+        bail!(
+            "Bitbucket Cloud skill URLs must look like https://bitbucket.org/<workspace>/<repo> or https://bitbucket.org/<workspace>/<repo>/src/<ref>/<path>"
+        );
+    }
+
+    let (reference, path) = match parts.get(2).map(String::as_str) {
+        None => (None, ".".to_string()),
+        Some("src") if parts.len() >= 4 => {
+            let path = if parts.len() > 4 {
+                parts[4..].join("/")
+            } else {
+                ".".to_string()
+            };
+            (Some(parts[3].clone()), path)
+        }
+        Some("src") => bail!(
+            "Bitbucket Cloud source URLs must include a ref like https://bitbucket.org/<workspace>/<repo>/src/<ref>"
+        ),
+        Some(_) => bail!(
+            "Bitbucket Cloud skill URLs must look like https://bitbucket.org/<workspace>/<repo> or https://bitbucket.org/<workspace>/<repo>/src/<ref>/<path>"
+        ),
+    };
+
+    Ok(RepositoryLocationData {
+        provider: RepositoryProvider::BitbucketCloud,
+        base_url: "https://bitbucket.org".to_string(),
+        namespace: parts[0].clone(),
+        repo: parts[1].clone(),
+        r#ref: reference,
+        path,
+        url: repository_url.to_string(),
+    })
+}
+
+fn parse_bitbucket_data_center_location(repository_url: &str) -> Result<RepositoryLocationData> {
+    let parsed = Url::parse(repository_url)?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        bail!("Bitbucket Data Center URLs must use http or https");
+    }
+    let parts = decoded_path_segments(&parsed);
+    let Some(project_index) = parts.iter().position(|part| part == "projects") else {
+        bail!("Bitbucket Data Center URLs must include /projects/<project>/repos/<repo>");
+    };
+    if parts.get(project_index + 2).map(String::as_str) != Some("repos")
+        || parts.len() < project_index + 4
+    {
+        bail!("Bitbucket Data Center URLs must include /projects/<project>/repos/<repo>");
+    }
+    let trailing = &parts[project_index + 4..];
+    let path_from_url = match trailing {
+        [] => ".".to_string(),
+        [segment] if segment == "browse" => ".".to_string(),
+        [segment, path @ ..] if segment == "browse" && !path.is_empty() => path.join("/"),
+        _ => bail!("Bitbucket Data Center skill URLs must end at the repository or /browse/<path>"),
+    };
+    let query_path = parsed
+        .query_pairs()
+        .find(|(key, _)| key == "path")
+        .map(|(_, value)| value.to_string());
+    if query_path.is_some() && path_from_url != "." {
+        bail!("Bitbucket Data Center skill URL cannot specify both a browse path and path query");
+    }
+    let reference = parsed
+        .query_pairs()
+        .find(|(key, _)| key == "at")
+        .map(|(_, value)| value.to_string());
+    let authority = parsed
+        .host_str()
+        .ok_or_else(|| anyhow!("Bitbucket Data Center URL is missing a host"))?;
+    let authority = parsed
+        .port()
+        .map(|port| format!("{authority}:{port}"))
+        .unwrap_or_else(|| authority.to_string());
+    let base_prefix = parts[..project_index].join("/");
+    let base_url = if base_prefix.is_empty() {
+        format!("{}://{authority}", parsed.scheme())
+    } else {
+        format!("{}://{authority}/{base_prefix}", parsed.scheme())
+    };
+
+    Ok(RepositoryLocationData {
+        provider: RepositoryProvider::BitbucketDataCenter,
+        base_url,
+        namespace: parts[project_index + 1].clone(),
+        repo: parts[project_index + 3].clone(),
+        r#ref: reference,
+        path: query_path.unwrap_or(path_from_url),
+        url: repository_url.to_string(),
+    })
+}
+
+fn decoded_path_segments(parsed: &Url) -> Vec<String> {
+    parsed
+        .path_segments()
+        .map(|segments| {
+            segments
+                .filter(|segment| !segment.is_empty())
+                .map(|segment| percent_decode_str(segment).decode_utf8_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Build a GitHub tree URL from a location, path, and optional ref.
 #[must_use]
 pub fn build_github_skill_url(
@@ -2717,6 +3020,170 @@ pub fn discover_github_skills<F: GitHubSnapshotFetcher>(
             )
         })
         .collect()
+}
+
+/// Discover skills from any supported Git repository provider.
+pub fn discover_repository_skills<F: RepositorySnapshotFetcher>(
+    fetcher: &F,
+    repository_url: &str,
+    provider: Option<RepositoryProvider>,
+) -> Result<Vec<SkillData>> {
+    let location = parse_repository_location(repository_url, provider)?;
+    let snapshot = fetcher.fetch_repository_snapshot(&location)?;
+    let skill_dirs = find_repository_skill_dirs(&snapshot.files, &location.path);
+    if skill_dirs.is_empty() {
+        bail!("no SKILL.md found at {repository_url}");
+    }
+
+    skill_dirs
+        .into_iter()
+        .map(|skill_dir| {
+            let skill_url = build_repository_skill_url(&location, &skill_dir, &snapshot.ref_name);
+            build_skill_from_repository_files(
+                &snapshot.files,
+                &skill_dir,
+                &location.provider,
+                skill_url,
+                &snapshot.commit_sha,
+            )
+        })
+        .collect()
+}
+
+fn find_repository_skill_dirs(
+    files: &BTreeMap<String, RepositoryFileBlobData>,
+    root: &str,
+) -> Vec<String> {
+    let normalized_root = if root == "." { "" } else { root };
+    let dirs = files
+        .keys()
+        .filter(|path| path.ends_with("/SKILL.md") || *path == "SKILL.md")
+        .filter_map(|path| {
+            let directory = Path::new(path)
+                .parent()
+                .map(|value| value.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|| ".".to_string());
+            (normalized_root.is_empty()
+                || directory == normalized_root
+                || directory.starts_with(&format!("{normalized_root}/")))
+            .then_some(directory)
+        })
+        .collect::<BTreeSet<_>>();
+    dirs.into_iter().collect()
+}
+
+fn build_skill_from_repository_files(
+    files: &BTreeMap<String, RepositoryFileBlobData>,
+    skill_dir: &str,
+    provider: &RepositoryProvider,
+    repository_url: String,
+    repository_commit_sha: &str,
+) -> Result<SkillData> {
+    let skill_md_path = if skill_dir == "." {
+        "SKILL.md".to_string()
+    } else {
+        format!("{skill_dir}/SKILL.md")
+    };
+    let skill_blob = files
+        .get(&skill_md_path)
+        .ok_or_else(|| anyhow!("SKILL.md not found at {skill_dir}"))?;
+    let skill_text = std::str::from_utf8(&skill_blob.content)
+        .with_context(|| format!("SKILL.md at {skill_dir} is not valid UTF-8"))?;
+    let mut skill = SkillData::from_text(
+        skill_text,
+        None,
+        &SkillSourceMetadata {
+            source: Some(SKILLY_SOURCE_REPOSITORY.to_string()),
+            package_name: None,
+            package_version: None,
+            github_url: None,
+            github_commit_sha: None,
+            repository_provider: Some(*provider),
+            repository_url: Some(repository_url),
+            repository_commit_sha: Some(repository_commit_sha.to_string()),
+            skillsmp_id: None,
+            package_ecosystem: None,
+        },
+    )?;
+    let prefix = if skill_dir == "." {
+        String::new()
+    } else {
+        format!("{skill_dir}/")
+    };
+    skill.resources = files
+        .iter()
+        .filter_map(|(path, blob)| {
+            if path == &skill_md_path || (!prefix.is_empty() && !path.starts_with(&prefix)) {
+                return None;
+            }
+            let relative_path = if prefix.is_empty() {
+                path.clone()
+            } else {
+                path[prefix.len()..].to_string()
+            };
+            Some(SkillResourceData {
+                relative_path: relative_path.clone(),
+                kind: classify_resource_kind(&relative_path),
+                content: blob.content.clone(),
+            })
+        })
+        .collect();
+    skill
+        .resources
+        .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(skill)
+}
+
+fn build_repository_skill_url(
+    location: &RepositoryLocationData,
+    skill_dir: &str,
+    ref_name: &str,
+) -> String {
+    let path = (skill_dir != ".").then_some(skill_dir);
+    match location.provider {
+        RepositoryProvider::GitHub => path.map_or_else(
+            || {
+                format!(
+                    "{}/{}/{}",
+                    location.base_url, location.namespace, location.repo
+                )
+            },
+            |path| {
+                format!(
+                    "{}/{}/{}/tree/{ref_name}/{path}",
+                    location.base_url, location.namespace, location.repo
+                )
+            },
+        ),
+        RepositoryProvider::BitbucketCloud => path.map_or_else(
+            || {
+                format!(
+                    "{}/{}/{}",
+                    location.base_url, location.namespace, location.repo
+                )
+            },
+            |path| {
+                format!(
+                    "{}/{}/{}/src/{ref_name}/{path}",
+                    location.base_url, location.namespace, location.repo
+                )
+            },
+        ),
+        RepositoryProvider::BitbucketDataCenter => path.map_or_else(
+            || {
+                format!(
+                    "{}/projects/{}/repos/{}?at={ref_name}",
+                    location.base_url, location.namespace, location.repo
+                )
+            },
+            |path| {
+                format!(
+                    "{}/projects/{}/repos/{}/browse/{path}?at={ref_name}",
+                    location.base_url, location.namespace, location.repo
+                )
+            },
+        ),
+    }
 }
 
 fn skill_dirs_len_eq_location(location_path: &str, skill_dir: &str) -> bool {
@@ -3210,6 +3677,16 @@ pub fn github_versions_match(installed: &SkillData, available: &SkillData) -> bo
         && installed.github_commit_sha == available.github_commit_sha
 }
 
+/// Check whether installed and available repository skills share a commit.
+#[must_use]
+#[inline]
+pub fn repository_versions_match(installed: &SkillData, available: &SkillData) -> bool {
+    installed.repository_provider == available.repository_provider
+        && installed.repository_url == available.repository_url
+        && installed.repository_commit_sha.is_some()
+        && installed.repository_commit_sha == available.repository_commit_sha
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -3495,6 +3972,9 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             package_version: Some(ver.to_string()),
             github_url: None,
             github_commit_sha: None,
+            repository_provider: None,
+            repository_url: None,
+            repository_commit_sha: None,
             skillsmp_id: None,
             package_ecosystem: eco,
         }
@@ -3667,6 +4147,9 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             package_version: None,
             github_url: None,
             github_commit_sha: None,
+            repository_provider: None,
+            repository_url: None,
+            repository_commit_sha: None,
             skillsmp_id: None,
             package_ecosystem: None,
         };
@@ -3998,5 +4481,66 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
         assert!(!is_skill_record("skills//test/SKILL.md"));
         // Dot segment
         assert!(!is_skill_record("skills/./test/SKILL.md"));
+    }
+
+    #[test]
+    fn repository_location_auto_detects_public_hosts() {
+        let github = super::parse_repository_location(
+            "https://github.com/example/skills/tree/main/review",
+            None,
+        )
+        .expect("GitHub URL should parse");
+        assert_eq!(github.provider, super::RepositoryProvider::GitHub);
+        assert_eq!(github.namespace, "example");
+        assert_eq!(github.path, "review");
+
+        let cloud = super::parse_repository_location(
+            "https://bitbucket.org/example/skills/src/main/review",
+            None,
+        )
+        .expect("Bitbucket Cloud URL should parse");
+        assert_eq!(cloud.provider, super::RepositoryProvider::BitbucketCloud);
+        assert_eq!(cloud.namespace, "example");
+        assert_eq!(cloud.r#ref.as_deref(), Some("main"));
+        assert_eq!(cloud.path, "review");
+    }
+
+    #[test]
+    fn repository_location_requires_explicit_data_center_provider() {
+        let error = super::parse_repository_location(
+            "https://git.example.test/bitbucket/projects/SK/repos/skills/browse/review?at=refs/heads/main",
+            None,
+        )
+        .expect_err("self-hosted Bitbucket must not be guessed");
+        assert!(
+            error
+                .to_string()
+                .contains("--provider bitbucket-data-center")
+        );
+
+        let location = super::parse_repository_location(
+            "https://git.example.test/bitbucket/projects/SK/repos/skills/browse/review?at=refs/heads/main",
+            Some(super::RepositoryProvider::BitbucketDataCenter),
+        )
+        .expect("explicit Data Center URL should parse");
+        assert_eq!(location.base_url, "https://git.example.test/bitbucket");
+        assert_eq!(location.namespace, "SK");
+        assert_eq!(location.repo, "skills");
+        assert_eq!(location.r#ref.as_deref(), Some("refs/heads/main"));
+        assert_eq!(location.path, "review");
+    }
+
+    #[test]
+    fn repository_location_rejects_provider_host_mismatch() {
+        let error = super::parse_repository_location(
+            "https://github.com/example/skills",
+            Some(super::RepositoryProvider::BitbucketCloud),
+        )
+        .expect_err("mismatched provider must fail before transport");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match explicit provider")
+        );
     }
 }

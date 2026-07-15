@@ -1,7 +1,7 @@
 use crate::config::SkillyConfig;
 use crate::core::{
-    NamedSelection, ScanDependencySelection, SkillDirectoryFlavor, absolute_path,
-    resolve_default_directory, skills_directory,
+    NamedSelection, RepositoryProvider, ScanDependencySelection, SkillDirectoryFlavor,
+    absolute_path, resolve_default_directory, skills_directory,
 };
 use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand};
@@ -76,26 +76,36 @@ pub(crate) enum Commands {
         #[command(flatten)]
         dependencies: ScanDependencyArgs,
     },
-    #[command(about = "Download one or more skills from a GitHub repository URL.")]
+    #[command(about = "Download one or more skills from a supported repository URL.")]
     Download {
-        #[arg(help = "GitHub repository, tree, or skill URL to download from.")]
-        github_url: String,
+        #[arg(help = "Repository, revision, or skill URL to download from.")]
+        repository_url: String,
+        #[arg(
+            long,
+            value_name = "PROVIDER",
+            help = "Repository provider: github, bitbucket-cloud, or bitbucket-data-center. GitHub and Bitbucket Cloud URLs are auto-detected; Data Center requires this option."
+        )]
+        provider: Option<RepositoryProvider>,
         #[command(flatten)]
         destination: DestinationArgs,
         #[arg(
             long,
-            help = "Select a specific skill when the GitHub URL resolves to multiple skills."
+            help = "Select a specific skill when the repository URL resolves to multiple skills."
         )]
         skill_name: Option<String>,
-        #[arg(long, help = "Download every skill found at the GitHub URL.")]
+        #[arg(long, help = "Download every skill found at the repository URL.")]
         all: bool,
         #[arg(
             long,
             help = "Overwrite existing files when installing the downloaded skill."
         )]
         overwrite: bool,
-        #[arg(long, help = "GitHub token used for GitHub API requests.")]
-        github_token: Option<String>,
+        #[arg(
+            long,
+            value_name = "TOKEN",
+            help = "Token for the selected or detected repository provider."
+        )]
+        token: Option<String>,
     },
     #[command(about = "Browse, update, or remove installed skills.")]
     List {
@@ -103,9 +113,10 @@ pub(crate) enum Commands {
         destination: DestinationArgs,
         #[arg(
             long,
-            help = "GitHub token used when checking for updates to GitHub-backed skills."
+            value_name = "TOKEN",
+            help = "Token used when checking repository-backed skill updates."
         )]
-        github_token: Option<String>,
+        token: Option<String>,
     },
     #[command(
         about = "Check installed skill updates in bulk and optionally apply them; use `skilly list` to review or update one skill at a time."
@@ -121,9 +132,10 @@ pub(crate) enum Commands {
         yes: bool,
         #[arg(
             long,
-            help = "GitHub token used when checking for updates to GitHub-backed skills."
+            value_name = "TOKEN",
+            help = "Token used when checking repository-backed skill updates."
         )]
-        github_token: Option<String>,
+        token: Option<String>,
     },
     #[command(about = "Remove one installed skill by directory name.")]
     Remove {
@@ -136,9 +148,7 @@ pub(crate) enum Commands {
     Skillsmp(SkillsMpCommands),
     #[command(about = "Utility commands for dependency and virtual environment inspection.")]
     Util(UtilCommands),
-    #[command(
-        about = "Configure which directories skilly manages. Opens a TUI when run interactively without flags."
-    )]
+    #[command(about = "Configure directories and repository credentials.")]
     Configure {
         #[arg(
             long,
@@ -176,6 +186,30 @@ pub(crate) enum Commands {
             help = "Remove a custom local directory by its path."
         )]
         remove_local: Vec<String>,
+        #[arg(
+            long,
+            value_name = "PROVIDER",
+            help = "Store or replace a credential for github, bitbucket-cloud, or bitbucket-data-center. Requires --provider-url and --provider-token."
+        )]
+        add_provider: Option<RepositoryProvider>,
+        #[arg(
+            long,
+            value_name = "URL",
+            help = "Repository provider base URL used with --add-provider or --remove-provider."
+        )]
+        provider_url: Option<String>,
+        #[arg(
+            long,
+            value_name = "TOKEN",
+            help = "Repository token stored with --add-provider."
+        )]
+        provider_token: Option<String>,
+        #[arg(
+            long,
+            value_name = "PROVIDER",
+            help = "Remove a stored provider credential. Requires --provider-url."
+        )]
+        remove_provider: Option<RepositoryProvider>,
     },
 }
 
