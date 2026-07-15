@@ -157,6 +157,8 @@ directories = [".agents/skills", ".project/skills"]
 ```
 
 The default directory opens first in interactive menus (`list`, `scan`, etc.).
+When viewing a skill's files, press `/` to filter by filename and `Esc` to
+clear the filter.
 
 ### Repository Authentication
 

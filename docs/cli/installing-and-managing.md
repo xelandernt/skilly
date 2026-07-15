@@ -69,6 +69,11 @@ skilly list
 Shows every installed skill, its origin (repository, SkillsMP, local), and its
 status.
 
+In an interactive terminal, select a skill and choose **View files** to inspect
+its `SKILL.md` and bundled resources. Press `/` to filter by filename;
+directories containing a matching file remain visible. Press `Esc` to clear
+the filter and return to the full tree.
+
 ## Update skills
 
 ```shell
