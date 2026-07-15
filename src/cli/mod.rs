@@ -3409,8 +3409,8 @@ mod tests {
     // --- file viewer tests ---
 
     use super::tui::{
-        build_file_tree, compute_visible, file_viewer_move_selection_down,
-        file_viewer_move_selection_up,
+        build_file_tree, compute_filtered_visible, compute_visible,
+        file_viewer_move_selection_down, file_viewer_move_selection_up,
     };
     use crate::core::SkillResourceData;
     use std::collections::HashSet;
@@ -3634,6 +3634,62 @@ mod tests {
         assert!(!visible_paths.contains(&"a/b/c/"));
         assert!(!visible_paths.contains(&"a/b/c/file.txt"));
         assert!(!visible_paths.contains(&"a/other.txt"));
+    }
+
+    #[test]
+    fn file_filter_matches_filenames_case_insensitively_and_shows_parents() {
+        let skill = SkillData {
+            content: "Body".to_string(),
+            resources: vec![
+                resource("scripts/sub/helper.py", "# helper"),
+                resource("scripts/run.py", "# run"),
+                resource("references/api.md", "# API"),
+            ],
+            ..installed_skill(None, None)
+        };
+        let tree = build_file_tree(&skill);
+        let mut collapsed = HashSet::new();
+        collapsed.insert("scripts/".to_string());
+
+        let visible = compute_filtered_visible(&tree, &collapsed, "HELPER");
+        let paths: Vec<&str> = visible
+            .iter()
+            .map(|&index| tree[index].relative_path.as_str())
+            .collect();
+
+        assert_eq!(
+            paths,
+            vec!["scripts/", "scripts/sub/", "scripts/sub/helper.py"]
+        );
+    }
+
+    #[test]
+    fn file_filter_matches_names_not_directory_paths() {
+        let skill = SkillData {
+            content: "Body".to_string(),
+            resources: vec![resource("scripts/run.py", "# run")],
+            ..installed_skill(None, None)
+        };
+        let tree = build_file_tree(&skill);
+
+        assert!(compute_filtered_visible(&tree, &HashSet::new(), "scripts").is_empty());
+    }
+
+    #[test]
+    fn empty_file_filter_preserves_collapsed_directories() {
+        let skill = SkillData {
+            content: "Body".to_string(),
+            resources: vec![resource("scripts/run.py", "# run")],
+            ..installed_skill(None, None)
+        };
+        let tree = build_file_tree(&skill);
+        let mut collapsed = HashSet::new();
+        collapsed.insert("scripts/".to_string());
+
+        assert_eq!(
+            compute_filtered_visible(&tree, &collapsed, ""),
+            compute_visible(&tree, &collapsed)
+        );
     }
 
     #[test]
