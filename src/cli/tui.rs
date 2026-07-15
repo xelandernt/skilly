@@ -2818,6 +2818,42 @@ pub(crate) fn compute_visible(
     visible
 }
 
+pub(crate) fn compute_filtered_visible(
+    entries: &[FileViewEntry],
+    collapsed: &HashSet<String>,
+    filter_text: &str,
+) -> Vec<usize> {
+    if filter_text.is_empty() {
+        return compute_visible(entries, collapsed);
+    }
+
+    let matching_files: Vec<&FileViewEntry> = entries
+        .iter()
+        .filter(|entry| file_filter_matches(filter_text, entry))
+        .collect();
+
+    entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            (file_filter_matches(filter_text, entry)
+                || (entry.is_dir
+                    && matching_files
+                        .iter()
+                        .any(|file| file.relative_path.starts_with(&entry.relative_path))))
+            .then_some(index)
+        })
+        .collect()
+}
+
+pub(crate) fn file_filter_matches(filter_text: &str, entry: &FileViewEntry) -> bool {
+    !entry.is_dir
+        && entry
+            .name
+            .to_lowercase()
+            .contains(&filter_text.to_lowercase())
+}
+
 pub(crate) fn file_viewer_move_selection_up(visible: &[usize], current: usize) -> usize {
     if let Some(pos) = visible.iter().position(|&i| i == current) {
         if pos > 0 { visible[pos - 1] } else { current }
@@ -2847,10 +2883,10 @@ pub(crate) fn file_viewer_move_selection_down(visible: &[usize], current: usize)
     }
 }
 
-fn entry_tree_label(entry: &FileViewEntry, collapsed: &HashSet<String>) -> String {
+fn entry_tree_label(entry: &FileViewEntry, collapsed: &HashSet<String>, filtering: bool) -> String {
     let indent = "  ".repeat(entry.depth as usize);
     if entry.is_dir {
-        let prefix = if collapsed.contains(entry.relative_path.as_str()) {
+        let prefix = if !filtering && collapsed.contains(entry.relative_path.as_str()) {
             "\u{25b6}"
         } else {
             "\u{25bc}"
@@ -2869,6 +2905,8 @@ struct FileViewerRenderCtx<'a> {
     scroll: &'a mut ScrollState,
     content_lines: &'a [String],
     title: &'a str,
+    filter_active: bool,
+    filter_text: &'a str,
     show_line_numbers: bool,
     line_number_digits: usize,
 }
@@ -2893,17 +2931,34 @@ fn render_file_viewer(frame: &mut ratatui::Frame<'_>, ctx: &mut FileViewerRender
         .visible
         .iter()
         .map(|&i| {
-            let label = entry_tree_label(&ctx.entries[i], ctx.collapsed);
+            let label = entry_tree_label(
+                &ctx.entries[i],
+                ctx.collapsed,
+                ctx.filter_active && !ctx.filter_text.is_empty(),
+            );
             ListItem::new(Line::from(label))
         })
         .collect();
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!("Files: {}", ctx.title)),
+    let total_files = ctx.entries.iter().filter(|entry| !entry.is_dir).count();
+    let matching_files = if ctx.filter_text.is_empty() {
+        total_files
+    } else {
+        ctx.visible
+            .iter()
+            .filter(|&&index| !ctx.entries[index].is_dir)
+            .count()
+    };
+    let list_title = if ctx.filter_active {
+        format!(
+            "Files: {} (filter: \"{}\", {matching_files}/{total_files})",
+            ctx.title, ctx.filter_text
         )
+    } else {
+        format!("Files: {}", ctx.title)
+    };
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(list_title))
         .highlight_style(
             Style::default()
                 .fg(Color::Yellow)
@@ -2913,7 +2968,11 @@ fn render_file_viewer(frame: &mut ratatui::Frame<'_>, ctx: &mut FileViewerRender
     frame.render_stateful_widget(list, panes[0], &mut list_state);
 
     // --- Right pane: content ---
-    let selected_name = ctx.entries[ctx.selected_index].name.clone();
+    let selected_name = if ctx.visible.is_empty() {
+        "No matching files".to_string()
+    } else {
+        ctx.entries[ctx.selected_index].name.clone()
+    };
     let content_block = Block::default().borders(Borders::ALL).title(selected_name);
 
     let content_inner = content_block.inner(panes[1]);
@@ -3000,11 +3059,18 @@ fn render_file_viewer(frame: &mut ratatui::Frame<'_>, ctx: &mut FileViewerRender
         String::new()
     };
 
-    let help = format!(
-        "{}\u{2191}\u{2193} navigate  Enter/Space toggle dir  L line numbers  PgUp/PgDn scroll  Home/End  Esc back{}",
-        scroll_pct,
-        if scroll_pct.is_empty() { "" } else { "  " }
-    );
+    let help = if ctx.filter_active {
+        format!(
+            "Filter: \"{}\"  type to search  Backspace edit  Esc clear filter",
+            ctx.filter_text
+        )
+    } else {
+        format!(
+            "{}\u{2191}\u{2193} navigate  / filter  Enter/Space toggle dir  L line numbers  PgUp/PgDn scroll  Home/End  Esc back{}",
+            scroll_pct,
+            if scroll_pct.is_empty() { "" } else { "  " }
+        )
+    };
     frame.render_widget(
         Paragraph::new(help).style(Style::default().fg(Color::Gray)),
         layout[1],
@@ -3021,6 +3087,8 @@ pub(crate) fn run_file_viewer(session: &mut TerminalSession, skill: &SkillData) 
     let mut selected_index = 0usize;
     let mut scroll = ScrollState::new();
     let mut show_line_numbers = false;
+    let mut filter_active = false;
+    let mut filter_text = String::new();
     let title = skill.name.clone();
 
     let max_lines = entries
@@ -3035,19 +3103,24 @@ pub(crate) fn run_file_viewer(session: &mut TerminalSession, skill: &SkillData) 
     };
 
     loop {
-        let visible = compute_visible(&entries, &collapsed);
-        if visible.is_empty() {
-            break;
-        }
+        let visible = if filter_active {
+            compute_filtered_visible(&entries, &collapsed, &filter_text)
+        } else {
+            compute_visible(&entries, &collapsed)
+        };
 
-        if !visible.contains(&selected_index) {
+        if !visible.is_empty() && !visible.contains(&selected_index) {
             selected_index = *visible.first().unwrap();
         }
 
-        let content_lines: Vec<String> = String::from_utf8_lossy(&entries[selected_index].content)
-            .lines()
-            .map(str::to_string)
-            .collect();
+        let content_lines = if visible.is_empty() {
+            vec![format!("No files match \"{filter_text}\".")]
+        } else {
+            String::from_utf8_lossy(&entries[selected_index].content)
+                .lines()
+                .map(str::to_string)
+                .collect()
+        };
 
         session.terminal.draw(|frame| {
             let mut ctx = FileViewerRenderCtx {
@@ -3058,6 +3131,8 @@ pub(crate) fn run_file_viewer(session: &mut TerminalSession, skill: &SkillData) 
                 scroll: &mut scroll,
                 content_lines: &content_lines,
                 title: &title,
+                filter_active,
+                filter_text: &filter_text,
                 show_line_numbers,
                 line_number_digits,
             };
@@ -3069,6 +3144,35 @@ pub(crate) fn run_file_viewer(session: &mut TerminalSession, skill: &SkillData) 
         };
         if key.kind != KeyEventKind::Press {
             continue;
+        }
+
+        if !filter_active && key.code == KeyCode::Char('/') && key.modifiers.is_empty() {
+            filter_active = true;
+            filter_text.clear();
+            scroll.reset();
+            continue;
+        }
+
+        if filter_active {
+            match key.code {
+                KeyCode::Esc => {
+                    filter_active = false;
+                    filter_text.clear();
+                    scroll.reset();
+                    continue;
+                }
+                KeyCode::Backspace => {
+                    filter_text.pop();
+                    scroll.reset();
+                    continue;
+                }
+                KeyCode::Char(value) if key.modifiers.is_empty() => {
+                    filter_text.push(value);
+                    scroll.reset();
+                    continue;
+                }
+                _ => {}
+            }
         }
 
         match key.code {
@@ -3085,7 +3189,7 @@ pub(crate) fn run_file_viewer(session: &mut TerminalSession, skill: &SkillData) 
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
                 let entry = &entries[selected_index];
-                if entry.is_dir {
+                if !visible.is_empty() && entry.is_dir {
                     if collapsed.contains(&entry.relative_path) {
                         collapsed.remove(&entry.relative_path);
                     } else {
