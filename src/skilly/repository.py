@@ -14,16 +14,12 @@ from .constants import (
 )
 from .skills import (
     Skill,
-    SkillOrigin,
-    discover_github_skills,
     discover_installed_skills,
     discover_repository_skills,
-    github_versions_match,
     repository_versions_match,
 )
 
 if TYPE_CHECKING:
-    from ._bridge import ClientConfigSource
     from .filesystem import FileSystem
 
 
@@ -270,7 +266,6 @@ class SkillRepository:
         *,
         directory: Path | None = None,
         project: ProjectSettings | None = None,
-        github_fetcher: ClientConfigSource | None = None,
         file_system: FileSystem | None = None,
     ) -> Skill | None:
         if installed_skill.is_dependency():
@@ -301,35 +296,13 @@ class SkillRepository:
                 else refreshed
             )
 
-        if installed_skill.github_url is None or github_fetcher is None:
-            return None
-
-        discovered = discover_github_skills(
-            github_fetcher,
-            installed_skill.github_url,
-            origin=SkillOrigin(
-                source="skillsmp"
-                if installed_skill.is_skillsmp()
-                else installed_skill.source,
-                skillsmp_id=installed_skill.skillsmp_id,
-            ),
-        )
-        if not discovered:
-            raise ValueError(
-                f"GitHub URL resolves to no skills: {installed_skill.github_url}"
-            )
-
-        refreshed = discovered[0]
-        if github_versions_match(installed_skill, refreshed):
-            return None
-        return refreshed
+        return None
 
     def updates(
         self,
         *,
         directory: Path | None = None,
         project: ProjectSettings | None = None,
-        github_fetcher: ClientConfigSource | None = None,
         file_system: FileSystem | None = None,
     ) -> Sequence[InstalledSkillUpdate]:
         settings = self._project_settings(project=project)
@@ -341,7 +314,6 @@ class SkillRepository:
                 installed,
                 directory=directory,
                 project=settings,
-                github_fetcher=github_fetcher,
                 file_system=file_system,
             )
             if available is None:

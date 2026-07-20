@@ -12,7 +12,6 @@ from skilly.repository import (
 from skilly.skills import (
     ResourceKind,
     Skill,
-    SkillOrigin,
     RepositoryLocation,
     SkillResource,
     discover_installed_skills,
@@ -25,7 +24,6 @@ from skilly.skills import (
 __all__ = [
     "ResourceKind",
     "Skill",
-    "SkillOrigin",
     "RepositoryLocation",
     "SkillMatch",
     "SkillRepository",

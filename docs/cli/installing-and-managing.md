@@ -66,8 +66,9 @@ Shows all SkillsMP-installed skills with their update status.
 skilly list
 ```
 
-Shows every installed skill, its origin (repository, SkillsMP, local), and its
-status.
+Shows every installed skill, its origin, and its status. Repository-backed
+skills display their provider (`github`, `bitbucket-cloud`, or
+`bitbucket-data-center`) as the origin.
 
 In an interactive terminal, select a skill and choose **View files** to inspect
 its `SKILL.md` and bundled resources. Press `/` to filter by filename;

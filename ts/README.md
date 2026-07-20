@@ -312,7 +312,7 @@ from skilly.skillsmp import ClientSettings, SkillsMp, SkillsMpSearchQuery
 
 client = SkillsMp(settings=ClientSettings(base_url="https://skillsmp.com/api/v1"))
 result = client.search(SkillsMpSearchQuery(text="python", limit=5))
-print(result.data.skills[0].github_url)
+print(result.data.skills[0].repository_url)
 ```
 
 ## Development

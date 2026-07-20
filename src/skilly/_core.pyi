@@ -18,29 +18,6 @@ class SkillResourceLike(Protocol):
     @property
     def content(self) -> bytes: ...
 
-class GitHubSkillFetcherLike(Protocol):
-    @property
-    def base_url(self) -> str | None: ...
-    @property
-    def api_key(self) -> str | None: ...
-    @property
-    def github_token(self) -> str | None: ...
-    @property
-    def proxy(self) -> str | None: ...
-
-class SkillsMpInstallableSkillLike(Protocol):
-    @property
-    def id(self) -> str: ...
-    @property
-    def github_url(self) -> str: ...
-
-class GitHubSkillLocationData(TypedDict):
-    owner: str
-    repo: str
-    ref: str | None
-    path: str
-    url: str
-
 class RepositoryLocationData(TypedDict):
     provider: RepositoryProvider
     base_url: str
@@ -49,23 +26,6 @@ class RepositoryLocationData(TypedDict):
     ref: str | None
     path: str
     url: str
-
-class GitHubContentItemData(TypedDict):
-    type: str
-    name: str
-    path: str
-    commit_sha: str | None
-
-class GitHubFileBlobData(TypedDict):
-    path: str
-    content: str
-    size: int
-    commit_sha: str | None
-
-class GitHubRepositorySnapshotData(TypedDict):
-    ref: str
-    commit_sha: str
-    files: dict[str, GitHubFileBlobData]
 
 class Skill:
     def __init__(
@@ -83,9 +43,6 @@ class Skill:
         source: str | None = ...,
         package_name: str | None = ...,
         package_version: str | None = ...,
-        github_url: str | None = ...,
-        github_commit_sha: str | None = ...,
-        skillsmp_id: str | None = ...,
         package_ecosystem: str | None = ...,
     ) -> None: ...
     @classmethod
@@ -97,9 +54,6 @@ class Skill:
         package_name: str | None = ...,
         package_version: str | None = ...,
         package_ecosystem: str | None = ...,
-        github_url: str | None = ...,
-        github_commit_sha: str | None = ...,
-        skillsmp_id: str | None = ...,
         file_system: FileSystem | None = ...,
     ) -> Skill: ...
     @classmethod
@@ -110,9 +64,6 @@ class Skill:
         package_name: str | None = ...,
         package_version: str | None = ...,
         package_ecosystem: str | None = ...,
-        github_url: str | None = ...,
-        github_commit_sha: str | None = ...,
-        skillsmp_id: str | None = ...,
         file_system: FileSystem | None = ...,
     ) -> Skill: ...
     @classmethod
@@ -123,24 +74,7 @@ class Skill:
         package_name: str | None = ...,
         package_version: str | None = ...,
         package_ecosystem: str | None = ...,
-        github_url: str | None = ...,
-        github_commit_sha: str | None = ...,
-        skillsmp_id: str | None = ...,
         file_system: FileSystem | None = ...,
-    ) -> Skill: ...
-    @classmethod
-    def from_github(
-        cls,
-        fetcher: GitHubSkillFetcherLike,
-        github_url: str,
-        source: str | None = ...,
-        skillsmp_id: str | None = ...,
-    ) -> Skill: ...
-    @classmethod
-    def from_skillsmp(
-        cls,
-        fetcher: GitHubSkillFetcherLike,
-        installable_skill: SkillsMpInstallableSkillLike,
     ) -> Skill: ...
     @property
     def name(self) -> str: ...
@@ -169,17 +103,11 @@ class Skill:
     @property
     def package_version(self) -> str | None: ...
     @property
-    def github_url(self) -> str | None: ...
-    @property
-    def github_commit_sha(self) -> str | None: ...
-    @property
     def repository_provider(self) -> RepositoryProvider | None: ...
     @property
     def repository_url(self) -> str | None: ...
     @property
     def repository_commit_sha(self) -> str | None: ...
-    @property
-    def skillsmp_id(self) -> str | None: ...
     @property
     def package_ecosystem(self) -> str | None: ...
     @property
@@ -197,8 +125,6 @@ class Skill:
     def get_resource(self, relative_path: StrPath) -> SkillResourceLike | None: ...
     def is_installed(self) -> bool: ...
     def is_dependency(self) -> bool: ...
-    def is_skillsmp(self) -> bool: ...
-    def is_github(self) -> bool: ...
     def can_update(self) -> bool: ...
     def matches(self, other: Skill) -> bool: ...
     def package_reference(self) -> str | None: ...
@@ -290,9 +216,6 @@ def skill_from_text(
     package_name: str | None = ...,
     package_version: str | None = ...,
     package_ecosystem: str | None = ...,
-    github_url: str | None = ...,
-    github_commit_sha: str | None = ...,
-    skillsmp_id: str | None = ...,
     file_system: FileSystem | None = ...,
 ) -> Skill: ...
 def skill_from_file(
@@ -301,9 +224,6 @@ def skill_from_file(
     package_name: str | None = ...,
     package_version: str | None = ...,
     package_ecosystem: str | None = ...,
-    github_url: str | None = ...,
-    github_commit_sha: str | None = ...,
-    skillsmp_id: str | None = ...,
     file_system: FileSystem | None = ...,
 ) -> Skill: ...
 def skill_from_dir(
@@ -312,9 +232,6 @@ def skill_from_dir(
     package_name: str | None = ...,
     package_version: str | None = ...,
     package_ecosystem: str | None = ...,
-    github_url: str | None = ...,
-    github_commit_sha: str | None = ...,
-    skillsmp_id: str | None = ...,
     file_system: FileSystem | None = ...,
 ) -> Skill: ...
 def skill_render(skill: Skill, metadata: dict[str, str] | None = ...) -> str: ...
@@ -346,21 +263,10 @@ def available_dependency_skill(
     sources: list[dict[str, object]] | None = ...,
     file_system: FileSystem | None = ...,
 ) -> Skill | None: ...
-def parse_github_skill_url(github_url: str) -> GitHubSkillLocationData: ...
 def parse_repository_location(
     repository_url: str,
     provider: RepositoryProvider | None = ...,
 ) -> RepositoryLocationData: ...
-def discover_github_skills(
-    github_url: str,
-    source: str | None = ...,
-    skillsmp_id: str | None = ...,
-    base_url: str | None = ...,
-    api_key: str | None = ...,
-    github_token: str | None = ...,
-    proxy: str | None = ...,
-) -> list[Skill]: ...
-def github_versions_match(installed: Skill, available: Skill) -> bool: ...
 def discover_repository_skills(
     repository_url: str,
     provider: RepositoryProvider | None = ...,
@@ -387,44 +293,12 @@ def skillsmp_search(
     occupation: str | None = ...,
     base_url: str | None = ...,
     api_key: str | None = ...,
-    github_token: str | None = ...,
     proxy: str | None = ...,
 ) -> SkillsMpSearchApiResponseData: ...
 def skillsmp_ai_search(
     q: str,
     base_url: str | None = ...,
     api_key: str | None = ...,
-    github_token: str | None = ...,
     proxy: str | None = ...,
 ) -> SkillsMpAiSearchApiResponseData: ...
-def skillsmp_fetch_github_directory(
-    github_url: str,
-    current_path: str,
-    base_url: str | None = ...,
-    api_key: str | None = ...,
-    github_token: str | None = ...,
-    proxy: str | None = ...,
-) -> list[GitHubContentItemData]: ...
-def skillsmp_fetch_github_file(
-    github_url: str,
-    path: str,
-    base_url: str | None = ...,
-    api_key: str | None = ...,
-    github_token: str | None = ...,
-    proxy: str | None = ...,
-) -> GitHubFileBlobData: ...
-def skillsmp_fetch_github_snapshot(
-    github_url: str,
-    base_url: str | None = ...,
-    api_key: str | None = ...,
-    github_token: str | None = ...,
-    proxy: str | None = ...,
-) -> GitHubRepositorySnapshotData: ...
-def skillsmp_resolve_github_ref_and_commit_sha(
-    github_url: str,
-    base_url: str | None = ...,
-    api_key: str | None = ...,
-    github_token: str | None = ...,
-    proxy: str | None = ...,
-) -> tuple[str, str]: ...
 def run_cli(args: list[str]) -> int: ...

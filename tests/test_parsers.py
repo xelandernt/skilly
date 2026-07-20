@@ -339,7 +339,9 @@ Use this skill carefully.
     assert skills[0].skill_markdown_path == skill_path.resolve()
 
 
-def test_installed_skill_state_comes_from_metadata(tmp_path: Path) -> None:
+def test_legacy_github_metadata_does_not_restore_removed_provenance(
+    tmp_path: Path,
+) -> None:
     skill_dir = tmp_path / "installed-skill"
     write_skill(
         skill_dir / "SKILL.md",
@@ -359,14 +361,9 @@ Body
     skill = Skill.from_dir(skill_dir)
 
     assert skill.is_installed() is True
-    assert skill.is_skillsmp() is True
-    assert skill.can_update() is True
-    assert (
-        skill.github_url
-        == "https://github.com/example/project/tree/main/.agents/skills/installed-skill"
-    )
-    assert skill.github_commit_sha == "0123456789abcdef0123456789abcdef01234567"
-    assert skill.skillsmp_id == "skill-1"
+    assert skill.can_update() is False
+    assert not hasattr(skill, "github_url")
+    assert not hasattr(skill, "skillsmp_id")
 
 
 def test_install_rejects_paths_outside_skill_directory(tmp_path: Path) -> None:

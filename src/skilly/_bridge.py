@@ -8,10 +8,6 @@ from .filesystem import FileSystem, StrPath
 
 if TYPE_CHECKING:
     from ._core import (
-        GitHubContentItemData,
-        GitHubFileBlobData,
-        GitHubRepositorySnapshotData,
-        GitHubSkillLocationData,
         RepositoryLocationData,
         Skill,
         SkillsMpAiSearchApiResponseData,
@@ -36,50 +32,20 @@ class ClientConfigSource(Protocol):
     def api_key(self) -> str | None: ...
 
     @property
-    def github_token(self) -> str | None: ...
-
-    @property
     def proxy(self) -> str | None: ...
-
-
-class SkillOriginSource(Protocol):
-    @property
-    def source(self) -> str | None: ...
-
-    @property
-    def package_name(self) -> str | None: ...
-
-    @property
-    def package_version(self) -> str | None: ...
-
-    @property
-    def package_ecosystem(self) -> str | None: ...
-
-    @property
-    def github_url(self) -> str | None: ...
-
-    @property
-    def github_commit_sha(self) -> str | None: ...
-
-    @property
-    def skillsmp_id(self) -> str | None: ...
 
 
 class ClientConfigKwargs(TypedDict):
     base_url: str | None
     api_key: str | None
-    github_token: str | None
     proxy: str | None
 
 
-class SkillOriginKwargs(TypedDict):
+class SkillMetadataKwargs(TypedDict):
     source: str | None
     package_name: str | None
     package_version: str | None
     package_ecosystem: str | None
-    github_url: str | None
-    github_commit_sha: str | None
-    skillsmp_id: str | None
 
 
 def client_config_kwargs(fetcher: ClientConfigSource | None) -> ClientConfigKwargs:
@@ -87,99 +53,47 @@ def client_config_kwargs(fetcher: ClientConfigSource | None) -> ClientConfigKwar
         return {
             "base_url": None,
             "api_key": None,
-            "github_token": None,
             "proxy": None,
         }
     return {
         "base_url": fetcher.base_url,
         "api_key": fetcher.api_key,
-        "github_token": fetcher.github_token,
         "proxy": fetcher.proxy,
     }
 
 
-def skill_origin_kwargs(origin: SkillOriginSource | None) -> SkillOriginKwargs:
-    if origin is None:
-        return {
-            "source": None,
-            "package_name": None,
-            "package_version": None,
-            "package_ecosystem": None,
-            "github_url": None,
-            "github_commit_sha": None,
-            "skillsmp_id": None,
-        }
-    return {
-        "source": origin.source,
-        "package_name": origin.package_name,
-        "package_version": origin.package_version,
-        "package_ecosystem": origin.package_ecosystem,
-        "github_url": origin.github_url,
-        "github_commit_sha": origin.github_commit_sha,
-        "skillsmp_id": origin.skillsmp_id,
-    }
-
-
 def skill_metadata_kwargs(
-    origin: SkillOriginSource | None = None,
     *,
     source: str | None = None,
     package_name: str | None = None,
     package_version: str | None = None,
     package_ecosystem: str | None = None,
-    github_url: str | None = None,
-    github_commit_sha: str | None = None,
-    skillsmp_id: str | None = None,
-) -> SkillOriginKwargs:
-    origin_kwargs = skill_origin_kwargs(origin)
+) -> SkillMetadataKwargs:
     return {
-        "source": source if source is not None else origin_kwargs["source"],
-        "package_name": package_name
-        if package_name is not None
-        else origin_kwargs["package_name"],
-        "package_version": package_version
-        if package_version is not None
-        else origin_kwargs["package_version"],
-        "package_ecosystem": package_ecosystem
-        if package_ecosystem is not None
-        else origin_kwargs["package_ecosystem"],
-        "github_url": github_url
-        if github_url is not None
-        else origin_kwargs["github_url"],
-        "github_commit_sha": github_commit_sha
-        if github_commit_sha is not None
-        else origin_kwargs["github_commit_sha"],
-        "skillsmp_id": skillsmp_id
-        if skillsmp_id is not None
-        else origin_kwargs["skillsmp_id"],
+        "source": source,
+        "package_name": package_name,
+        "package_version": package_version,
+        "package_ecosystem": package_ecosystem,
     }
 
 
 def skill_from_text(
     text: str,
     path: StrPath | None = None,
-    origin: SkillOriginSource | None = None,
     source: str | None = None,
     package_name: str | None = None,
     package_version: str | None = None,
     package_ecosystem: str | None = None,
-    github_url: str | None = None,
-    github_commit_sha: str | None = None,
-    skillsmp_id: str | None = None,
     file_system: FileSystem | None = None,
 ) -> Skill:
     return _core.skill_from_text(
         text,
         path=path,
         **skill_metadata_kwargs(
-            origin,
             source=source,
             package_name=package_name,
             package_version=package_version,
             package_ecosystem=package_ecosystem,
-            github_url=github_url,
-            github_commit_sha=github_commit_sha,
-            skillsmp_id=skillsmp_id,
         ),
         file_system=file_system,
     )
@@ -187,27 +101,19 @@ def skill_from_text(
 
 def skill_from_file(
     path: StrPath,
-    origin: SkillOriginSource | None = None,
     source: str | None = None,
     package_name: str | None = None,
     package_version: str | None = None,
     package_ecosystem: str | None = None,
-    github_url: str | None = None,
-    github_commit_sha: str | None = None,
-    skillsmp_id: str | None = None,
     file_system: FileSystem | None = None,
 ) -> Skill:
     return _core.skill_from_file(
         path,
         **skill_metadata_kwargs(
-            origin,
             source=source,
             package_name=package_name,
             package_version=package_version,
             package_ecosystem=package_ecosystem,
-            github_url=github_url,
-            github_commit_sha=github_commit_sha,
-            skillsmp_id=skillsmp_id,
         ),
         file_system=file_system,
     )
@@ -215,27 +121,19 @@ def skill_from_file(
 
 def skill_from_dir(
     path: StrPath,
-    origin: SkillOriginSource | None = None,
     source: str | None = None,
     package_name: str | None = None,
     package_version: str | None = None,
     package_ecosystem: str | None = None,
-    github_url: str | None = None,
-    github_commit_sha: str | None = None,
-    skillsmp_id: str | None = None,
     file_system: FileSystem | None = None,
 ) -> Skill:
     return _core.skill_from_dir(
         path,
         **skill_metadata_kwargs(
-            origin,
             source=source,
             package_name=package_name,
             package_version=package_version,
             package_ecosystem=package_ecosystem,
-            github_url=github_url,
-            github_commit_sha=github_commit_sha,
-            skillsmp_id=skillsmp_id,
         ),
         file_system=file_system,
     )
@@ -309,41 +207,11 @@ def available_dependency_skill(
     )
 
 
-def parse_github_skill_url(github_url: str) -> GitHubSkillLocationData:
-    return _core.parse_github_skill_url(github_url)
-
-
 def parse_repository_location(
     repository_url: str,
     provider: RepositoryProvider | None = None,
 ) -> RepositoryLocationData:
     return _core.parse_repository_location(repository_url, provider=provider)
-
-
-def discover_github_skills(
-    github_url: str,
-    origin: SkillOriginSource | None = None,
-    source: str | None = None,
-    skillsmp_id: str | None = None,
-    base_url: str | None = None,
-    api_key: str | None = None,
-    github_token: str | None = None,
-    proxy: str | None = None,
-) -> list[Skill]:
-    metadata = skill_metadata_kwargs(origin, source=source, skillsmp_id=skillsmp_id)
-    return _core.discover_github_skills(
-        github_url,
-        source=metadata["source"],
-        skillsmp_id=metadata["skillsmp_id"],
-        base_url=base_url,
-        api_key=api_key,
-        github_token=github_token,
-        proxy=proxy,
-    )
-
-
-def github_versions_match(installed: Skill, available: Skill) -> bool:
-    return _core.github_versions_match(installed, available)
 
 
 def discover_repository_skills(
@@ -393,7 +261,6 @@ def skillsmp_search(
     occupation: str | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
-    github_token: str | None = None,
     proxy: str | None = None,
 ) -> SkillsMpSearchApiResponseData:
     return _core.skillsmp_search(
@@ -405,7 +272,6 @@ def skillsmp_search(
         occupation=occupation,
         base_url=base_url,
         api_key=api_key,
-        github_token=github_token,
         proxy=proxy,
     )
 
@@ -414,82 +280,12 @@ def skillsmp_ai_search(
     q: str,
     base_url: str | None = None,
     api_key: str | None = None,
-    github_token: str | None = None,
     proxy: str | None = None,
 ) -> SkillsMpAiSearchApiResponseData:
     return _core.skillsmp_ai_search(
         q,
         base_url=base_url,
         api_key=api_key,
-        github_token=github_token,
-        proxy=proxy,
-    )
-
-
-def skillsmp_fetch_github_directory(
-    github_url: str,
-    current_path: str,
-    base_url: str | None = None,
-    api_key: str | None = None,
-    github_token: str | None = None,
-    proxy: str | None = None,
-) -> list[GitHubContentItemData]:
-    return _core.skillsmp_fetch_github_directory(
-        github_url,
-        current_path,
-        base_url=base_url,
-        api_key=api_key,
-        github_token=github_token,
-        proxy=proxy,
-    )
-
-
-def skillsmp_fetch_github_file(
-    github_url: str,
-    path: str,
-    base_url: str | None = None,
-    api_key: str | None = None,
-    github_token: str | None = None,
-    proxy: str | None = None,
-) -> GitHubFileBlobData:
-    return _core.skillsmp_fetch_github_file(
-        github_url,
-        path,
-        base_url=base_url,
-        api_key=api_key,
-        github_token=github_token,
-        proxy=proxy,
-    )
-
-
-def skillsmp_fetch_github_snapshot(
-    github_url: str,
-    base_url: str | None = None,
-    api_key: str | None = None,
-    github_token: str | None = None,
-    proxy: str | None = None,
-) -> GitHubRepositorySnapshotData:
-    return _core.skillsmp_fetch_github_snapshot(
-        github_url,
-        base_url=base_url,
-        api_key=api_key,
-        github_token=github_token,
-        proxy=proxy,
-    )
-
-
-def skillsmp_resolve_github_ref_and_commit_sha(
-    github_url: str,
-    base_url: str | None = None,
-    api_key: str | None = None,
-    github_token: str | None = None,
-    proxy: str | None = None,
-) -> tuple[str, str]:
-    return _core.skillsmp_resolve_github_ref_and_commit_sha(
-        github_url,
-        base_url=base_url,
-        api_key=api_key,
-        github_token=github_token,
         proxy=proxy,
     )
 

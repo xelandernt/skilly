@@ -198,7 +198,7 @@ pub struct SkillsMpSkill {
     pub author: String,
     pub description: String,
     #[serde(rename = "githubUrl")]
-    pub github_url: String,
+    pub repository_url: String,
     #[serde(rename = "skillUrl")]
     pub skill_url: String,
     #[serde(rename = "stars")]

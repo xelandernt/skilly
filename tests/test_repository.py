@@ -338,49 +338,75 @@ Body
     ]
 
 
-def test_repository_available_update_detects_github_skill_update(
+def test_repository_available_update_detects_repository_skill_update(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     installed = Skill.from_text(
         """---
 name: sample-skill
-description: Installed GitHub skill.
+description: Installed repository skill.
+metadata:
+  skilly-source: repository
+  skilly-repository-provider: github
+  skilly-repository-url: https://github.com/example/project/tree/main/skills/sample-skill
+  skilly-repository-commit-sha: 0123456789abcdef0123456789abcdef01234567
 ---
 Body
 """,
         path=tmp_path / "installed",
-        source="github",
-        github_url="https://github.com/example/project/tree/main/skills/sample-skill",
-        github_commit_sha="0123456789abcdef0123456789abcdef01234567",
     )
     refreshed = Skill.from_text(
         """---
 name: sample-skill
-description: Refreshed GitHub skill.
+description: Refreshed repository skill.
+metadata:
+  skilly-source: repository
+  skilly-repository-provider: github
+  skilly-repository-url: https://github.com/example/project/tree/main/skills/sample-skill
+  skilly-repository-commit-sha: 89abcdef0123456789abcdef0123456789abcdef
 ---
 Updated body
 """,
         path=tmp_path / "refreshed",
-        source="github",
-        github_url="https://github.com/example/project/tree/main/skills/sample-skill",
-        github_commit_sha="89abcdef0123456789abcdef0123456789abcdef",
     )
-
-    class FakeFetcher:
-        base_url = None
-        api_key = None
-        github_token = None
-        proxy = None
 
     monkeypatch.setattr(
-        "skilly.repository.discover_github_skills",
-        lambda fetcher, github_url, *, origin=None: [refreshed],
+        "skilly.repository.discover_repository_skills",
+        lambda repository_url, *, provider=None, token=None: [refreshed],
     )
 
-    update = SkillRepository().available_update(installed, github_fetcher=FakeFetcher())
+    update = SkillRepository().available_update(installed)
 
     assert update == refreshed
+
+
+def test_repository_install_preserves_repository_provenance(tmp_path: Path) -> None:
+    available = Skill.from_text(
+        """---
+name: sample-skill
+description: Repository skill with persisted provenance.
+metadata:
+  skilly-source: repository
+  skilly-repository-provider: github
+  skilly-repository-url: https://github.com/example/project/tree/main/skills/sample-skill
+  skilly-repository-commit-sha: 0123456789abcdef0123456789abcdef01234567
+---
+Body
+"""
+    )
+    repository = SkillRepository(directory=tmp_path)
+
+    installed = repository.install(available)
+    listed = repository.list()
+
+    assert installed.source == "repository"
+    assert installed.repository_provider == "github"
+    assert listed == [installed]
+    assert listed[0].is_installed() is True
+    assert listed[0].source == "repository"
+    assert listed[0].repository_url == available.repository_url
+    assert listed[0].repository_commit_sha == available.repository_commit_sha
 
 
 def test_repository_uses_bound_directory(tmp_path: Path) -> None:

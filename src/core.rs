@@ -26,16 +26,11 @@ pub const RESOURCE_KIND_OTHER: &str = "other";
 
 pub const SKILLY_SOURCE_METADATA_KEY: &str = "skilly-source";
 pub const SKILLY_SOURCE_DEPENDENCY: &str = "dependency";
-pub const SKILLY_SOURCE_GITHUB: &str = "github";
 pub const SKILLY_SOURCE_REPOSITORY: &str = "repository";
-pub const SKILLY_SOURCE_SKILLSMP: &str = "skillsmp";
 pub const SKILLY_UNKNOWN_SOURCE: &str = "unknown";
-pub const SKILLY_GIT_URL_METADATA_KEY: &str = "skilly-git-url";
-pub const SKILLY_COMMIT_SHA_METADATA_KEY: &str = "skilly-commit-sha";
 pub const SKILLY_REPOSITORY_PROVIDER_METADATA_KEY: &str = "skilly-repository-provider";
 pub const SKILLY_REPOSITORY_URL_METADATA_KEY: &str = "skilly-repository-url";
 pub const SKILLY_REPOSITORY_COMMIT_SHA_METADATA_KEY: &str = "skilly-repository-commit-sha";
-pub const SKILLY_SKILLSMP_ID_METADATA_KEY: &str = "skilly-skillsmp-id";
 pub const SKILLY_DEPENDENCY_PACKAGE_NAME_METADATA_KEY: &str = "skilly-package-name";
 pub const SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY: &str = "skilly-package-version";
 pub const SKILLY_PACKAGE_ECOSYSTEM_METADATA_KEY: &str = "skilly-package-ecosystem";
@@ -286,12 +281,9 @@ pub struct SkillData {
     pub source: String,
     pub package_name: Option<String>,
     pub package_version: Option<String>,
-    pub github_url: Option<String>,
-    pub github_commit_sha: Option<String>,
     pub repository_provider: Option<RepositoryProvider>,
     pub repository_url: Option<String>,
     pub repository_commit_sha: Option<String>,
-    pub skillsmp_id: Option<String>,
     pub package_ecosystem: Option<PackageEcosystem>,
 }
 
@@ -310,12 +302,9 @@ pub struct SkillSourceMetadata {
     pub source: Option<String>,
     pub package_name: Option<String>,
     pub package_version: Option<String>,
-    pub github_url: Option<String>,
-    pub github_commit_sha: Option<String>,
     pub repository_provider: Option<RepositoryProvider>,
     pub repository_url: Option<String>,
     pub repository_commit_sha: Option<String>,
-    pub skillsmp_id: Option<String>,
     pub package_ecosystem: Option<PackageEcosystem>,
 }
 
@@ -495,21 +484,15 @@ impl SkillSourceMetadata {
         source: Option<&str>,
         package_name: Option<&str>,
         package_version: Option<&str>,
-        github_url: Option<&str>,
-        github_commit_sha: Option<&str>,
-        skillsmp_id: Option<&str>,
         package_ecosystem: Option<PackageEcosystem>,
     ) -> Self {
         Self {
             source: source.map(str::to_string),
             package_name: package_name.map(str::to_string),
             package_version: package_version.map(str::to_string),
-            github_url: github_url.map(str::to_string),
-            github_commit_sha: github_commit_sha.map(str::to_string),
             repository_provider: None,
             repository_url: None,
             repository_commit_sha: None,
-            skillsmp_id: skillsmp_id.map(str::to_string),
             package_ecosystem,
         }
     }
@@ -524,12 +507,6 @@ impl SkillSourceMetadata {
             self.package_version = metadata
                 .get(SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY)
                 .cloned();
-        }
-        if self.github_url.is_none() {
-            self.github_url = metadata.get(SKILLY_GIT_URL_METADATA_KEY).cloned();
-        }
-        if self.github_commit_sha.is_none() {
-            self.github_commit_sha = metadata.get(SKILLY_COMMIT_SHA_METADATA_KEY).cloned();
         }
         if self.repository_provider.is_none() {
             self.repository_provider = metadata
@@ -549,9 +526,6 @@ impl SkillSourceMetadata {
                 .get(SKILLY_REPOSITORY_COMMIT_SHA_METADATA_KEY)
                 .cloned();
         }
-        if self.skillsmp_id.is_none() {
-            self.skillsmp_id = metadata.get(SKILLY_SKILLSMP_ID_METADATA_KEY).cloned();
-        }
         if self.package_ecosystem.is_none() {
             self.package_ecosystem = infer_package_ecosystem(metadata);
         }
@@ -567,11 +541,7 @@ impl SkillSourceMetadata {
         if let Some(source) = self.source.as_deref().filter(|source| {
             matches!(
                 *source,
-                SKILLY_SOURCE_DEPENDENCY
-                    | SKILLY_SOURCE_GITHUB
-                    | SKILLY_SOURCE_REPOSITORY
-                    | SKILLY_SOURCE_SKILLSMP
-                    | SKILLY_UNKNOWN_SOURCE
+                SKILLY_SOURCE_DEPENDENCY | SKILLY_SOURCE_REPOSITORY | SKILLY_UNKNOWN_SOURCE
             )
         }) {
             metadata.insert(SKILLY_SOURCE_METADATA_KEY.to_string(), source.to_string());
@@ -594,15 +564,6 @@ impl SkillSourceMetadata {
                 package_ecosystem.as_str().to_string(),
             );
         }
-        if let Some(github_url) = self.github_url.as_ref() {
-            metadata.insert(SKILLY_GIT_URL_METADATA_KEY.to_string(), github_url.clone());
-        }
-        if let Some(github_commit_sha) = self.github_commit_sha.as_ref() {
-            metadata.insert(
-                SKILLY_COMMIT_SHA_METADATA_KEY.to_string(),
-                github_commit_sha.clone(),
-            );
-        }
         if let Some(provider) = self.repository_provider {
             metadata.insert(
                 SKILLY_REPOSITORY_PROVIDER_METADATA_KEY.to_string(),
@@ -619,12 +580,6 @@ impl SkillSourceMetadata {
             metadata.insert(
                 SKILLY_REPOSITORY_COMMIT_SHA_METADATA_KEY.to_string(),
                 repository_commit_sha.clone(),
-            );
-        }
-        if let Some(skillsmp_id) = self.skillsmp_id.as_ref() {
-            metadata.insert(
-                SKILLY_SKILLSMP_ID_METADATA_KEY.to_string(),
-                skillsmp_id.clone(),
             );
         }
     }
@@ -740,6 +695,7 @@ pub struct DistributionInfo {
 }
 
 /// Fetch a full snapshot (files + metadata) from a GitHub repository location.
+#[allow(dead_code)]
 pub trait GitHubSnapshotFetcher {
     fn fetch_github_snapshot(
         &self,
@@ -1017,28 +973,19 @@ fn infer_source(metadata: &BTreeMap<String, String>) -> String {
     if let Some(source) = metadata.get(SKILLY_SOURCE_METADATA_KEY)
         && matches!(
             source.as_str(),
-            SKILLY_SOURCE_DEPENDENCY
-                | SKILLY_SOURCE_GITHUB
-                | SKILLY_SOURCE_SKILLSMP
-                | SKILLY_UNKNOWN_SOURCE
+            SKILLY_SOURCE_DEPENDENCY | SKILLY_SOURCE_REPOSITORY | SKILLY_UNKNOWN_SOURCE
         )
     {
         return source.clone();
-    }
-    if metadata.contains_key(SKILLY_SKILLSMP_ID_METADATA_KEY) {
-        return SKILLY_SOURCE_SKILLSMP.to_string();
-    }
-    if metadata.contains_key(SKILLY_GIT_URL_METADATA_KEY) {
-        return SKILLY_SOURCE_GITHUB.to_string();
     }
     SKILLY_UNKNOWN_SOURCE.to_string()
 }
 
 fn has_managed_metadata(metadata: &BTreeMap<String, String>) -> bool {
     metadata.contains_key(SKILLY_SOURCE_METADATA_KEY)
-        || metadata.contains_key(SKILLY_GIT_URL_METADATA_KEY)
-        || metadata.contains_key(SKILLY_COMMIT_SHA_METADATA_KEY)
-        || metadata.contains_key(SKILLY_SKILLSMP_ID_METADATA_KEY)
+        || metadata.contains_key(SKILLY_REPOSITORY_PROVIDER_METADATA_KEY)
+        || metadata.contains_key(SKILLY_REPOSITORY_URL_METADATA_KEY)
+        || metadata.contains_key(SKILLY_REPOSITORY_COMMIT_SHA_METADATA_KEY)
         || metadata.contains_key(SKILLY_DEPENDENCY_PACKAGE_NAME_METADATA_KEY)
         || metadata.contains_key(SKILLY_DEPENDENCY_PACKAGE_VERSION_METADATA_KEY)
         || metadata.contains_key(SKILLY_PACKAGE_ECOSYSTEM_METADATA_KEY)
@@ -1357,12 +1304,9 @@ impl SkillData {
             source,
             package_name: source_metadata.package_name.clone(),
             package_version: source_metadata.package_version.clone(),
-            github_url: source_metadata.github_url.clone(),
-            github_commit_sha: source_metadata.github_commit_sha.clone(),
             repository_provider: source_metadata.repository_provider,
             repository_url: source_metadata.repository_url.clone(),
             repository_commit_sha: source_metadata.repository_commit_sha.clone(),
-            skillsmp_id: source_metadata.skillsmp_id.clone(),
             package_ecosystem,
         })
     }
@@ -1560,12 +1504,9 @@ impl SkillData {
             source: Some(self.source.clone()),
             package_name: self.package_name.clone(),
             package_version: self.package_version.clone(),
-            github_url: self.github_url.clone(),
-            github_commit_sha: self.github_commit_sha.clone(),
             repository_provider: self.repository_provider,
             repository_url: self.repository_url.clone(),
             repository_commit_sha: self.repository_commit_sha.clone(),
-            skillsmp_id: self.skillsmp_id.clone(),
             package_ecosystem: self.package_ecosystem.clone(),
         }
     }
@@ -1608,7 +1549,7 @@ impl SkillData {
     }
 
     /// Check whether two skills refer to the same logical skill, matching by
-    /// package name, GitHub URL, or name.
+    /// package name, repository provenance, or name.
     #[must_use]
     pub fn matches(&self, other: &Self) -> bool {
         if let (Some(package_name), Some(other_package_name)) =
@@ -1620,9 +1561,6 @@ impl SkillData {
                     other_package_name,
                     &other.name,
                 );
-        }
-        if let (Some(github_url), Some(other_github_url)) = (&self.github_url, &other.github_url) {
-            return github_url == other_github_url;
         }
         if let (Some(provider), Some(url), Some(other_provider), Some(other_url)) = (
             self.repository_provider,
@@ -1649,20 +1587,13 @@ impl SkillData {
         self.source == SKILLY_SOURCE_DEPENDENCY
     }
 
-    /// Returns `true` when the skill is sourced from SkillsMP.
-    #[must_use]
-    #[inline]
-    pub fn is_skillsmp(&self) -> bool {
-        self.source == SKILLY_SOURCE_SKILLSMP || self.skillsmp_id.is_some()
-    }
-
-    /// Returns `true` when the skill has a known update source (dependency or GitHub).
+    /// Returns `true` when the skill has a known update source.
     #[cfg(feature = "python-bindings")]
     #[allow(dead_code)]
     #[must_use]
     #[inline]
     pub fn can_update(&self) -> bool {
-        self.is_dependency() || self.repository_url.is_some() || self.github_url.is_some()
+        self.is_dependency() || self.repository_url.is_some()
     }
 }
 
@@ -1919,9 +1850,6 @@ pub fn discover_venv_skills_in(
                     Some(SKILLY_SOURCE_DEPENDENCY),
                     Some(&distribution.name),
                     distribution.version.as_deref(),
-                    None,
-                    None,
-                    None,
                     Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_PYTHON)),
                 ),
             ) {
@@ -2284,9 +2212,6 @@ fn load_node_package_skills_in(
         Some(SKILLY_SOURCE_DEPENDENCY),
         Some(&package_info.name),
         Some(&package_info.version),
-        None,
-        None,
-        None,
         Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_NODE)),
     );
 
@@ -2452,9 +2377,6 @@ pub fn discover_maven_skills_in(
             Some(SKILLY_SOURCE_DEPENDENCY),
             Some(&format_maven_package_name(coord)),
             Some(&coord.version),
-            None,
-            None,
-            None,
             Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_MAVEN)),
         );
 
@@ -2869,6 +2791,7 @@ fn decoded_path_segments(parsed: &Url) -> Vec<String> {
 
 /// Build a GitHub tree URL from a location, path, and optional ref.
 #[must_use]
+#[allow(dead_code)]
 pub fn build_github_skill_url(
     location: &GitHubSkillLocationData,
     path: &str,
@@ -2886,6 +2809,7 @@ pub fn build_github_skill_url(
 
 /// Find all skill directories (containing SKILL.md) in a set of GitHub files.
 #[must_use]
+#[allow(dead_code)]
 pub fn find_github_skill_dirs(
     files: &BTreeMap<String, GitHubFileBlobData>,
     root: &str,
@@ -2909,117 +2833,6 @@ pub fn find_github_skill_dirs(
         .collect::<Vec<_>>();
     dirs.sort();
     dirs
-}
-
-pub fn build_skill_from_github_files(
-    files: &BTreeMap<String, GitHubFileBlobData>,
-    skill_dir: &str,
-    source: &str,
-    github_url: Option<String>,
-    skillsmp_id: Option<String>,
-) -> Result<SkillData> {
-    let skill_md_path = if skill_dir == "." {
-        "SKILL.md".to_string()
-    } else {
-        format!("{skill_dir}/SKILL.md")
-    };
-    let skill_blob = files
-        .get(&skill_md_path)
-        .ok_or_else(|| anyhow!("SKILL.md not found at {skill_dir}"))?;
-    let github_commit_sha = skill_blob.commit_sha.clone().or_else(|| {
-        files.iter().find_map(|(path, blob)| {
-            (path == &skill_md_path
-                || path == skill_dir
-                || path.starts_with(&format!("{skill_dir}/")))
-            .then(|| blob.commit_sha.clone())
-            .flatten()
-        })
-    });
-    let mut skill = SkillData::from_text(
-        &skill_blob.content,
-        None,
-        &SkillSourceMetadata::new(
-            Some(source),
-            None,
-            None,
-            github_url.as_deref(),
-            github_commit_sha.as_deref(),
-            skillsmp_id.as_deref(),
-            None,
-        ),
-    )?;
-    let prefix = if skill_dir == "." {
-        String::new()
-    } else {
-        format!("{skill_dir}/")
-    };
-    skill.resources = files
-        .iter()
-        .filter_map(|(path, blob)| {
-            if path == &skill_md_path {
-                return None;
-            }
-            if !prefix.is_empty() && !path.starts_with(&prefix) {
-                return None;
-            }
-            let relative_path = if prefix.is_empty() {
-                path.clone()
-            } else {
-                path[prefix.len()..].to_string()
-            };
-            Some(SkillResourceData {
-                relative_path: relative_path.clone(),
-                kind: classify_resource_kind(&relative_path),
-                content: blob.content.clone().into_bytes(),
-            })
-        })
-        .collect();
-    skill
-        .resources
-        .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    Ok(skill)
-}
-
-pub fn discover_github_skills<F: GitHubSnapshotFetcher>(
-    fetcher: &F,
-    github_url: &str,
-    source: &str,
-    skillsmp_id: Option<String>,
-) -> Result<Vec<SkillData>> {
-    let location = parse_github_skill_url(github_url)?;
-    let snapshot = fetcher.fetch_github_snapshot(&location)?;
-    let skill_dirs = find_github_skill_dirs(&snapshot.files, &location.path);
-    let single_skill = skill_dirs.len() == 1;
-    if skill_dirs.is_empty() {
-        bail!("no SKILL.md found at {github_url}");
-    }
-    if skillsmp_id.is_some() && !single_skill {
-        bail!("SkillsMP metadata can only be attached to a single skill");
-    }
-
-    skill_dirs
-        .into_iter()
-        .map(|skill_dir| {
-            let at_requested_location = skill_dirs_len_eq_location(&location.path, &skill_dir);
-            let skill_github_url = if single_skill && at_requested_location {
-                github_url.to_string()
-            } else {
-                build_github_skill_url(&location, &skill_dir, Some(&snapshot.ref_name))
-                    .unwrap_or_else(|| github_url.to_string())
-            };
-            build_skill_from_github_files(
-                &snapshot.files,
-                &skill_dir,
-                source,
-                Some(skill_github_url),
-                if single_skill {
-                    skillsmp_id.clone()
-                } else {
-                    None
-                },
-            )
-        })
-        .collect()
 }
 
 /// Discover skills from any supported Git repository provider.
@@ -3096,12 +2909,9 @@ fn build_skill_from_repository_files(
             source: Some(SKILLY_SOURCE_REPOSITORY.to_string()),
             package_name: None,
             package_version: None,
-            github_url: None,
-            github_commit_sha: None,
             repository_provider: Some(*provider),
             repository_url: Some(repository_url),
             repository_commit_sha: Some(repository_commit_sha.to_string()),
-            skillsmp_id: None,
             package_ecosystem: None,
         },
     )?;
@@ -3186,6 +2996,7 @@ fn build_repository_skill_url(
     }
 }
 
+#[allow(dead_code)]
 fn skill_dirs_len_eq_location(location_path: &str, skill_dir: &str) -> bool {
     (location_path == "." && skill_dir == ".") || location_path == skill_dir
 }
@@ -3669,14 +3480,6 @@ pub fn maven_jar_path(repository: &Path, coordinate: &MavenCoordinate) -> PathBu
         ))
 }
 
-/// Check whether installed and available GitHub skills share the same commit SHA.
-#[must_use]
-#[inline]
-pub fn github_versions_match(installed: &SkillData, available: &SkillData) -> bool {
-    installed.github_commit_sha.is_some()
-        && installed.github_commit_sha == available.github_commit_sha
-}
-
 /// Check whether installed and available repository skills share a commit.
 #[must_use]
 #[inline]
@@ -3970,12 +3773,9 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             source: "dependency".to_string(),
             package_name: Some(pkg.to_string()),
             package_version: Some(ver.to_string()),
-            github_url: None,
-            github_commit_sha: None,
             repository_provider: None,
             repository_url: None,
             repository_commit_sha: None,
-            skillsmp_id: None,
             package_ecosystem: eco,
         }
     }
@@ -4028,9 +3828,6 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             None, // source comes from metadata
             Some("ruff"),
             Some("1.0.0"),
-            None,
-            None,
-            None,
             None, // no explicit ecosystem
         );
         source_md.apply_missing_from_metadata(&metadata);
@@ -4107,9 +3904,6 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             Some("dependency"),
             Some("my-pkg"),
             Some("1.0.0"),
-            None,
-            None,
-            None,
             Some(PackageEcosystem::new(PACKAGE_ECOSYSTEM_NODE)),
         );
 
@@ -4145,12 +3939,9 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             source: super::SKILLY_UNKNOWN_SOURCE.to_string(),
             package_name: None,
             package_version: None,
-            github_url: None,
-            github_commit_sha: None,
             repository_provider: None,
             repository_url: None,
             repository_commit_sha: None,
-            skillsmp_id: None,
             package_ecosystem: None,
         };
 
@@ -4167,8 +3958,7 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
         let mut metadata = BTreeMap::new();
         metadata.insert("skilly-package-ecosystem".to_string(), "node".to_string());
 
-        let mut source_md =
-            SkillSourceMetadata::new(Some("dependency"), None, None, None, None, None, None);
+        let mut source_md = SkillSourceMetadata::new(Some("dependency"), None, None, None);
         source_md.apply_missing_from_metadata(&metadata);
 
         assert_eq!(

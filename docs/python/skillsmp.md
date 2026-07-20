@@ -1,7 +1,7 @@
 # SkillsMP client
 
 The SkillsMP client provides a typed interface for searching the SkillsMP
-registry and resolving skill contents from GitHub.
+registry. Download a selected result with `discover_repository_skills()`.
 
 ```python
 from skilly.skillsmp import ClientSettings, SkillsMp, SkillsMpSearchQuery
@@ -14,7 +14,7 @@ client = SkillsMp(
 
 result = client.search(SkillsMpSearchQuery(text="python", limit=5))
 for skill in result.data.skills:
-    print(skill.name, skill.github_url)
+    print(skill.name, skill.repository_url)
 ```
 
 ## ClientSettings
@@ -23,7 +23,6 @@ for skill in result.data.skills:
 |---|---|---|
 | `base_url` | `str \| None` | SkillsMP API base URL. |
 | `api_key` | `str \| None` | API key for authenticated requests. |
-| `github_token` | `str \| None` | GitHub token for resolving skill contents. |
 | `proxy` | `str \| None` | Proxy URL for API requests. |
 
 ## SkillsMp (synchronous)
@@ -40,11 +39,10 @@ result: SkillsMpSearchResult = client.search(
 # AI-powered search
 result: SkillsMpAiSearchResult = client.ai_search("code review skills")
 
-# GitHub operations
-items = client.fetch_github_directory(location, current_path)
-blob = client.fetch_github_file(location, path)
-snapshot = client.fetch_github_snapshot(location)
-ref, sha = client.resolve_github_ref_and_commit_sha(location)
+# Download through the provider-neutral repository API
+from skilly import discover_repository_skills
+
+skills = discover_repository_skills(result.data.skills[0].repository_url)
 ```
 
 ## AsyncSkillsMp
@@ -78,7 +76,7 @@ result = await client.search("python")
 | `name` | `str` | Display name. |
 | `author` | `str` | Author name. |
 | `description` | `str` | Description text. |
-| `github_url` | `str` | URL to the skill's GitHub source. |
+| `repository_url` | `str` | URL used with provider-neutral repository discovery. |
 | `skill_url` | `str` | URL to the skill on SkillsMP. |
 | `stars` | `int \| None` | Star count. |
 | `updated_at` | `str \| int \| None` | Last update timestamp. |

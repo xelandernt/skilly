@@ -86,12 +86,8 @@ skill = Skill.from_text(text)
 # Check if the skill is installed
 skill.is_installed()
 
-# Check the skill's origin
+# Check whether a skill can be refreshed
 skill.is_dependency()
-skill.is_skillsmp()
-skill.is_github()
-
-# Check if a newer version is available
 skill.can_update()
 
 # Compare with another skill
@@ -128,26 +124,6 @@ Type alias for `Literal["script", "reference", "asset", "other"]`.
 
 ## SkillOrigin
 
-`SkillOrigin` supplies package and SkillsMP provenance when constructing or
-discovering a skill. Repository installs populate `repository_provider`,
-`repository_url`, and `repository_commit_sha` automatically.
-
-```python
-from skilly import SkillOrigin
-
-origin = SkillOrigin(
-    source="github",
-    github_url="https://github.com/example/project",
-    github_commit_sha="abc123",
-)
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `source` | `str \| None` | Origin identifier (for example, `"github"` or `"skillsmp"`). |
-| `package_name` | `str \| None` | Name of the source package. |
-| `package_version` | `str \| None` | Version of the source package. |
-| `package_ecosystem` | `str \| None` | Ecosystem (`"python"`, `"node"`, `"maven"`). |
-| `github_url` | `str \| None` | GitHub URL for SkillsMP-backed skills. |
-| `github_commit_sha` | `str \| None` | Commit SHA for SkillsMP-backed skills. |
-| `skillsmp_id` | `str \| None` | SkillsMP registry ID. |
+Repository discovery records `repository_provider`, `repository_url`, and
+`repository_commit_sha` automatically. Use `discover_repository_skills()` for
+all remote skills, then install the selected result with `SkillRepository`.

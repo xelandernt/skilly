@@ -281,21 +281,6 @@ pub(crate) enum SkillsMpSubcommand {
             help = "Overwrite existing files when installing the selected skill."
         )]
         overwrite: bool,
-        #[arg(
-            long,
-            help = "GitHub token used for GitHub API requests while resolving skill contents."
-        )]
-        github_token: Option<String>,
-    },
-    #[command(about = "Browse installed SkillsMP skills and manage updates.")]
-    List {
-        #[command(flatten)]
-        destination: DestinationArgs,
-        #[arg(
-            long,
-            help = "GitHub token used when checking for updates to SkillsMP-installed skills."
-        )]
-        github_token: Option<String>,
     },
 }
 

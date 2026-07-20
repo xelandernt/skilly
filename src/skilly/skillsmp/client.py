@@ -2,16 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 from .. import _bridge as bridge
-from ..skills import (
-    GitHubContentItem,
-    GitHubFileBlob,
-    GitHubRepositorySnapshot,
-    GitHubSkillLocation,
-)
 
 if TYPE_CHECKING:
     from .._core import (
@@ -32,7 +25,7 @@ class SkillsMpSkill:
     name: str
     author: str
     description: str
-    github_url: str
+    repository_url: str
     skill_url: str
     stars: int | None = None
     updated_at: str | int | None = None
@@ -50,7 +43,7 @@ class SkillsMpSkill:
             name=data["name"],
             author=data["author"],
             description=data["description"],
-            github_url=data["githubUrl"],
+            repository_url=data["githubUrl"],
             skill_url=data["skillUrl"],
             stars=stars,
             updated_at=updated_at,
@@ -181,7 +174,6 @@ class SkillsMpAiSearchResult:
 class ClientSettings:
     base_url: str | None = None
     api_key: str | None = None
-    github_token: str | None = None
     proxy: str | None = None
 
     @classmethod
@@ -224,10 +216,6 @@ class _SkillsMpBase:
         return self._settings.api_key
 
     @property
-    def github_token(self) -> str | None:
-        return self._settings.github_token
-
-    @property
     def proxy(self) -> str | None:
         return self._settings.proxy
 
@@ -258,52 +246,6 @@ class SkillsMp(_SkillsMpBase):
         payload = bridge.skillsmp_ai_search(q, **self._client_kwargs())
         return SkillsMpAiSearchResult.from_data(payload)
 
-    def fetch_github_directory(
-        self,
-        location: GitHubSkillLocation,
-        current_path: PurePosixPath,
-    ) -> list[GitHubContentItem]:
-        payload = bridge.skillsmp_fetch_github_directory(
-            location.url,
-            current_path.as_posix(),
-            **self._client_kwargs(),
-        )
-        return [GitHubContentItem.from_data(item) for item in payload]
-
-    def fetch_github_file(
-        self,
-        location: GitHubSkillLocation,
-        path: PurePosixPath,
-    ) -> GitHubFileBlob:
-        payload = bridge.skillsmp_fetch_github_file(
-            location.url,
-            path.as_posix(),
-            **self._client_kwargs(),
-        )
-        return GitHubFileBlob.from_data(payload)
-
-    def fetch_github_snapshot(
-        self,
-        location: GitHubSkillLocation,
-    ) -> GitHubRepositorySnapshot:
-        payload = bridge.skillsmp_fetch_github_snapshot(
-            location.url,
-            **self._client_kwargs(),
-        )
-        return GitHubRepositorySnapshot.from_data(payload)
-
-    def resolve_github_ref_and_commit_sha(
-        self,
-        location: GitHubSkillLocation,
-    ) -> tuple[str, str]:
-        payload = bridge.skillsmp_resolve_github_ref_and_commit_sha(
-            location.url,
-            **self._client_kwargs(),
-        )
-        if len(payload) != 2:
-            raise ValueError(f"Expected 2 values, got {len(payload)}")
-        return payload[0], payload[1]
-
 
 class AsyncSkillsMp(_SkillsMpBase):
     def _sync(self) -> SkillsMp:
@@ -317,33 +259,3 @@ class AsyncSkillsMp(_SkillsMpBase):
 
     async def ai_search(self, q: str) -> SkillsMpAiSearchResult:
         return await asyncio.to_thread(self._sync().ai_search, q)
-
-    async def fetch_github_directory(
-        self,
-        location: GitHubSkillLocation,
-        current_path: PurePosixPath,
-    ) -> list[GitHubContentItem]:
-        return await asyncio.to_thread(
-            self._sync().fetch_github_directory, location, current_path
-        )
-
-    async def fetch_github_file(
-        self,
-        location: GitHubSkillLocation,
-        path: PurePosixPath,
-    ) -> GitHubFileBlob:
-        return await asyncio.to_thread(self._sync().fetch_github_file, location, path)
-
-    async def fetch_github_snapshot(
-        self,
-        location: GitHubSkillLocation,
-    ) -> GitHubRepositorySnapshot:
-        return await asyncio.to_thread(self._sync().fetch_github_snapshot, location)
-
-    async def resolve_github_ref_and_commit_sha(
-        self,
-        location: GitHubSkillLocation,
-    ) -> tuple[str, str]:
-        return await asyncio.to_thread(
-            self._sync().resolve_github_ref_and_commit_sha, location
-        )

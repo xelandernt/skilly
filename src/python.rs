@@ -6,14 +6,11 @@ use crate::core::{
     available_dependency_skill_in as rust_available_dependency_skill,
     available_dependency_skill_with_file_system as rust_available_dependency_skill_with_file_system,
     default_skills_directory as rust_default_skills_directory,
-    discover_github_skills as rust_discover_github_skills,
     discover_installed_skills as rust_discover_installed_skills,
     discover_installed_skills_in as rust_discover_installed_skills_in,
     discover_node_modules_skills_in as rust_discover_node_modules_skills_in,
     discover_repository_skills as rust_discover_repository_skills,
     discover_venv_skills_in as rust_discover_venv_skills_in,
-    github_versions_match as rust_github_versions_match,
-    parse_github_skill_url as rust_parse_github_skill_url,
     parse_repository_location as rust_parse_repository_location,
     project_requirements as rust_project_requirements,
     project_requirements_in as rust_project_requirements_in, remove_skill as rust_remove_skill,
@@ -101,44 +98,27 @@ fn json_value_to_py(py: Python<'_>, value: &JsonValue) -> PyResult<Py<PyAny>> {
 fn client_config(
     base_url: Option<String>,
     api_key: Option<String>,
-    github_token: Option<String>,
     proxy: Option<String>,
 ) -> ClientConfig {
-    ClientConfig::new(base_url, api_key, github_token, proxy)
+    ClientConfig::new(base_url, api_key, None, proxy)
 }
 
 fn skillsmp_client(
     base_url: Option<String>,
     api_key: Option<String>,
-    github_token: Option<String>,
     proxy: Option<String>,
 ) -> anyhow::Result<SkillsMpClient> {
-    SkillsMpClient::new(client_config(base_url, api_key, github_token, proxy))
+    SkillsMpClient::new(client_config(base_url, api_key, proxy))
 }
 
 fn with_skillsmp_client<T>(
     base_url: Option<String>,
     api_key: Option<String>,
-    github_token: Option<String>,
     proxy: Option<String>,
     action: impl FnOnce(&SkillsMpClient) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    let client = skillsmp_client(base_url, api_key, github_token, proxy)?;
+    let client = skillsmp_client(base_url, api_key, proxy)?;
     action(&client)
-}
-
-fn with_github_location<T>(
-    github_url: String,
-    base_url: Option<String>,
-    api_key: Option<String>,
-    github_token: Option<String>,
-    proxy: Option<String>,
-    action: impl FnOnce(&SkillsMpClient, &core::GitHubSkillLocationData) -> anyhow::Result<T>,
-) -> anyhow::Result<T> {
-    with_skillsmp_client(base_url, api_key, github_token, proxy, |client| {
-        let location = rust_parse_github_skill_url(&github_url)?;
-        action(client, &location)
-    })
 }
 
 fn py_path(py: Python<'_>, value: &str) -> PyResult<Py<PyAny>> {
@@ -309,6 +289,7 @@ fn relative_path_arg(value: &Bound<'_, PyAny>) -> PyResult<String> {
     Ok(py_fspath_string(value)?.replace('\\', "/"))
 }
 
+#[allow(dead_code)]
 fn optional_string_attr(value: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<String>> {
     let attr = value.getattr(name)?;
     if attr.is_none() {
@@ -371,21 +352,15 @@ fn skill_source_metadata(
     source: Option<String>,
     package_name: Option<String>,
     package_version: Option<String>,
-    github_url: Option<String>,
-    github_commit_sha: Option<String>,
-    skillsmp_id: Option<String>,
     package_ecosystem: Option<core::PackageEcosystem>,
 ) -> SkillSourceMetadata {
     SkillSourceMetadata {
         source,
         package_name,
         package_version,
-        github_url,
-        github_commit_sha,
         repository_provider: None,
         repository_url: None,
         repository_commit_sha: None,
-        skillsmp_id,
         package_ecosystem,
     }
 }
@@ -539,9 +514,6 @@ fn skill_from_text_impl(
     source: Option<String>,
     package_name: Option<String>,
     package_version: Option<String>,
-    github_url: Option<String>,
-    github_commit_sha: Option<String>,
-    skillsmp_id: Option<String>,
     package_ecosystem: Option<String>,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
@@ -549,9 +521,6 @@ fn skill_from_text_impl(
         source,
         package_name,
         package_version,
-        github_url,
-        github_commit_sha,
-        skillsmp_id,
         package_ecosystem
             .as_deref()
             .map(core::PackageEcosystem::new),
@@ -579,9 +548,6 @@ fn skill_from_file_impl(
     source: Option<String>,
     package_name: Option<String>,
     package_version: Option<String>,
-    github_url: Option<String>,
-    github_commit_sha: Option<String>,
-    skillsmp_id: Option<String>,
     package_ecosystem: Option<String>,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
@@ -590,9 +556,6 @@ fn skill_from_file_impl(
         source,
         package_name,
         package_version,
-        github_url,
-        github_commit_sha,
-        skillsmp_id,
         package_ecosystem
             .as_deref()
             .map(core::PackageEcosystem::new),
@@ -621,9 +584,6 @@ fn skill_from_dir_impl(
     source: Option<String>,
     package_name: Option<String>,
     package_version: Option<String>,
-    github_url: Option<String>,
-    github_commit_sha: Option<String>,
-    skillsmp_id: Option<String>,
     package_ecosystem: Option<String>,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
@@ -632,9 +592,6 @@ fn skill_from_dir_impl(
         source,
         package_name,
         package_version,
-        github_url,
-        github_commit_sha,
-        skillsmp_id,
         package_ecosystem
             .as_deref()
             .map(core::PackageEcosystem::new),
@@ -654,31 +611,6 @@ fn skill_from_dir_impl(
         .map_err(py_err)?
     };
     Ok(PySkill::from_data(skill))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn discover_github_skills_impl(
-    py: Python<'_>,
-    github_url: String,
-    source: Option<String>,
-    skillsmp_id: Option<String>,
-    base_url: Option<String>,
-    api_key: Option<String>,
-    github_token: Option<String>,
-    proxy: Option<String>,
-) -> PyResult<Vec<PySkill>> {
-    let skills = py
-        .allow_threads(|| {
-            let client = skillsmp_client(base_url, api_key, github_token, proxy)?;
-            rust_discover_github_skills(
-                &client,
-                &github_url,
-                source.as_deref().unwrap_or(core::SKILLY_SOURCE_GITHUB),
-                skillsmp_id,
-            )
-        })
-        .map_err(py_err)?;
-    Ok(skills.into_iter().map(PySkill::from_data).collect())
 }
 
 fn discover_repository_skills_impl(
@@ -701,41 +633,6 @@ fn discover_repository_skills_impl(
         })
         .map_err(py_err)?;
     Ok(skills.into_iter().map(PySkill::from_data).collect())
-}
-
-fn client_config_from_fetcher(fetcher: &Bound<'_, PyAny>) -> PyResult<ClientConfig> {
-    Ok(client_config(
-        optional_string_attr(fetcher, "base_url")?,
-        optional_string_attr(fetcher, "api_key")?,
-        optional_string_attr(fetcher, "github_token")?,
-        optional_string_attr(fetcher, "proxy")?,
-    ))
-}
-
-fn skill_from_github_fetcher_impl(
-    py: Python<'_>,
-    fetcher: &Bound<'_, PyAny>,
-    github_url: String,
-    source: Option<String>,
-    skillsmp_id: Option<String>,
-) -> PyResult<PySkill> {
-    let config = client_config_from_fetcher(fetcher)?;
-    let skills = discover_github_skills_impl(
-        py,
-        github_url,
-        Some(source.unwrap_or_else(|| core::SKILLY_SOURCE_GITHUB.to_string())),
-        skillsmp_id,
-        config.base_url,
-        config.api_key,
-        config.github_token,
-        config.proxy,
-    )?;
-    match skills.len() {
-        1 => Ok(skills.into_iter().next().expect("one skill exists")),
-        count => Err(PyValueError::new_err(format!(
-            "GitHub URL resolves to {count} skills; use a direct skill directory URL instead"
-        ))),
-    }
 }
 
 #[pyclass(name = "Skill", module = "skilly._core")]
@@ -767,9 +664,6 @@ impl PySkill {
         source=None,
         package_name=None,
         package_version=None,
-        github_url=None,
-        github_commit_sha=None,
-        skillsmp_id=None,
         package_ecosystem=None
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -787,9 +681,6 @@ impl PySkill {
         source: Option<String>,
         package_name: Option<String>,
         package_version: Option<String>,
-        github_url: Option<String>,
-        github_commit_sha: Option<String>,
-        skillsmp_id: Option<String>,
         package_ecosystem: Option<String>,
     ) -> PyResult<Self> {
         Ok(Self {
@@ -807,12 +698,9 @@ impl PySkill {
                 source: source.unwrap_or_else(|| core::SKILLY_UNKNOWN_SOURCE.to_string()),
                 package_name,
                 package_version,
-                github_url,
-                github_commit_sha,
                 repository_provider: None,
                 repository_url: None,
                 repository_commit_sha: None,
-                skillsmp_id,
                 package_ecosystem: package_ecosystem
                     .as_deref()
                     .map(core::PackageEcosystem::new),
@@ -827,9 +715,6 @@ impl PySkill {
         source=None,
         package_name=None,
         package_version=None,
-        github_url=None,
-        github_commit_sha=None,
-        skillsmp_id=None,
         package_ecosystem=None,
         file_system=None
     ))]
@@ -841,9 +726,6 @@ impl PySkill {
         source: Option<String>,
         package_name: Option<String>,
         package_version: Option<String>,
-        github_url: Option<String>,
-        github_commit_sha: Option<String>,
-        skillsmp_id: Option<String>,
         package_ecosystem: Option<String>,
         file_system: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
@@ -853,9 +735,6 @@ impl PySkill {
             source,
             package_name,
             package_version,
-            github_url,
-            github_commit_sha,
-            skillsmp_id,
             package_ecosystem,
             file_system,
         )
@@ -867,9 +746,6 @@ impl PySkill {
         source=None,
         package_name=None,
         package_version=None,
-        github_url=None,
-        github_commit_sha=None,
-        skillsmp_id=None,
         package_ecosystem=None,
         file_system=None
     ))]
@@ -881,9 +757,6 @@ impl PySkill {
         source: Option<String>,
         package_name: Option<String>,
         package_version: Option<String>,
-        github_url: Option<String>,
-        github_commit_sha: Option<String>,
-        skillsmp_id: Option<String>,
         package_ecosystem: Option<String>,
         file_system: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
@@ -893,9 +766,6 @@ impl PySkill {
             source,
             package_name,
             package_version,
-            github_url,
-            github_commit_sha,
-            skillsmp_id,
             package_ecosystem,
             file_system,
         )
@@ -907,9 +777,6 @@ impl PySkill {
         source=None,
         package_name=None,
         package_version=None,
-        github_url=None,
-        github_commit_sha=None,
-        skillsmp_id=None,
         package_ecosystem=None,
         file_system=None
     ))]
@@ -921,9 +788,6 @@ impl PySkill {
         source: Option<String>,
         package_name: Option<String>,
         package_version: Option<String>,
-        github_url: Option<String>,
-        github_commit_sha: Option<String>,
-        skillsmp_id: Option<String>,
         package_ecosystem: Option<String>,
         file_system: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
@@ -933,40 +797,8 @@ impl PySkill {
             source,
             package_name,
             package_version,
-            github_url,
-            github_commit_sha,
-            skillsmp_id,
             package_ecosystem,
             file_system,
-        )
-    }
-
-    #[classmethod]
-    #[pyo3(signature = (fetcher, github_url, source=None, skillsmp_id=None))]
-    fn from_github(
-        _cls: &Bound<'_, PyType>,
-        py: Python<'_>,
-        fetcher: &Bound<'_, PyAny>,
-        github_url: String,
-        source: Option<String>,
-        skillsmp_id: Option<String>,
-    ) -> PyResult<Self> {
-        skill_from_github_fetcher_impl(py, fetcher, github_url, source, skillsmp_id)
-    }
-
-    #[classmethod]
-    fn from_skillsmp(
-        _cls: &Bound<'_, PyType>,
-        py: Python<'_>,
-        fetcher: &Bound<'_, PyAny>,
-        installable_skill: &Bound<'_, PyAny>,
-    ) -> PyResult<Self> {
-        skill_from_github_fetcher_impl(
-            py,
-            fetcher,
-            installable_skill.getattr("github_url")?.extract()?,
-            Some(core::SKILLY_SOURCE_SKILLSMP.to_string()),
-            Some(installable_skill.getattr("id")?.extract()?),
         )
     }
 
@@ -1040,16 +872,6 @@ impl PySkill {
     }
 
     #[getter]
-    fn github_url(&self) -> Option<String> {
-        self.inner.github_url.clone()
-    }
-
-    #[getter]
-    fn github_commit_sha(&self) -> Option<String> {
-        self.inner.github_commit_sha.clone()
-    }
-
-    #[getter]
     fn repository_provider(&self) -> Option<String> {
         self.inner
             .repository_provider
@@ -1064,11 +886,6 @@ impl PySkill {
     #[getter]
     fn repository_commit_sha(&self) -> Option<String> {
         self.inner.repository_commit_sha.clone()
-    }
-
-    #[getter]
-    fn skillsmp_id(&self) -> Option<String> {
-        self.inner.skillsmp_id.clone()
     }
 
     #[getter]
@@ -1133,14 +950,6 @@ impl PySkill {
 
     fn is_dependency(&self) -> bool {
         self.inner.is_dependency()
-    }
-
-    fn is_skillsmp(&self) -> bool {
-        self.inner.is_skillsmp()
-    }
-
-    fn is_github(&self) -> bool {
-        self.inner.source == core::SKILLY_SOURCE_GITHUB
     }
 
     fn can_update(&self) -> bool {
@@ -1257,9 +1066,6 @@ impl PySkill {
     package_name=None,
     package_version=None,
     package_ecosystem=None,
-    github_url=None,
-    github_commit_sha=None,
-    skillsmp_id=None,
     file_system=None
 ))]
 #[allow(clippy::too_many_arguments)]
@@ -1270,9 +1076,6 @@ fn skill_from_text_py(
     package_name: Option<String>,
     package_version: Option<String>,
     package_ecosystem: Option<String>,
-    github_url: Option<String>,
-    github_commit_sha: Option<String>,
-    skillsmp_id: Option<String>,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
     skill_from_text_impl(
@@ -1281,9 +1084,6 @@ fn skill_from_text_py(
         source,
         package_name,
         package_version,
-        github_url,
-        github_commit_sha,
-        skillsmp_id,
         package_ecosystem,
         file_system,
     )
@@ -1296,9 +1096,6 @@ fn skill_from_text_py(
     package_name=None,
     package_version=None,
     package_ecosystem=None,
-    github_url=None,
-    github_commit_sha=None,
-    skillsmp_id=None,
     file_system=None
 ))]
 #[allow(clippy::too_many_arguments)]
@@ -1309,9 +1106,6 @@ fn skill_from_file_py(
     package_name: Option<String>,
     package_version: Option<String>,
     package_ecosystem: Option<String>,
-    github_url: Option<String>,
-    github_commit_sha: Option<String>,
-    skillsmp_id: Option<String>,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
     skill_from_file_impl(
@@ -1320,9 +1114,6 @@ fn skill_from_file_py(
         source,
         package_name,
         package_version,
-        github_url,
-        github_commit_sha,
-        skillsmp_id,
         package_ecosystem,
         file_system,
     )
@@ -1335,9 +1126,6 @@ fn skill_from_file_py(
     package_name=None,
     package_version=None,
     package_ecosystem=None,
-    github_url=None,
-    github_commit_sha=None,
-    skillsmp_id=None,
     file_system=None
 ))]
 #[allow(clippy::too_many_arguments)]
@@ -1348,9 +1136,6 @@ fn skill_from_dir_py(
     package_name: Option<String>,
     package_version: Option<String>,
     package_ecosystem: Option<String>,
-    github_url: Option<String>,
-    github_commit_sha: Option<String>,
-    skillsmp_id: Option<String>,
     file_system: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySkill> {
     skill_from_dir_impl(
@@ -1359,9 +1144,6 @@ fn skill_from_dir_py(
         source,
         package_name,
         package_version,
-        github_url,
-        github_commit_sha,
-        skillsmp_id,
         package_ecosystem,
         file_system,
     )
@@ -1718,13 +1500,6 @@ fn available_dependency_skill_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "parse_github_skill_url")]
-fn parse_github_skill_url_py(py: Python<'_>, github_url: String) -> PyResult<Py<PyAny>> {
-    let location = rust_parse_github_skill_url(&github_url).map_err(py_err)?;
-    to_py_serialized(py, &location)
-}
-
-#[pyfunction]
 #[pyo3(name = "parse_repository_location", signature = (repository_url, provider=None))]
 fn parse_repository_location_py(
     py: Python<'_>,
@@ -1749,45 +1524,6 @@ fn discover_repository_skills_py(
     token: Option<String>,
 ) -> PyResult<Vec<PySkill>> {
     discover_repository_skills_impl(py, repository_url, provider, token)
-}
-
-#[pyfunction]
-#[pyo3(name = "discover_github_skills", signature = (
-    github_url,
-    source=None,
-    skillsmp_id=None,
-    base_url=None,
-    api_key=None,
-    github_token=None,
-    proxy=None
-))]
-#[allow(clippy::too_many_arguments)]
-fn discover_github_skills_py(
-    py: Python<'_>,
-    github_url: String,
-    source: Option<String>,
-    skillsmp_id: Option<String>,
-    base_url: Option<String>,
-    api_key: Option<String>,
-    github_token: Option<String>,
-    proxy: Option<String>,
-) -> PyResult<Vec<PySkill>> {
-    discover_github_skills_impl(
-        py,
-        github_url,
-        source,
-        skillsmp_id,
-        base_url,
-        api_key,
-        github_token,
-        proxy,
-    )
-}
-
-#[pyfunction]
-#[pyo3(name = "github_versions_match")]
-fn github_versions_match_py(installed: &PySkill, available: &PySkill) -> bool {
-    rust_github_versions_match(&installed.inner, &available.inner)
 }
 
 #[pyfunction]
@@ -1848,7 +1584,6 @@ fn project_requirements_py(
     occupation=None,
     base_url=None,
     api_key=None,
-    github_token=None,
     proxy=None
 ))]
 #[allow(clippy::too_many_arguments)]
@@ -1862,12 +1597,11 @@ fn skillsmp_search_py(
     occupation: Option<String>,
     base_url: Option<String>,
     api_key: Option<String>,
-    github_token: Option<String>,
     proxy: Option<String>,
 ) -> PyResult<Py<PyAny>> {
     let response = py
         .allow_threads(|| {
-            with_skillsmp_client(base_url, api_key, github_token, proxy, |client| {
+            with_skillsmp_client(base_url, api_key, proxy, |client| {
                 client.search(&skillsmp_search_query(
                     q, page, limit, sort_by, category, occupation,
                 ))
@@ -1878,125 +1612,20 @@ fn skillsmp_search_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "skillsmp_ai_search", signature = (q, base_url=None, api_key=None, github_token=None, proxy=None))]
+#[pyo3(name = "skillsmp_ai_search", signature = (q, base_url=None, api_key=None, proxy=None))]
 fn skillsmp_ai_search_py(
     py: Python<'_>,
     q: String,
     base_url: Option<String>,
     api_key: Option<String>,
-    github_token: Option<String>,
     proxy: Option<String>,
 ) -> PyResult<Py<PyAny>> {
     let response = py
         .allow_threads(|| {
-            with_skillsmp_client(base_url, api_key, github_token, proxy, |client| {
-                client.ai_search(&q)
-            })
+            with_skillsmp_client(base_url, api_key, proxy, |client| client.ai_search(&q))
         })
         .map_err(py_err)?;
     to_py_serialized(py, &response)
-}
-
-#[pyfunction]
-#[pyo3(name = "skillsmp_fetch_github_directory", signature = (github_url, current_path, base_url=None, api_key=None, github_token=None, proxy=None))]
-fn skillsmp_fetch_github_directory_py(
-    py: Python<'_>,
-    github_url: String,
-    current_path: String,
-    base_url: Option<String>,
-    api_key: Option<String>,
-    github_token: Option<String>,
-    proxy: Option<String>,
-) -> PyResult<Py<PyAny>> {
-    let entries = py
-        .allow_threads(|| {
-            with_github_location(
-                github_url,
-                base_url,
-                api_key,
-                github_token,
-                proxy,
-                |client, location| client.fetch_github_directory(location, &current_path),
-            )
-        })
-        .map_err(py_err)?;
-    to_py_serialized(py, &entries)
-}
-
-#[pyfunction]
-#[pyo3(name = "skillsmp_fetch_github_file", signature = (github_url, path, base_url=None, api_key=None, github_token=None, proxy=None))]
-fn skillsmp_fetch_github_file_py(
-    py: Python<'_>,
-    github_url: String,
-    path: String,
-    base_url: Option<String>,
-    api_key: Option<String>,
-    github_token: Option<String>,
-    proxy: Option<String>,
-) -> PyResult<Py<PyAny>> {
-    let blob = py
-        .allow_threads(|| {
-            with_github_location(
-                github_url,
-                base_url,
-                api_key,
-                github_token,
-                proxy,
-                |client, location| client.fetch_github_file(location, &path),
-            )
-        })
-        .map_err(py_err)?;
-    to_py_serialized(py, &blob)
-}
-
-#[pyfunction]
-#[pyo3(name = "skillsmp_fetch_github_snapshot", signature = (github_url, base_url=None, api_key=None, github_token=None, proxy=None))]
-fn skillsmp_fetch_github_snapshot_py(
-    py: Python<'_>,
-    github_url: String,
-    base_url: Option<String>,
-    api_key: Option<String>,
-    github_token: Option<String>,
-    proxy: Option<String>,
-) -> PyResult<Py<PyAny>> {
-    let snapshot = py
-        .allow_threads(|| {
-            with_github_location(
-                github_url,
-                base_url,
-                api_key,
-                github_token,
-                proxy,
-                |client, location| client.fetch_github_snapshot(location),
-            )
-        })
-        .map_err(py_err)?;
-    to_py_serialized(py, &snapshot)
-}
-
-#[pyfunction]
-#[pyo3(name = "skillsmp_resolve_github_ref_and_commit_sha", signature = (github_url, base_url=None, api_key=None, github_token=None, proxy=None))]
-fn skillsmp_resolve_github_ref_and_commit_sha_py(
-    py: Python<'_>,
-    github_url: String,
-    base_url: Option<String>,
-    api_key: Option<String>,
-    github_token: Option<String>,
-    proxy: Option<String>,
-) -> PyResult<Py<PyAny>> {
-    let resolved = py
-        .allow_threads(|| {
-            with_github_location(
-                github_url,
-                base_url,
-                api_key,
-                github_token,
-                proxy,
-                |client, location| client.resolve_github_ref_and_commit_sha(location),
-            )
-        })
-        .map_err(py_err)?;
-    to_py_serialized(py, &resolved)
 }
 
 #[pyfunction]
@@ -2018,23 +1647,13 @@ fn python_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(discover_package_source_skills_py, m)?)?;
     m.add_function(wrap_pyfunction!(scan_project_py, m)?)?;
     m.add_function(wrap_pyfunction!(available_dependency_skill_py, m)?)?;
-    m.add_function(wrap_pyfunction!(parse_github_skill_url_py, m)?)?;
     m.add_function(wrap_pyfunction!(parse_repository_location_py, m)?)?;
-    m.add_function(wrap_pyfunction!(discover_github_skills_py, m)?)?;
     m.add_function(wrap_pyfunction!(discover_repository_skills_py, m)?)?;
-    m.add_function(wrap_pyfunction!(github_versions_match_py, m)?)?;
     m.add_function(wrap_pyfunction!(repository_versions_match_py, m)?)?;
     m.add_function(wrap_pyfunction!(remove_skill_py, m)?)?;
     m.add_function(wrap_pyfunction!(project_requirements_py, m)?)?;
     m.add_function(wrap_pyfunction!(skillsmp_search_py, m)?)?;
     m.add_function(wrap_pyfunction!(skillsmp_ai_search_py, m)?)?;
-    m.add_function(wrap_pyfunction!(skillsmp_fetch_github_directory_py, m)?)?;
-    m.add_function(wrap_pyfunction!(skillsmp_fetch_github_file_py, m)?)?;
-    m.add_function(wrap_pyfunction!(skillsmp_fetch_github_snapshot_py, m)?)?;
-    m.add_function(wrap_pyfunction!(
-        skillsmp_resolve_github_ref_and_commit_sha_py,
-        m
-    )?)?;
     m.add_function(wrap_pyfunction!(run_cli, m)?)?;
     Ok(())
 }

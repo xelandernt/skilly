@@ -89,8 +89,7 @@ impl DownloadableSkillMatch {
         match self.installed.as_ref() {
             None => "installable",
             Some(installed)
-                if crate::core::repository_versions_match(installed, &self.available)
-                    || crate::core::github_versions_match(installed, &self.available) =>
+                if crate::core::repository_versions_match(installed, &self.available) =>
             {
                 "installed"
             }
@@ -530,12 +529,9 @@ impl CreateFormState {
             source: SKILLY_UNKNOWN_SOURCE.to_string(),
             package_name: None,
             package_version: None,
-            github_url: None,
-            github_commit_sha: None,
             repository_provider: None,
             repository_url: None,
             repository_commit_sha: None,
-            skillsmp_id: None,
             package_ecosystem: None,
         };
         skill.validate()?;
@@ -577,12 +573,9 @@ impl CreateFormState {
             source: SKILLY_UNKNOWN_SOURCE.to_string(),
             package_name: None,
             package_version: None,
-            github_url: None,
-            github_commit_sha: None,
             repository_provider: None,
             repository_url: None,
             repository_commit_sha: None,
-            skillsmp_id: None,
             package_ecosystem: None,
         })
     }

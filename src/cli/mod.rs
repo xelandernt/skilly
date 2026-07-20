@@ -16,12 +16,11 @@ use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery, SkillsMpS
 use crate::config::{ProviderCredential, SkillyConfig};
 use crate::core::{
     MavenSourceSettings, NodeSourceSettings, ProjectDependencyOrigin, ProjectEnvironment,
-    ProjectSource, PythonSourceSettings, RepositoryProvider, SKILLY_SOURCE_GITHUB,
-    SKILLY_SOURCE_SKILLSMP, SKILLY_UNKNOWN_SOURCE, STATUS_INSTALLABLE, STATUS_INSTALLED,
-    STATUS_UPDATABLE, ScanDependencySelection, SkillData, SkillMatchData, SkillSourceMetadata,
-    available_dependency_skill_in, discover_github_skills, discover_repository_skills,
-    github_versions_match, project_requirements, remove_skill, repository_versions_match,
-    scan_match_status, scan_project_in,
+    ProjectSource, PythonSourceSettings, RepositoryProvider, SKILLY_UNKNOWN_SOURCE,
+    STATUS_INSTALLABLE, STATUS_INSTALLED, STATUS_UPDATABLE, ScanDependencySelection, SkillData,
+    SkillMatchData, SkillSourceMetadata, available_dependency_skill_in, discover_repository_skills,
+    project_requirements, remove_skill, repository_versions_match, scan_match_status,
+    scan_project_in,
 };
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -30,6 +29,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 pub(crate) const BACK_CHOICE: &str = "back";
+#[allow(dead_code)]
 pub(crate) const DELETE_CHOICE: &str = "delete";
 pub(crate) const EXIT_CHOICE: &str = "exit";
 pub(crate) const INSTALL_CHOICE: &str = "install";
@@ -158,20 +158,12 @@ fn try_run(args: Vec<String>) -> Result<i32> {
                 query,
                 destination,
                 overwrite,
-                github_token,
             } => run_skillsmp_search(
                 &query,
                 &destination,
                 overwrite,
-                client_config(None, None, github_token, None),
-                &skilly_config,
-            )?,
-            SkillsMpSubcommand::List {
-                destination,
-                github_token,
-            } => run_skillsmp_list(
-                &destination,
-                client_config(None, None, github_token, None),
+                ClientConfig::new(None, None, None, None)
+                    .with_repository_credentials(skilly_config.repositories.providers.clone()),
                 &skilly_config,
             )?,
         },
@@ -314,15 +306,6 @@ fn run_configure(skilly_config: &SkillyConfig, flags: ConfigureFlags) -> Result<
     Ok(())
 }
 
-fn client_config(
-    base_url: Option<String>,
-    api_key: Option<String>,
-    github_token: Option<String>,
-    proxy: Option<String>,
-) -> ClientConfig {
-    ClientConfig::new(base_url, api_key, github_token, proxy)
-}
-
 fn run_create(directory: &Path, mut options: CreateOptions) -> Result<()> {
     let interactive = is_interactive_terminal();
     if interactive {
@@ -355,12 +338,9 @@ fn run_create(directory: &Path, mut options: CreateOptions) -> Result<()> {
         source: SKILLY_UNKNOWN_SOURCE.to_string(),
         package_name: None,
         package_version: None,
-        github_url: None,
-        github_commit_sha: None,
         repository_provider: None,
         repository_url: None,
         repository_commit_sha: None,
-        skillsmp_id: None,
         package_ecosystem: None,
     };
     skill.validate()?;
@@ -1471,9 +1451,10 @@ fn run_update(directory: &Path, config: ClientConfig, yes: bool) -> Result<()> {
         .map(|item| skill_directory_name(&item.installed))
         .collect::<std::collections::BTreeSet<_>>();
     let mut errors = Vec::new();
-    for installed in installed_skills.into_iter().filter(|skill| {
-        (skill.repository_url.is_some() || skill.github_url.is_some()) && !skill.is_dependency()
-    }) {
+    for installed in installed_skills
+        .into_iter()
+        .filter(|skill| skill.repository_url.is_some() && !skill.is_dependency())
+    {
         if dependency_names.contains(&skill_directory_name(&installed)) {
             continue;
         }
@@ -1550,26 +1531,7 @@ fn available_repository_update(
             .context("repository URL resolves to no skills")?;
         return Ok((!repository_versions_match(skill, &refreshed)).then_some(refreshed));
     }
-    let Some(github_url) = skill.github_url.as_deref() else {
-        return Ok(None);
-    };
-    let refreshed = discover_github_skills(
-        client,
-        github_url,
-        if skill.is_skillsmp() {
-            SKILLY_SOURCE_SKILLSMP
-        } else {
-            SKILLY_SOURCE_GITHUB
-        },
-        skill.skillsmp_id.clone(),
-    )?
-    .into_iter()
-    .next()
-    .context("GitHub URL resolves to no skills")?;
-    if github_versions_match(skill, &refreshed) {
-        return Ok(None);
-    }
-    Ok(Some(refreshed))
+    Ok(None)
 }
 
 fn confirm_apply_updates() -> Result<bool> {
@@ -1607,27 +1569,13 @@ fn format_pending_update(update: &PendingSkillUpdate) -> String {
     format!(
         "{} [{}]: {} -> {}",
         skill_directory_name(&update.installed),
-        if update.installed.is_skillsmp() {
-            "skillsmp/github"
-        } else if let Some(provider) = update.installed.repository_provider {
+        if let Some(provider) = update.installed.repository_provider {
             provider.as_str()
         } else {
-            "github"
+            "unknown"
         },
-        short_revision(
-            update
-                .installed
-                .repository_commit_sha
-                .as_deref()
-                .or(update.installed.github_commit_sha.as_deref()),
-        ),
-        short_revision(
-            update
-                .available
-                .repository_commit_sha
-                .as_deref()
-                .or(update.available.github_commit_sha.as_deref()),
-        )
+        short_revision(update.installed.repository_commit_sha.as_deref()),
+        short_revision(update.available.repository_commit_sha.as_deref())
     )
 }
 
@@ -1643,12 +1591,7 @@ fn format_applied_update(previous: &SkillData, updated: &SkillData) -> String {
     format!(
         "Updated {} to commit {}",
         skill_directory_name(updated),
-        short_revision(
-            updated
-                .repository_commit_sha
-                .as_deref()
-                .or(updated.github_commit_sha.as_deref()),
-        )
+        short_revision(updated.repository_commit_sha.as_deref())
     )
 }
 
@@ -1772,20 +1715,15 @@ fn run_skillsmp_search(
             let skill_data = show_loading_message(
                 &format!("Preparing {}", selected_skill.name),
                 &format!(
-                    "Downloading skill metadata from GitHub for {}",
-                    selected_skill.github_url
+                    "Downloading skill metadata from repository {}",
+                    selected_skill.repository_url
                 ),
                 move || {
                     let client = SkillsMpClient::new(selected_config)?;
-                    discover_github_skills(
-                        &client,
-                        &selected_skill.github_url,
-                        SKILLY_SOURCE_SKILLSMP,
-                        Some(selected_skill.id.clone()),
-                    )?
-                    .into_iter()
-                    .next()
-                    .context("GitHub URL resolves to no skills")
+                    discover_repository_skills(&client, &selected_skill.repository_url, None)?
+                        .into_iter()
+                        .next()
+                        .context("repository URL resolves to no skills")
                 },
             )?;
             cache.insert(skill.id.clone(), skill_data.clone());
@@ -1879,6 +1817,7 @@ fn run_skillsmp_search(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn run_skillsmp_list(
     destination: &DestinationArgs,
     config: ClientConfig,
@@ -1889,7 +1828,7 @@ fn run_skillsmp_list(
         let skills = discover_installed_skills_report(&directory)?
             .valid_skills
             .into_iter()
-            .filter(|skill| skill.is_skillsmp())
+            .filter(|skill| skill.repository_url.is_some())
             .collect::<Vec<_>>();
         if skills.is_empty() {
             println!(
@@ -1923,7 +1862,7 @@ fn run_skillsmp_list(
                 Ok(discover_installed_skills_report(&destination.path)?
                     .valid_skills
                     .into_iter()
-                    .filter(|skill| skill.is_skillsmp())
+                    .filter(|skill| skill.repository_url.is_some())
                     .collect::<Vec<_>>())
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2160,40 +2099,6 @@ fn update_skill(directory: &Path, skill: &SkillData, client: &SkillsMpClient) ->
         ));
     }
 
-    if let Some(github_url) = skill.github_url.as_deref() {
-        let refreshed = discover_github_skills(
-            client,
-            github_url,
-            if skill.is_skillsmp() {
-                SKILLY_SOURCE_SKILLSMP
-            } else {
-                SKILLY_SOURCE_GITHUB
-            },
-            skill.skillsmp_id.clone(),
-        )?
-        .into_iter()
-        .next()
-        .context("GitHub URL resolves to no skills")?;
-        if github_versions_match(skill, &refreshed) {
-            return Ok(format!(
-                "{} is already up to date ({})",
-                skill_directory_name(skill),
-                skill.github_commit_sha.as_deref().unwrap_or("unknown")
-            ));
-        }
-        let updated = install_available_skill(
-            directory,
-            &refreshed,
-            Some(&skill_directory_name(skill)),
-            true,
-        )?;
-        return Ok(format!(
-            "Updated {} with {} files",
-            skill_directory_name(&updated),
-            updated.resources.len() + 1
-        ));
-    }
-
     Ok(format!(
         "Cannot update {}: unknown source",
         skill_directory_name(skill)
@@ -2219,23 +2124,7 @@ fn skill_update_available(
             .context("repository URL resolves to no skills")?;
         return Ok(!repository_versions_match(skill, &refreshed));
     }
-    let Some(github_url) = skill.github_url.as_deref() else {
-        return Ok(false);
-    };
-    let refreshed = discover_github_skills(
-        client,
-        github_url,
-        if skill.is_skillsmp() {
-            SKILLY_SOURCE_SKILLSMP
-        } else {
-            SKILLY_SOURCE_GITHUB
-        },
-        skill.skillsmp_id.clone(),
-    )?
-    .into_iter()
-    .next()
-    .context("GitHub URL resolves to no skills")?;
-    Ok(!github_versions_match(skill, &refreshed))
+    Ok(false)
 }
 
 fn update_available_or_remember_error(
@@ -2278,13 +2167,19 @@ fn skill_directory_name(skill: &SkillData) -> String {
     skill.directory_name()
 }
 
+fn skill_origin_label(skill: &SkillData) -> &str {
+    if skill.source == "repository" {
+        return skill
+            .repository_provider
+            .map_or("repository", |provider| provider.as_str());
+    }
+    &skill.source
+}
+
 fn installed_skill_label(skill: &SkillData) -> String {
     let mut details = Vec::new();
     if let Some(package_reference) = skill.package_reference() {
         details.push(package_reference);
-    }
-    if let Some(skillsmp_id) = skill.skillsmp_id.as_ref() {
-        details.push(format!("id={skillsmp_id}"));
     }
     let detail_suffix = if details.is_empty() {
         String::new()
@@ -2295,7 +2190,7 @@ fn installed_skill_label(skill: &SkillData) -> String {
         "{}: {} [{}]{}",
         skill_directory_name(skill),
         skill.name,
-        skill.source,
+        skill_origin_label(skill),
         detail_suffix
     )
 }
@@ -2532,9 +2427,7 @@ fn downloadable_skill_matches(
             installed: installed_skills
                 .iter()
                 .find(|installed| {
-                    (installed.source == SKILLY_SOURCE_GITHUB
-                        || installed.source == SKILLY_SOURCE_SKILLSMP)
-                        && available.matches(installed)
+                    installed.repository_url.is_some() && available.matches(installed)
                 })
                 .cloned(),
         })
@@ -2594,7 +2487,7 @@ fn skill_preview_lines(skill: &SkillData, extra_lines: &[String]) -> Vec<String>
     let mut lines = vec![
         format!("Name: {}", skill.name),
         format!("Description: {}", skill.description),
-        format!("Source: {}", skill.source),
+        format!("Source: {}", skill_origin_label(skill)),
         format!("Installed: {}", skill.is_installed()),
     ];
     if let Some(skill_path) = absolute_skill_path(skill) {
@@ -2603,14 +2496,14 @@ fn skill_preview_lines(skill: &SkillData, extra_lines: &[String]) -> Vec<String>
     if let Some(package_reference) = skill.package_reference() {
         lines.push(format!("Package: {package_reference}"));
     }
-    if let Some(github_url) = skill.github_url.as_ref() {
-        lines.push(format!("GitHub Url: {github_url}"));
-    }
-    if let Some(github_commit_sha) = skill.github_commit_sha.as_ref() {
-        lines.push(format!("GitHub Commit: {github_commit_sha}"));
-    }
-    if let Some(skillsmp_id) = skill.skillsmp_id.as_ref() {
-        lines.push(format!("SkillsMP Id: {skillsmp_id}"));
+    if let (Some(provider), Some(repository_url), Some(commit_sha)) = (
+        skill.repository_provider,
+        skill.repository_url.as_ref(),
+        skill.repository_commit_sha.as_ref(),
+    ) {
+        lines.push(format!("Repository Provider: {}", provider.as_str()));
+        lines.push(format!("Repository Url: {repository_url}"));
+        lines.push(format!("Repository Commit: {commit_sha}"));
     }
     if !extra_lines.is_empty() {
         lines.push(String::new());
@@ -2679,8 +2572,7 @@ fn skillsmp_search_preview_lines(
         format!("Status: {}", skillsmp_search_status(installed)),
         format!("Destination Directory: {}", directory.display()),
         format!("SkillsMP Url: {}", skill.skill_url),
-        format!("GitHub Url: {}", skill.github_url),
-        format!("SkillsMP Id: {}", skill.id),
+        format!("Repository Url: {}", skill.repository_url),
     ];
     if let Some(installed) = installed {
         lines.push(format!(
@@ -2724,8 +2616,7 @@ fn installed_skillsmp_match(
     installed_skills
         .iter()
         .find(|installed| {
-            installed.skillsmp_id.as_deref() == Some(skill.id.as_str())
-                || installed.github_url.as_deref() == Some(skill.github_url.as_str())
+            installed.repository_url.as_deref() == Some(skill.repository_url.as_str())
         })
         .cloned()
 }
@@ -2771,14 +2662,14 @@ mod tests {
         PendingSkillUpdate, REMOVE_CHOICE, UPDATE_ALL_CHOICE, UPDATE_CHOICE, VIEW_FILES_CHOICE,
         action_menu_default, downloadable_skill_actions, downloadable_skill_menu_status,
         downloadable_skill_preview_lines, exit_menu_item, format_pending_update,
-        installed_skill_actions, installed_skill_preview_lines, installed_skillsmp_match,
-        retained_multi_select_indices, scan_choice_label, scan_match_preview_lines,
-        search_skill_label, skillsmp_search_preview_lines, skillsmp_search_status,
+        installed_skill_actions, installed_skill_label, installed_skill_preview_lines,
+        installed_skillsmp_match, retained_multi_select_indices, scan_choice_label,
+        scan_match_preview_lines, search_skill_label, skillsmp_search_preview_lines,
     };
     use crate::client::SkillsMpSkill;
     use crate::core::{
-        NamedSelection, ProjectDependencyOrigin, SKILLY_SOURCE_DEPENDENCY, SKILLY_SOURCE_GITHUB,
-        SKILLY_SOURCE_SKILLSMP, SkillData, SkillMatchData,
+        NamedSelection, ProjectDependencyOrigin, RepositoryProvider, SKILLY_SOURCE_DEPENDENCY,
+        SKILLY_SOURCE_REPOSITORY, SkillData, SkillMatchData,
     };
     use clap::Parser;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -2786,7 +2677,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
-    fn installed_skill(skillsmp_id: Option<&str>, github_url: Option<&str>) -> SkillData {
+    fn installed_skill(_ignored: Option<&str>, repository_url: Option<&str>) -> SkillData {
         SkillData {
             name: "python".to_string(),
             description: "Installed skill".to_string(),
@@ -2798,19 +2689,12 @@ mod tests {
             allowed_tools: None,
             resources: Vec::new(),
             resource_warnings: Vec::new(),
-            source: if skillsmp_id.is_some() {
-                SKILLY_SOURCE_SKILLSMP.to_string()
-            } else {
-                SKILLY_SOURCE_GITHUB.to_string()
-            },
+            source: SKILLY_SOURCE_REPOSITORY.to_string(),
             package_name: None,
             package_version: None,
-            github_url: github_url.map(str::to_string),
-            github_commit_sha: Some("0123456789abcdef0123456789abcdef01234567".to_string()),
-            repository_provider: None,
-            repository_url: None,
-            repository_commit_sha: None,
-            skillsmp_id: skillsmp_id.map(str::to_string),
+            repository_provider: repository_url.map(|_| RepositoryProvider::GitHub),
+            repository_url: repository_url.map(str::to_string),
+            repository_commit_sha: Some("0123456789abcdef0123456789abcdef01234567".to_string()),
             package_ecosystem: None,
         }
     }
@@ -2831,12 +2715,9 @@ mod tests {
                 source: SKILLY_SOURCE_DEPENDENCY.to_string(),
                 package_name: Some("ruff".to_string()),
                 package_version: Some("0.12.0".to_string()),
-                github_url: None,
-                github_commit_sha: None,
                 repository_provider: None,
                 repository_url: None,
                 repository_commit_sha: None,
-                skillsmp_id: None,
                 package_ecosystem: None,
             },
             installed: None,
@@ -2850,7 +2731,8 @@ mod tests {
             name: "python-production".to_string(),
             author: "idossha".to_string(),
             description: "Python production code patterns.".to_string(),
-            github_url: "https://github.com/example/project/tree/main/skills/python".to_string(),
+            repository_url: "https://github.com/example/project/tree/main/skills/python"
+                .to_string(),
             skill_url: "https://skillsmp.com/skills/skill-1".to_string(),
             stars: Some(42),
             updated_at: Some(JsonValue::String("1778091502".to_string())),
@@ -2858,16 +2740,7 @@ mod tests {
     }
 
     #[test]
-    fn skillsmp_search_detects_installed_skill_by_id() {
-        let matched =
-            installed_skillsmp_match(&search_result(), &[installed_skill(Some("skill-1"), None)]);
-
-        assert!(matched.is_some());
-        assert_eq!(skillsmp_search_status(matched.as_ref()), "installed");
-    }
-
-    #[test]
-    fn skillsmp_search_detects_installed_skill_by_github_url() {
+    fn skillsmp_search_detects_installed_skill_by_repository_url() {
         let matched = installed_skillsmp_match(
             &search_result(),
             &[installed_skill(
@@ -2881,7 +2754,10 @@ mod tests {
 
     #[test]
     fn skillsmp_search_label_and_preview_include_installed_status() {
-        let matched = installed_skill(Some("skill-1"), None);
+        let matched = installed_skill(
+            None,
+            Some("https://github.com/example/project/tree/main/skills/python"),
+        );
 
         let label = search_skill_label(&search_result(), Some(&matched));
         let preview = skillsmp_search_preview_lines(
@@ -3241,7 +3117,7 @@ mod tests {
     fn downloadable_skill_menu_status_marks_updatable_entries() {
         let installed = installed_skill(None, Some("https://github.com/example/repo"));
         let available = SkillData {
-            github_commit_sha: Some("fedcba98765432100123456789abcdef01234567".to_string()),
+            repository_commit_sha: Some("fedcba98765432100123456789abcdef01234567".to_string()),
             ..installed.clone()
         };
         let matched = DownloadableSkillMatch {
@@ -3278,7 +3154,7 @@ mod tests {
                 Some("https://github.com/example/project/tree/main/skills/python"),
             ),
             available: SkillData {
-                github_commit_sha: Some("fedcba98765432100123456789abcdef01234567".to_string()),
+                repository_commit_sha: Some("fedcba98765432100123456789abcdef01234567".to_string()),
                 ..installed_skill(
                     None,
                     Some("https://github.com/example/project/tree/main/skills/python"),
@@ -3300,6 +3176,33 @@ mod tests {
     }
 
     #[test]
+    fn repository_skills_display_their_provider_as_origin() {
+        for (provider, label) in [
+            (RepositoryProvider::GitHub, "github"),
+            (RepositoryProvider::BitbucketCloud, "bitbucket-cloud"),
+            (
+                RepositoryProvider::BitbucketDataCenter,
+                "bitbucket-data-center",
+            ),
+        ] {
+            let skill = SkillData {
+                repository_provider: Some(provider),
+                ..installed_skill(None, Some("https://example.test/repository"))
+            };
+
+            assert_eq!(
+                installed_skill_label(&skill),
+                format!("python: python [{label}]")
+            );
+            assert!(
+                installed_skill_preview_lines(&skill)
+                    .iter()
+                    .any(|line| line == &format!("Source: {label}"))
+            );
+        }
+    }
+
+    #[test]
     fn downloadable_skill_preview_includes_absolute_destination_and_target_paths() {
         let preview = downloadable_skill_preview_lines(
             &DownloadableSkillMatch {
@@ -3314,17 +3217,14 @@ mod tests {
                     allowed_tools: None,
                     resources: Vec::new(),
                     resource_warnings: Vec::new(),
-                    source: SKILLY_SOURCE_GITHUB.to_string(),
+                    source: SKILLY_SOURCE_REPOSITORY.to_string(),
                     package_name: None,
                     package_version: None,
-                    github_url: Some(
+                    repository_provider: Some(RepositoryProvider::GitHub),
+                    repository_url: Some(
                         "https://github.com/example/project/tree/main/skills/python".to_string(),
                     ),
-                    github_commit_sha: None,
-                    repository_provider: None,
-                    repository_url: None,
                     repository_commit_sha: None,
-                    skillsmp_id: None,
                     package_ecosystem: None,
                 },
                 installed: Some(installed_skill(None, None)),
