@@ -1,7 +1,7 @@
 class Skilly < Formula
   desc "Manage agent skills"
   homepage "https://github.com/xelandernt/skilly"
-  version "0.0.33"
+  version "0.0.34"
   license "MIT"
 
   livecheck do
@@ -11,18 +11,18 @@ class Skilly < Formula
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/xelandernt/skilly/releases/download/0.0.33/skilly-0.0.33-aarch64-apple-darwin.tar.gz"
-      sha256 "db4a8d0abda8a60be88480f00fe128abff3f854b9d4c493c65198572a108e310"
+      url "https://github.com/xelandernt/skilly/releases/download/0.0.34/skilly-0.0.34-aarch64-apple-darwin.tar.gz"
+      sha256 "607eab8a306f790c25b18985ef3a7edf14b1ee7a8675c74d48e5618f82d19a15"
     else
-      url "https://github.com/xelandernt/skilly/releases/download/0.0.33/skilly-0.0.33-x86_64-apple-darwin.tar.gz"
-      sha256 "7b9a6f814302ba7daa2b71c1a50180252f5cca2c7450bf010937fb708bca9f38"
+      url "https://github.com/xelandernt/skilly/releases/download/0.0.34/skilly-0.0.34-x86_64-apple-darwin.tar.gz"
+      sha256 "4782023ccbd8e7e6de03fa5704ef886d2f4d4e58954546398bc84d3d91ec7c2e"
     end
   end
 
   on_linux do
     if Hardware::CPU.intel?
-      url "https://github.com/xelandernt/skilly/releases/download/0.0.33/skilly-0.0.33-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "319a9b7487648ee72b6121df42dfcaaf496b619a7125e193bfdeb307dc8cf9b0"
+      url "https://github.com/xelandernt/skilly/releases/download/0.0.34/skilly-0.0.34-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "195f3568971057b1fe2465e747757c2d0ac75f3b7e2b02722285b283663ddda2"
     else
       odie "skilly Homebrew packages currently support Linux x64 only"
     end
