@@ -98,7 +98,44 @@ skill = Skill.from_dir("path/to/skill/dir")
 
 # Parse from raw markdown text
 skill = Skill.from_text(text)
+
+# Load a complete bundle from exact in-memory bytes
+skill = Skill.from_bundle(skill_markdown, resources)
 ```
+
+### In-memory bundles
+
+`Skill.from_bundle(skill_markdown, resources=())` loads and validates a complete
+bundle without reading or writing a filesystem, executing a bundled script,
+importing modules, invoking a shell, or making network requests. It preserves
+the supplied `SKILL.md` bytes in `skill.raw` and each resource's bytes in
+`resource.raw`.
+
+```python
+from pathlib import PurePosixPath
+
+from skilly import Skill, SkillBundleError, SkillResource
+
+try:
+    skill = Skill.from_bundle(
+        b"---\nname: on-call\ndescription: Runbook instructions.\n---\nRead first.\n",
+        (
+            SkillResource(
+                relative_path=PurePosixPath("references/runbook.md"),
+                kind="reference",
+                raw=b"# Runbook\n",
+            ),
+        ),
+    )
+except SkillBundleError as error:
+    print(error.code, error.path, error.field)
+```
+
+`SkillBundleError` is a `ValueError` with stable `code`, `path`, and optional
+`field` attributes. Current codes are `invalid_utf8`, `invalid_frontmatter`,
+`invalid_field`, `invalid_resource_path`, and `duplicate_resource_path`.
+Resource `kind` remains caller-provided metadata; it is not inferred from or
+checked against the path.
 
 ### Instance methods
 

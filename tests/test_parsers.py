@@ -3,7 +3,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from skilly.repository import SkillRepository
-from skilly import PythonSource, parse_repository_location
+from skilly import PythonSource, SkillBundleError, parse_repository_location
 from skilly.skills import Skill, SkillResource, discover_package_source_skills
 from helpers import make_venv, write_distribution, write_skill
 
@@ -65,6 +65,69 @@ def test_file_content_api_replaces_render_and_content() -> None:
     assert not hasattr(Skill, "content")
     assert not hasattr(Skill, "render")
     assert not hasattr(SkillResource, "content")
+
+
+def test_skill_from_bundle_preserves_bytes_without_filesystem_access() -> None:
+    skill_markdown = b"""---
+description: Load this bundle directly from memory.
+name: in-memory-skill
+---
+Do not execute this skill while loading it.
+"""
+    resource = SkillResource(
+        PurePosixPath("scripts/run.py"), "reference", b"print('not executed')\n"
+    )
+
+    skill = Skill.from_bundle(skill_markdown, (resource,))
+
+    assert skill.path is None
+    assert skill.raw == skill_markdown
+    assert skill.resources[0].relative_path == PurePosixPath("scripts/run.py")
+    assert skill.resources[0].kind == "reference"
+    assert skill.resources[0].raw == b"print('not executed')\n"
+
+
+@pytest.mark.parametrize(
+    ("skill_markdown", "resources", "code", "path", "field"),
+    [
+        (b"\xff", (), "invalid_utf8", "SKILL.md", None),
+        (
+            b"---\nname: valid-name\ndescription: [\n---\n",
+            (),
+            "invalid_frontmatter",
+            "SKILL.md",
+            None,
+        ),
+        (
+            b"---\nname: invalid_name\ndescription: Description.\n---\n",
+            (),
+            "invalid_field",
+            "SKILL.md",
+            "name",
+        ),
+        (
+            b"---\nname: valid-name\ndescription: Description.\n---\n",
+            (SkillResource(PurePosixPath("references/../secret.txt"), "other"),),
+            "invalid_resource_path",
+            "references/../secret.txt",
+            None,
+        ),
+    ],
+)
+def test_skill_from_bundle_reports_structured_errors(
+    skill_markdown: bytes,
+    resources: tuple[SkillResource, ...],
+    code: str,
+    path: str,
+    field: str | None,
+) -> None:
+    with pytest.raises(SkillBundleError) as raised:
+        Skill.from_bundle(skill_markdown, resources)
+
+    error = raised.value
+    assert error.code == code
+    assert error.path == path
+    assert error.field == field
 
 
 def test_parse_repository_location_uses_the_documented_github_provider() -> None:

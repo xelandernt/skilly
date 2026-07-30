@@ -238,6 +238,21 @@ for match in repository.scan_project():
     print(match.available.name, match.status)
 ```
 
+Load an untrusted skill bundle directly from memory without filesystem or
+network access:
+
+```python
+from pathlib import PurePosixPath
+from skilly import Skill, SkillResource
+
+skill = Skill.from_bundle(
+    skill_markdown,
+    (
+        SkillResource(PurePosixPath("references/runbook.md"), "reference", runbook_bytes),
+    ),
+)
+```
+
 Stateless discovery functions for one-shot reads:
 
 ```python

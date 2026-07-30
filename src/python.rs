@@ -1,8 +1,8 @@
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery};
 use crate::core::{
-    FileSystem, MavenSourceSettings, NamedSelection, NodeSourceSettings, ProjectEnvironment,
-    ProjectSource, PythonSourceSettings, RepositoryProvider, SkillData, SkillDirectoryFlavor,
-    SkillResourceData, SkillSourceMetadata,
+    BundleValidationError, FileSystem, MavenSourceSettings, NamedSelection, NodeSourceSettings,
+    ProjectEnvironment, ProjectSource, PythonSourceSettings, RepositoryProvider, SkillData,
+    SkillDirectoryFlavor, SkillResourceData, SkillSourceMetadata,
     available_dependency_skill_in as rust_available_dependency_skill,
     available_dependency_skill_with_file_system as rust_available_dependency_skill_with_file_system,
     default_skills_directory as rust_default_skills_directory,
@@ -24,7 +24,7 @@ use crate::{cli, core};
 use pyo3::class::basic::CompareOp;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PyModule, PyType};
+use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PyModule, PyTuple, PyType};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
@@ -32,6 +32,19 @@ use std::path::{Path, PathBuf};
 
 fn py_err<E: ToString>(error: E) -> PyErr {
     PyRuntimeError::new_err(error.to_string())
+}
+
+fn bundle_validation_py_err(error: BundleValidationError) -> PyErr {
+    match Python::with_gil(|py| -> PyResult<PyErr> {
+        let error_type = py.import("skilly.skills")?.getattr("SkillBundleError")?;
+        let instance = error_type.call1((error.message,))?;
+        instance.setattr("code", error.code.as_str())?;
+        instance.setattr("path", error.path)?;
+        instance.setattr("field", error.field)?;
+        Ok(PyErr::from_value(instance))
+    }) {
+        Ok(error) | Err(error) => error,
+    }
 }
 
 fn to_py_serialized<T: Serialize>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>> {
@@ -311,10 +324,19 @@ fn resources_from_py(value: Option<&Bound<'_, PyAny>>) -> PyResult<Vec<SkillReso
     let Some(value) = value else {
         return Ok(Vec::new());
     };
-    let list = value
-        .downcast::<PyList>()
-        .map_err(|_| PyTypeError::new_err("resources must be a list"))?;
-    list.iter().map(|item| resource_from_py(&item)).collect()
+    if let Ok(resources) = value.downcast::<PyList>() {
+        return resources
+            .iter()
+            .map(|item| resource_from_py(&item))
+            .collect();
+    }
+    if let Ok(resources) = value.downcast::<PyTuple>() {
+        return resources
+            .iter()
+            .map(|item| resource_from_py(&item))
+            .collect();
+    }
+    Err(PyTypeError::new_err("resources must be a list or tuple"))
 }
 
 fn py_resource(py: Python<'_>, value: &SkillResourceData) -> PyResult<Py<PyAny>> {
@@ -739,6 +761,20 @@ impl PySkill {
             package_ecosystem,
             file_system,
         )
+    }
+
+    /// Load a complete skill bundle from in-memory bytes without filesystem access.
+    #[classmethod]
+    #[pyo3(signature = (skill_markdown, resources=None))]
+    fn from_bundle(
+        _cls: &Bound<'_, PyType>,
+        skill_markdown: Vec<u8>,
+        resources: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let resources = resources_from_py(resources)?;
+        SkillData::from_bundle(&skill_markdown, resources)
+            .map(Self::from_data)
+            .map_err(bundle_validation_py_err)
     }
 
     #[classmethod]

@@ -17,6 +17,14 @@ if TYPE_CHECKING:
 ResourceKind: TypeAlias = Literal["script", "reference", "asset", "other"]
 
 
+class SkillBundleError(ValueError):
+    """Raised when :meth:`Skill.from_bundle` receives an invalid bundle."""
+
+    code: str
+    path: str
+    field: str | None
+
+
 @dataclass(frozen=True)
 class SkillResource:
     relative_path: PurePosixPath

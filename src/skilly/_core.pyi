@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from os import PathLike
 from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol, TypeAlias, TypedDict
@@ -58,6 +59,12 @@ class Skill:
         package_version: str | None = ...,
         package_ecosystem: str | None = ...,
         file_system: FileSystem | None = ...,
+    ) -> Skill: ...
+    @classmethod
+    def from_bundle(
+        cls,
+        skill_markdown: bytes,
+        resources: Sequence[SkillResourceLike] | None = ...,
     ) -> Skill: ...
     @classmethod
     def from_file(
