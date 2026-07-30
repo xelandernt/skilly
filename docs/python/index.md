@@ -51,7 +51,7 @@ from skilly.skillsmp import (
 ## Architecture
 
 -   **`Skill`** — a Rust-backed domain object representing a skill with its
-    metadata, content, and resources.
+    metadata and file contents.
 -   **`SkillRepository`** — stateful orchestrator wrapping a directory and
     project settings.
 -   **Discovery functions** — lightweight stateless readers for one-shot use.

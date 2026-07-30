@@ -299,11 +299,11 @@ fn optional_string_attr(value: &Bound<'_, PyAny>, name: &str) -> PyResult<Option
 }
 
 fn resource_from_py(value: &Bound<'_, PyAny>) -> PyResult<SkillResourceData> {
-    let content: Vec<u8> = value.getattr("content")?.extract()?;
+    let raw: Vec<u8> = value.getattr("raw")?.extract()?;
     Ok(SkillResourceData {
         relative_path: relative_path_arg(&value.getattr("relative_path")?)?,
         kind: value.getattr("kind")?.extract()?,
-        content,
+        raw,
     })
 }
 
@@ -324,7 +324,7 @@ fn py_resource(py: Python<'_>, value: &SkillResourceData) -> PyResult<Py<PyAny>>
         py_pure_posix_path(py, &value.relative_path)?,
     )?;
     kwargs.set_item("kind", value.kind.clone())?;
-    kwargs.set_item("content", PyBytes::new(py, &value.content))?;
+    kwargs.set_item("raw", PyBytes::new(py, &value.raw))?;
     Ok(py
         .import("skilly.skills")?
         .getattr("SkillResource")?
@@ -654,7 +654,7 @@ impl PySkill {
         name,
         description,
         path=None,
-        content="",
+        body="",
         license=None,
         compatibility=None,
         metadata=None,
@@ -671,7 +671,7 @@ impl PySkill {
         name: String,
         description: String,
         path: Option<&Bound<'_, PyAny>>,
-        content: &str,
+        body: &str,
         license: Option<String>,
         compatibility: Option<String>,
         metadata: Option<BTreeMap<String, String>>,
@@ -683,29 +683,30 @@ impl PySkill {
         package_version: Option<String>,
         package_ecosystem: Option<String>,
     ) -> PyResult<Self> {
-        Ok(Self {
-            inner: SkillData {
-                name,
-                description,
-                path: optional_path_arg(path)?,
-                content: content.to_string(),
-                license,
-                compatibility,
-                metadata: metadata.unwrap_or_default(),
-                allowed_tools,
-                resources: resources_from_py(resources)?,
-                resource_warnings: resource_warnings.unwrap_or_default(),
-                source: source.unwrap_or_else(|| core::SKILLY_UNKNOWN_SOURCE.to_string()),
-                package_name,
-                package_version,
-                repository_provider: None,
-                repository_url: None,
-                repository_commit_sha: None,
-                package_ecosystem: package_ecosystem
-                    .as_deref()
-                    .map(core::PackageEcosystem::new),
-            },
-        })
+        let mut inner = SkillData {
+            name,
+            description,
+            path: optional_path_arg(path)?,
+            body: body.to_string(),
+            raw: Vec::new(),
+            license,
+            compatibility,
+            metadata: metadata.unwrap_or_default(),
+            allowed_tools,
+            resources: resources_from_py(resources)?,
+            resource_warnings: resource_warnings.unwrap_or_default(),
+            source: source.unwrap_or_else(|| core::SKILLY_UNKNOWN_SOURCE.to_string()),
+            package_name,
+            package_version,
+            repository_provider: None,
+            repository_url: None,
+            repository_commit_sha: None,
+            package_ecosystem: package_ecosystem
+                .as_deref()
+                .map(core::PackageEcosystem::new),
+        };
+        inner.raw = inner.render(None).into_bytes();
+        Ok(Self { inner })
     }
 
     #[classmethod]
@@ -822,8 +823,13 @@ impl PySkill {
     }
 
     #[getter]
-    fn content(&self) -> String {
-        self.inner.content.clone()
+    fn text(&self) -> String {
+        self.inner.render(None)
+    }
+
+    #[getter]
+    fn raw<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.inner.raw)
     }
 
     #[getter]
@@ -956,6 +962,10 @@ impl PySkill {
         self.inner.can_update()
     }
 
+    fn is_text(&self) -> bool {
+        std::str::from_utf8(&self.inner.raw).is_ok()
+    }
+
     fn matches(&self, other: &PySkill) -> bool {
         self.inner.matches(&other.inner)
     }
@@ -966,11 +976,6 @@ impl PySkill {
 
     fn managed_metadata(&self) -> BTreeMap<String, String> {
         self.inner.managed_metadata()
-    }
-
-    #[pyo3(signature = (metadata=None))]
-    fn render(&self, metadata: Option<BTreeMap<String, String>>) -> String {
-        self.inner.render(metadata.as_ref())
     }
 
     #[pyo3(signature = (directory=None, skill_name=None, overwrite=false, file_system=None))]
@@ -1147,12 +1152,6 @@ fn skill_from_dir_py(
         package_ecosystem,
         file_system,
     )
-}
-
-#[pyfunction]
-#[pyo3(name = "skill_render", signature = (skill, metadata=None))]
-fn skill_render_py(skill: &PySkill, metadata: Option<BTreeMap<String, String>>) -> String {
-    skill.inner.render(metadata.as_ref())
 }
 
 #[pyfunction]
@@ -1640,7 +1639,6 @@ fn python_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(skill_from_text_py, m)?)?;
     m.add_function(wrap_pyfunction!(skill_from_file_py, m)?)?;
     m.add_function(wrap_pyfunction!(skill_from_dir_py, m)?)?;
-    m.add_function(wrap_pyfunction!(skill_render_py, m)?)?;
     m.add_function(wrap_pyfunction!(skill_install_to_py, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_skills_directory_py, m)?)?;
     m.add_function(wrap_pyfunction!(discover_installed_skills_py, m)?)?;

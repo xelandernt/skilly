@@ -44,7 +44,7 @@ repository.require("code-review")
 
 # Install a skill
 repository.install(
-    Skill(name="deploy-check", description="...", content="#..."),
+    Skill(name="deploy-check", description="...", body="#..."),
     overwrite=False,
 )
 

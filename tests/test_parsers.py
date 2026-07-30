@@ -3,7 +3,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from skilly.repository import SkillRepository
-from skilly import PythonSource
+from skilly import PythonSource, parse_repository_location
 from skilly.skills import Skill, SkillResource, discover_package_source_skills
 from helpers import make_venv, write_distribution, write_skill
 
@@ -24,7 +24,7 @@ Use the parser.
     assert skill.name == "parser-skill"
     assert skill.description.startswith("Parse structured input.")
     assert skill.metadata == {"owner": "docs"}
-    assert skill.content == "Use the parser."
+    assert skill.text.endswith("Use the parser.")
     assert skill.path == Path("/workspace/parser-skill")
     assert skill.skill_markdown_path == Path("/workspace/parser-skill/SKILL.md")
 
@@ -47,12 +47,40 @@ In-memory instructions.
     assert skill.package_reference() is None
 
 
+def test_skill_raw_preserves_the_original_input() -> None:
+    source = """---
+description: Preserve this frontmatter ordering exactly.
+name: source-skill
+---
+Source instructions.\n"""
+
+    skill = Skill.from_text(source)
+
+    assert skill.raw == source.encode()
+    assert skill.is_text()
+    assert skill.text.startswith("---\nname: source-skill\n")
+
+
+def test_file_content_api_replaces_render_and_content() -> None:
+    assert not hasattr(Skill, "content")
+    assert not hasattr(Skill, "render")
+    assert not hasattr(SkillResource, "content")
+
+
+def test_parse_repository_location_uses_the_documented_github_provider() -> None:
+    location = parse_repository_location(
+        "https://github.com/xelandernt/skills/tree/main/skills/fastapi-backend-architecture"
+    )
+
+    assert location.provider == "github"
+
+
 def test_skill_constructor_accepts_optional_path_and_installs(tmp_path: Path) -> None:
     skill = Skill(
         name="generated-skill",
         description="Use when creating a skill in memory.",
         path=None,
-        content="Generated instructions.\n",
+        body="Generated instructions.\n",
     )
 
     installed = skill.install_to(tmp_path, skill_name="saved-skill")
@@ -61,11 +89,11 @@ def test_skill_constructor_accepts_optional_path_and_installs(tmp_path: Path) ->
     assert skill.directory is None
     assert skill.directory_name == "generated-skill"
     assert installed.path == (tmp_path / "saved-skill").resolve()
-    assert (
-        installed.skill_markdown_path
-        == (tmp_path / "saved-skill" / "SKILL.md").resolve()
-    )
-    assert installed.content == "Generated instructions."
+    skill_markdown_path = installed.skill_markdown_path
+    assert skill_markdown_path == (tmp_path / "saved-skill" / "SKILL.md").resolve()
+    assert skill_markdown_path is not None
+    assert installed.raw == skill_markdown_path.read_bytes()
+    assert installed.text.endswith("Generated instructions.")
 
 
 def test_skill_from_text_ignores_unknown_fields() -> None:
@@ -82,7 +110,7 @@ Relaxed instructions.
 
     assert skill.name == "relaxed-skill"
     assert skill.description == "Use when parsing should be permissive."
-    assert skill.content == "Relaxed instructions."
+    assert skill.text.endswith("Relaxed instructions.")
 
 
 def test_skill_from_text_parses_literal_block_scalars() -> None:
@@ -122,7 +150,7 @@ Relaxed instructions.
         "Padroniza composição FastAPI: app factory, lifespan e dependency injection."
     )
     assert skill.metadata == {"owner": "docs: platform"}
-    assert skill.content == "Relaxed instructions."
+    assert skill.text.endswith("Relaxed instructions.")
 
 
 def test_skill_from_text_supports_nested_yaml_metadata() -> None:
@@ -159,7 +187,7 @@ Use this skill carefully.
         "version": "1.0.1",
         "requiredCliVersion": "1.0.9",
     }
-    assert skill.content == "Use this skill carefully."
+    assert skill.text.endswith("Use this skill carefully.")
 
 
 def test_skill_from_dir_reads_skill_md(tmp_path: Path) -> None:
@@ -179,7 +207,7 @@ Directory based instructions.
     assert skill.name == "folder-skill"
     assert skill.path == skill_dir.resolve()
     assert skill.skill_markdown_path == (skill_dir / "SKILL.md").resolve()
-    assert skill.content == "Directory based instructions."
+    assert skill.text.endswith("Directory based instructions.")
 
 
 def test_skill_from_dir_collects_bundled_resources(tmp_path: Path) -> None:
@@ -213,12 +241,14 @@ Directory based instructions.
         "script",
         "other",
     ]
-    assert [resource.content for resource in skill.resources] == [
+    assert [resource.raw for resource in skill.resources] == [
         b"template\n",
         b"# Reference\n",
         b"print('extract')\n",
         b"{}\n",
     ]
+    assert all(resource.is_text() for resource in skill.resources)
+    assert skill.resources[0].text == "template\n"
     assert [resource.relative_path.as_posix() for resource in skill.scripts] == [
         "scripts/extract.py"
     ]
@@ -275,12 +305,20 @@ Use this skill carefully.
     assert skill.allowed_tools == "Bash(git:*) Read"
     assert skill.path == skill_path.parent.resolve()
     assert skill.skill_markdown_path == skill_path.resolve()
-    assert "Use this skill carefully." in skill.content
+    assert "Use this skill carefully." in skill.text
     assert [resource.relative_path.as_posix() for resource in skill.resources] == [
         "assets/form.json",
         "references/REFERENCE.md",
         "scripts/extract.py",
     ]
+
+
+def test_resource_text_rejects_binary_data() -> None:
+    resource = SkillResource(PurePosixPath("assets/data.bin"), "asset", b"\xff")
+
+    assert resource.is_text() is False
+    with pytest.raises(UnicodeDecodeError):
+        _ = resource.text
 
 
 def test_discover_venv_keeps_skills_with_unknown_fields(tmp_path: Path) -> None:

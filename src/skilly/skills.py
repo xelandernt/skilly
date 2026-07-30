@@ -21,7 +21,18 @@ ResourceKind: TypeAlias = Literal["script", "reference", "asset", "other"]
 class SkillResource:
     relative_path: PurePosixPath
     kind: ResourceKind
-    content: bytes = b""
+    raw: bytes = b""
+
+    @property
+    def text(self) -> str:
+        return self.raw.decode("utf-8")
+
+    def is_text(self) -> bool:
+        try:
+            self.raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+        return True
 
 
 @dataclass(frozen=True)

@@ -230,7 +230,7 @@ repository.install(
     Skill(
         name="code-review",
         description="Review code for correctness and maintainability.",
-        content="# Instructions\n\nReview the proposed change.",
+        body="# Instructions\n\nReview the proposed change.",
     )
 )
 

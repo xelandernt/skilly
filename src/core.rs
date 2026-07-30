@@ -151,13 +151,14 @@ pub struct SkillResourceData {
     pub relative_path: String,
     pub kind: String,
     #[serde(default, with = "serde_bytes")]
-    pub content: Vec<u8>,
+    pub raw: Vec<u8>,
 }
 
 /// A Git hosting provider supported by repository-backed skill discovery.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum RepositoryProvider {
+    #[serde(rename = "github")]
     GitHub,
     BitbucketCloud,
     BitbucketDataCenter,
@@ -267,7 +268,10 @@ pub struct SkillData {
     pub description: String,
     pub path: Option<String>,
     #[serde(default)]
-    pub content: String,
+    pub body: String,
+    /// Exact source bytes of the root `SKILL.md` document.
+    #[serde(default, with = "serde_bytes")]
+    pub raw: Vec<u8>,
     pub license: Option<String>,
     pub compatibility: Option<String>,
     #[serde(default)]
@@ -1051,7 +1055,7 @@ fn collect_resource_files_in(
                 resources.push(SkillResourceData {
                     relative_path,
                     kind,
-                    content,
+                    raw: content,
                 });
             }
             Err(error) => warnings.push(format!(
@@ -1264,7 +1268,7 @@ impl SkillData {
         )?;
         for resource in &self.resources {
             let destination = root.join(PathBuf::from(&resource.relative_path));
-            write_file_in(file_system, &destination, &resource.content, overwrite)?;
+            write_file_in(file_system, &destination, &resource.raw, overwrite)?;
         }
         Self::from_dir_with_source_metadata_in(file_system, root, &SkillSourceMetadata::default())
     }
@@ -1294,7 +1298,8 @@ impl SkillData {
             path: skill_directory
                 .as_ref()
                 .map(|value| value.to_string_lossy().to_string()),
-            content: body,
+            body,
+            raw: text.as_bytes().to_vec(),
             license: optional_string_field(&parsed, "license"),
             compatibility: optional_string_field(&parsed, "compatibility"),
             metadata,
@@ -1393,7 +1398,7 @@ impl SkillData {
 
         let frontmatter = self.build_frontmatter_lines(&combined_metadata);
         let total_estimate =
-            frontmatter.iter().map(|s| s.len() + 1).sum::<usize>() + self.content.len() + 8;
+            frontmatter.iter().map(|s| s.len() + 1).sum::<usize>() + self.body.len() + 8;
         let mut output = String::with_capacity(total_estimate);
         output.push_str("---\n");
         for line in &frontmatter {
@@ -1401,8 +1406,8 @@ impl SkillData {
             output.push('\n');
         }
         output.push_str("---\n");
-        if !self.content.is_empty() {
-            output.push_str(&self.content);
+        if !self.body.is_empty() {
+            output.push_str(&self.body);
         }
         output
     }
@@ -2934,7 +2939,7 @@ fn build_skill_from_repository_files(
             Some(SkillResourceData {
                 relative_path: relative_path.clone(),
                 kind: classify_resource_kind(&relative_path),
-                content: blob.content.clone(),
+                raw: blob.content.clone(),
             })
         })
         .collect();
@@ -3149,7 +3154,7 @@ pub fn load_skills_from_archive(
             skill_resources.push(SkillResourceData {
                 relative_path: rel_path.clone(),
                 kind: classify_resource_kind(rel_path),
-                content: content_bytes.clone(),
+                raw: content_bytes.clone(),
             });
         }
         skill_resources.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
@@ -3494,9 +3499,10 @@ pub fn repository_versions_match(installed: &SkillData, available: &SkillData) -
 mod tests {
     use super::{
         NamedSelection, PACKAGE_ECOSYSTEM_NODE, PACKAGE_ECOSYSTEM_PYTHON, PackageEcosystem,
-        ProjectDependencyOrigin, ScanDependencySelection, SkillData, SkillSourceMetadata,
-        parse_node_dependency_entries, parse_project_requirement_entries,
-        parse_project_requirements, validate_node_package_name,
+        ProjectDependencyOrigin, RepositoryFileBlobData, RepositoryLocationData,
+        RepositorySnapshotData, RepositorySnapshotFetcher, ScanDependencySelection, SkillData,
+        SkillSourceMetadata, discover_repository_skills, parse_node_dependency_entries,
+        parse_project_requirement_entries, parse_project_requirements, validate_node_package_name,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -3763,7 +3769,8 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             name: name.to_string(),
             description: String::new(),
             path: None,
-            content: String::new(),
+            body: String::new(),
+            raw: Vec::new(),
             license: None,
             compatibility: None,
             metadata: BTreeMap::new(),
@@ -3929,7 +3936,8 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             name: "local-skill".to_string(),
             description: "Local skill".to_string(),
             path: None,
-            content: String::new(),
+            body: String::new(),
+            raw: Vec::new(),
             license: None,
             compatibility: None,
             metadata: BTreeMap::new(),
@@ -4187,7 +4195,7 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
         assert_eq!(skills[0].name, "my-skill");
         assert_eq!(skills[0].resources.len(), 1);
         assert_eq!(skills[0].resources[0].relative_path, "scripts/run.py");
-        assert_eq!(skills[0].resources[0].content, b"print('hello')\n");
+        assert_eq!(skills[0].resources[0].raw, b"print('hello')\n");
     }
 
     #[test]
@@ -4232,7 +4240,7 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
         assert!(warnings.is_empty());
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].resources.len(), 1);
-        assert_eq!(skills[0].resources[0].content, vec![0x00, 0xFF, 0xFE, 0xFD]);
+        assert_eq!(skills[0].resources[0].raw, vec![0x00, 0xFF, 0xFE, 0xFD]);
     }
 
     #[test]
@@ -4293,6 +4301,60 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
         assert_eq!(cloud.namespace, "example");
         assert_eq!(cloud.r#ref.as_deref(), Some("main"));
         assert_eq!(cloud.path, "review");
+    }
+
+    struct StaticRepositorySnapshotFetcher {
+        snapshot: RepositorySnapshotData,
+    }
+
+    impl RepositorySnapshotFetcher for StaticRepositorySnapshotFetcher {
+        fn fetch_repository_snapshot(
+            &self,
+            _location: &RepositoryLocationData,
+        ) -> anyhow::Result<RepositorySnapshotData> {
+            Ok(self.snapshot.clone())
+        }
+    }
+
+    #[test]
+    fn repository_discovery_preserves_exact_skill_raw_bytes() {
+        let skill_markdown = b"---\ndescription: Preserve source bytes exactly.\nname: remote-skill\n---\nSource instructions.\n";
+        let mut files = BTreeMap::new();
+        files.insert(
+            "skills/remote-skill/SKILL.md".to_string(),
+            RepositoryFileBlobData {
+                path: "skills/remote-skill/SKILL.md".to_string(),
+                content: skill_markdown.to_vec(),
+                commit_sha: Some("1234567".to_string()),
+            },
+        );
+        files.insert(
+            "skills/remote-skill/scripts/run.py".to_string(),
+            RepositoryFileBlobData {
+                path: "skills/remote-skill/scripts/run.py".to_string(),
+                content: b"print('ok')\n".to_vec(),
+                commit_sha: Some("1234567".to_string()),
+            },
+        );
+        let fetcher = StaticRepositorySnapshotFetcher {
+            snapshot: RepositorySnapshotData {
+                ref_name: "main".to_string(),
+                commit_sha: "1234567".to_string(),
+                files,
+            },
+        };
+
+        let discovered = discover_repository_skills(
+            &fetcher,
+            "https://github.com/example/skills/tree/main/skills/remote-skill",
+            None,
+        )
+        .expect("repository discovery should succeed");
+
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].raw, skill_markdown);
+        assert_ne!(discovered[0].render(None).as_bytes(), skill_markdown);
+        assert_eq!(discovered[0].resources[0].raw, b"print('ok')\n");
     }
 
     #[test]

@@ -326,9 +326,10 @@ fn run_create(directory: &Path, mut options: CreateOptions) -> Result<()> {
         name: name.clone(),
         description,
         path: None,
-        content: options
+        body: options
             .instructions
             .unwrap_or_else(|| DEFAULT_CREATE_INSTRUCTIONS.to_string()),
+        raw: Vec::new(),
         license: options.license,
         compatibility: options.compatibility,
         metadata: parse_metadata(&options.metadata)?,
@@ -2011,7 +2012,7 @@ fn run_util_venv(path: &Path, detailed: bool) -> Result<()> {
         if detailed {
             println!("\tResources:");
             for resource in skill.resources {
-                let content_length = String::from_utf8_lossy(&resource.content).lines().count();
+                let content_length = String::from_utf8_lossy(&resource.raw).lines().count();
                 println!(
                     "\t\t{} [{}]: {} lines.",
                     resource.relative_path, resource.kind, content_length
@@ -2682,7 +2683,8 @@ mod tests {
             name: "python".to_string(),
             description: "Installed skill".to_string(),
             path: Some("/tmp/python".to_string()),
-            content: "Body".to_string(),
+            body: "Body".to_string(),
+            raw: Vec::new(),
             license: None,
             compatibility: None,
             metadata: BTreeMap::new(),
@@ -2705,7 +2707,8 @@ mod tests {
                 name: "python".to_string(),
                 description: "Available skill".to_string(),
                 path: None,
-                content: "Body".to_string(),
+                body: "Body".to_string(),
+                raw: Vec::new(),
                 license: None,
                 compatibility: None,
                 metadata: BTreeMap::new(),
@@ -3210,7 +3213,8 @@ mod tests {
                     name: "python".to_string(),
                     description: "Downloadable skill".to_string(),
                     path: None,
-                    content: "Body".to_string(),
+                    body: "Body".to_string(),
+                    raw: Vec::new(),
                     license: None,
                     compatibility: None,
                     metadata: BTreeMap::new(),
@@ -3319,14 +3323,14 @@ mod tests {
         SkillResourceData {
             relative_path: path.to_string(),
             kind: "other".to_string(),
-            content: content.as_bytes().to_vec(),
+            raw: content.as_bytes().to_vec(),
         }
     }
 
     #[test]
     fn file_tree_always_has_skill_md_first() {
         let skill = SkillData {
-            content: "# Title\n\nBody".to_string(),
+            body: "# Title\n\nBody".to_string(),
             resources: vec![],
             ..installed_skill(None, None)
         };
@@ -3334,7 +3338,7 @@ mod tests {
         let tree = build_file_tree(&skill);
         assert_eq!(tree.len(), 1);
         assert_eq!(tree[0].name, "SKILL.md");
-        assert_eq!(tree[0].content, b"# Title\n\nBody");
+        assert_eq!(tree[0].content, skill.render(None).as_bytes());
         assert_eq!(tree[0].depth, 0);
         assert!(!tree[0].is_dir);
     }
@@ -3342,7 +3346,7 @@ mod tests {
     #[test]
     fn file_tree_builds_flat_resources() {
         let skill = SkillData {
-            content: "Body".to_string(),
+            body: "Body".to_string(),
             resources: vec![
                 resource("README.md", "readme content"),
                 resource("setup.py", "setup content"),
@@ -3367,7 +3371,7 @@ mod tests {
     #[test]
     fn file_tree_creates_directory_entries() {
         let skill = SkillData {
-            content: "Body".to_string(),
+            body: "Body".to_string(),
             resources: vec![
                 resource("scripts/run.py", "print('hello')"),
                 resource("references/api.md", "# API"),
@@ -3405,7 +3409,7 @@ mod tests {
     #[test]
     fn file_tree_handles_nested_directories() {
         let skill = SkillData {
-            content: "Body".to_string(),
+            body: "Body".to_string(),
             resources: vec![
                 resource("assets/icons/logo.svg", "<svg></svg>"),
                 resource("scripts/sub/helper.py", "# helper"),
@@ -3436,7 +3440,7 @@ mod tests {
     #[test]
     fn file_tree_multiple_dirs_sorted() {
         let skill = SkillData {
-            content: "Body".to_string(),
+            body: "Body".to_string(),
             resources: vec![
                 resource("z/back/file.txt", "back"),
                 resource("a/front/file.txt", "front"),
@@ -3456,7 +3460,7 @@ mod tests {
     #[test]
     fn compute_visible_shows_all_when_nothing_collapsed() {
         let skill = SkillData {
-            content: "Body".to_string(),
+            body: "Body".to_string(),
             resources: vec![
                 resource("scripts/run.py", "print('hello')"),
                 resource("references/api.md", "# API"),
@@ -3474,7 +3478,7 @@ mod tests {
     #[test]
     fn compute_visible_hides_children_of_collapsed_dir() {
         let skill = SkillData {
-            content: "Body".to_string(),
+            body: "Body".to_string(),
             resources: vec![
                 resource("scripts/run.py", "print('hello')"),
                 resource("scripts/helper.py", "# helper"),
@@ -3508,7 +3512,7 @@ mod tests {
     #[test]
     fn compute_visible_hides_nested_children() {
         let skill = SkillData {
-            content: "Body".to_string(),
+            body: "Body".to_string(),
             resources: vec![
                 resource("a/b/c/file.txt", "deep"),
                 resource("a/other.txt", "other"),
@@ -3539,7 +3543,7 @@ mod tests {
     #[test]
     fn file_filter_matches_filenames_case_insensitively_and_shows_parents() {
         let skill = SkillData {
-            content: "Body".to_string(),
+            body: "Body".to_string(),
             resources: vec![
                 resource("scripts/sub/helper.py", "# helper"),
                 resource("scripts/run.py", "# run"),
@@ -3566,7 +3570,7 @@ mod tests {
     #[test]
     fn file_filter_matches_names_not_directory_paths() {
         let skill = SkillData {
-            content: "Body".to_string(),
+            body: "Body".to_string(),
             resources: vec![resource("scripts/run.py", "# run")],
             ..installed_skill(None, None)
         };
@@ -3578,7 +3582,7 @@ mod tests {
     #[test]
     fn empty_file_filter_preserves_collapsed_directories() {
         let skill = SkillData {
-            content: "Body".to_string(),
+            body: "Body".to_string(),
             resources: vec![resource("scripts/run.py", "# run")],
             ..installed_skill(None, None)
         };
@@ -3597,7 +3601,7 @@ mod tests {
         // Tree: 0=SKILL.md, 1=references/, 2=api.md, 3=scripts/, 4=run.py
         // (alphabetical: references/ before scripts/)
         let skill = SkillData {
-            content: "B".to_string(),
+            body: "B".to_string(),
             resources: vec![
                 resource("scripts/run.py", "x"),
                 resource("references/api.md", "x"),
@@ -3634,7 +3638,7 @@ mod tests {
     #[test]
     fn file_viewer_move_selection_handles_current_becoming_hidden() {
         let skill = SkillData {
-            content: "B".to_string(),
+            body: "B".to_string(),
             resources: vec![
                 resource("scripts/run.py", "x"),
                 resource("references/api.md", "x"),
