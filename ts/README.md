@@ -202,8 +202,8 @@ uvx skilly download https://git.example.com/bitbucket/projects/ENG/repos/skills 
 ## Python API
 
 Full [Python API reference](https://xelandernt.github.io/skilly/python/) with
-`SkillRepository`, discovery functions, source types, SkillsMP client, and
-custom filesystem protocol.
+`SkillRepository`, local discovery functions, caller-owned repository discovery,
+source types, SkillsMP client, and custom filesystem protocol.
 
 ```python
 from pathlib import Path
