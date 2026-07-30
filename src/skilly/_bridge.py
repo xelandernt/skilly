@@ -139,10 +139,6 @@ def skill_from_dir(
     )
 
 
-def skill_render(skill: Skill, metadata: dict[str, str] | None = None) -> str:
-    return _core.skill_render(skill, metadata)
-
-
 def skill_install_to(
     skill: Skill,
     directory: StrPath | None = None,

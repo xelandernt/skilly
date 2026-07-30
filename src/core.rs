@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value as YamlValue};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -151,13 +152,75 @@ pub struct SkillResourceData {
     pub relative_path: String,
     pub kind: String,
     #[serde(default, with = "serde_bytes")]
-    pub content: Vec<u8>,
+    pub raw: Vec<u8>,
 }
+
+/// A stable machine-readable reason why an in-memory skill bundle is invalid.
+#[cfg_attr(not(any(test, feature = "python-bindings")), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleValidationCode {
+    InvalidUtf8,
+    InvalidFrontmatter,
+    InvalidField,
+    InvalidResourcePath,
+    DuplicateResourcePath,
+}
+
+#[cfg_attr(not(any(test, feature = "python-bindings")), allow(dead_code))]
+impl BundleValidationCode {
+    /// Stable identifier exposed by the Python `SkillBundleError.code` attribute.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidUtf8 => "invalid_utf8",
+            Self::InvalidFrontmatter => "invalid_frontmatter",
+            Self::InvalidField => "invalid_field",
+            Self::InvalidResourcePath => "invalid_resource_path",
+            Self::DuplicateResourcePath => "duplicate_resource_path",
+        }
+    }
+}
+
+/// A validation failure returned when loading a skill bundle from memory.
+#[cfg_attr(not(any(test, feature = "python-bindings")), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundleValidationError {
+    pub code: BundleValidationCode,
+    pub path: String,
+    pub field: Option<String>,
+    pub message: String,
+}
+
+#[cfg_attr(not(any(test, feature = "python-bindings")), allow(dead_code))]
+impl BundleValidationError {
+    fn new(
+        code: BundleValidationCode,
+        path: impl Into<String>,
+        field: Option<&str>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            code,
+            path: path.into(),
+            field: field.map(str::to_string),
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for BundleValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for BundleValidationError {}
 
 /// A Git hosting provider supported by repository-backed skill discovery.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum RepositoryProvider {
+    #[serde(rename = "github")]
     GitHub,
     BitbucketCloud,
     BitbucketDataCenter,
@@ -267,7 +330,10 @@ pub struct SkillData {
     pub description: String,
     pub path: Option<String>,
     #[serde(default)]
-    pub content: String,
+    pub body: String,
+    /// Exact source bytes of the root `SKILL.md` document.
+    #[serde(default, with = "serde_bytes")]
+    pub raw: Vec<u8>,
     pub license: Option<String>,
     pub compatibility: Option<String>,
     #[serde(default)]
@@ -953,6 +1019,22 @@ fn required_string_field(mapping: &Mapping, key: &str) -> Result<String> {
     .ok_or_else(|| anyhow!("{key} must be a string"))
 }
 
+#[cfg_attr(not(any(test, feature = "python-bindings")), allow(dead_code))]
+fn required_bundle_string_field(
+    mapping: &Mapping,
+    key: &'static str,
+) -> std::result::Result<String, BundleValidationError> {
+    let value = mapping_get(mapping, key).and_then(yaml_scalar_to_string);
+    value.ok_or_else(|| {
+        BundleValidationError::new(
+            BundleValidationCode::InvalidField,
+            "SKILL.md",
+            Some(key),
+            format!("{key} must be a string"),
+        )
+    })
+}
+
 fn optional_string_field(mapping: &Mapping, key: &str) -> Option<String> {
     mapping_get(mapping, key).and_then(yaml_scalar_to_string)
 }
@@ -1051,7 +1133,7 @@ fn collect_resource_files_in(
                 resources.push(SkillResourceData {
                     relative_path,
                     kind,
-                    content,
+                    raw: content,
                 });
             }
             Err(error) => warnings.push(format!(
@@ -1264,7 +1346,7 @@ impl SkillData {
         )?;
         for resource in &self.resources {
             let destination = root.join(PathBuf::from(&resource.relative_path));
-            write_file_in(file_system, &destination, &resource.content, overwrite)?;
+            write_file_in(file_system, &destination, &resource.raw, overwrite)?;
         }
         Self::from_dir_with_source_metadata_in(file_system, root, &SkillSourceMetadata::default())
     }
@@ -1276,7 +1358,29 @@ impl SkillData {
     ) -> Result<Self> {
         let (frontmatter, body) = split_frontmatter(text)?;
         let parsed = parse_frontmatter(&frontmatter)?;
-        let metadata = frontmatter_metadata(&parsed);
+        let name = required_string_field(&parsed, "name")?;
+        let description = required_string_field(&parsed, "description")?;
+        Ok(Self::from_parsed_parts(
+            &parsed,
+            name,
+            description,
+            body,
+            text.as_bytes().to_vec(),
+            skill_directory,
+            source_metadata,
+        ))
+    }
+
+    fn from_parsed_parts(
+        parsed: &Mapping,
+        name: String,
+        description: String,
+        body: String,
+        raw: Vec<u8>,
+        skill_directory: Option<PathBuf>,
+        source_metadata: &SkillSourceMetadata,
+    ) -> Self {
+        let metadata = frontmatter_metadata(parsed);
         let mut source_metadata = source_metadata.clone();
         source_metadata.apply_missing_from_metadata(&metadata);
         let source = source_metadata.resolved_source(&metadata);
@@ -1288,17 +1392,18 @@ impl SkillData {
             }
         });
 
-        Ok(Self {
-            name: required_string_field(&parsed, "name")?,
-            description: required_string_field(&parsed, "description")?,
+        Self {
+            name,
+            description,
             path: skill_directory
                 .as_ref()
                 .map(|value| value.to_string_lossy().to_string()),
-            content: body,
-            license: optional_string_field(&parsed, "license"),
-            compatibility: optional_string_field(&parsed, "compatibility"),
+            body,
+            raw,
+            license: optional_string_field(parsed, "license"),
+            compatibility: optional_string_field(parsed, "compatibility"),
             metadata,
-            allowed_tools: optional_string_field(&parsed, "allowed-tools"),
+            allowed_tools: optional_string_field(parsed, "allowed-tools"),
             resources: Vec::new(),
             resource_warnings: Vec::new(),
             source,
@@ -1308,7 +1413,7 @@ impl SkillData {
             repository_url: source_metadata.repository_url.clone(),
             repository_commit_sha: source_metadata.repository_commit_sha.clone(),
             package_ecosystem,
-        })
+        }
     }
 
     /// Parse a skill from text content, with optional filesystem for resource discovery.
@@ -1337,6 +1442,109 @@ impl SkillData {
         source_metadata: &SkillSourceMetadata,
     ) -> Result<Self> {
         Self::from_text_in(&NATIVE_FILE_SYSTEM, text, path, source_metadata)
+    }
+
+    /// Load a complete skill bundle from its in-memory files without filesystem access.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BundleValidationError`] when `SKILL.md` is not valid UTF-8,
+    /// its frontmatter does not satisfy the supported skill rules, or a bundled
+    /// resource path is unsafe or duplicates another resource path.
+    #[cfg_attr(not(any(test, feature = "python-bindings")), allow(dead_code))]
+    pub fn from_bundle(
+        skill_markdown: &[u8],
+        resources: Vec<SkillResourceData>,
+    ) -> std::result::Result<Self, BundleValidationError> {
+        let text = std::str::from_utf8(skill_markdown).map_err(|error| {
+            BundleValidationError::new(
+                BundleValidationCode::InvalidUtf8,
+                "SKILL.md",
+                None,
+                format!("SKILL.md must be valid UTF-8: {error}"),
+            )
+        })?;
+        let (frontmatter, body) = split_frontmatter(text).map_err(|error| {
+            BundleValidationError::new(
+                BundleValidationCode::InvalidFrontmatter,
+                "SKILL.md",
+                None,
+                error.to_string(),
+            )
+        })?;
+        let parsed = parse_frontmatter(&frontmatter).map_err(|error| {
+            BundleValidationError::new(
+                BundleValidationCode::InvalidFrontmatter,
+                "SKILL.md",
+                None,
+                error.to_string(),
+            )
+        })?;
+        let name = required_bundle_string_field(&parsed, "name")?;
+        let description = required_bundle_string_field(&parsed, "description")?;
+        let mut skill = Self::from_parsed_parts(
+            &parsed,
+            name,
+            description,
+            body,
+            skill_markdown.to_vec(),
+            None,
+            &SkillSourceMetadata::default(),
+        );
+
+        if let Err(error) = validate_skill_name(&skill.name) {
+            return Err(BundleValidationError::new(
+                BundleValidationCode::InvalidField,
+                "SKILL.md",
+                Some("name"),
+                error.to_string(),
+            ));
+        }
+        if skill.description.is_empty() || skill.description.len() > MAX_DESCRIPTION_LENGTH {
+            return Err(BundleValidationError::new(
+                BundleValidationCode::InvalidField,
+                "SKILL.md",
+                Some("description"),
+                format!("skill description must contain 1-{MAX_DESCRIPTION_LENGTH} characters"),
+            ));
+        }
+        if skill
+            .compatibility
+            .as_ref()
+            .is_some_and(|value| value.is_empty() || value.len() > MAX_COMPATIBILITY_LENGTH)
+        {
+            return Err(BundleValidationError::new(
+                BundleValidationCode::InvalidField,
+                "SKILL.md",
+                Some("compatibility"),
+                format!(
+                    "skill compatibility must contain 1-{MAX_COMPATIBILITY_LENGTH} characters when provided"
+                ),
+            ));
+        }
+
+        let mut paths = BTreeSet::new();
+        for resource in &resources {
+            if let Err(error) = validate_resource_path(&resource.relative_path) {
+                return Err(BundleValidationError::new(
+                    BundleValidationCode::InvalidResourcePath,
+                    &resource.relative_path,
+                    None,
+                    error.to_string(),
+                ));
+            }
+            if !paths.insert(resource.relative_path.to_ascii_lowercase()) {
+                return Err(BundleValidationError::new(
+                    BundleValidationCode::DuplicateResourcePath,
+                    &resource.relative_path,
+                    None,
+                    format!("duplicate resource path: {}", resource.relative_path),
+                ));
+            }
+        }
+
+        skill.resources = resources;
+        Ok(skill)
     }
 
     /// Load a skill from a SKILL.md file via the native filesystem.
@@ -1393,7 +1601,7 @@ impl SkillData {
 
         let frontmatter = self.build_frontmatter_lines(&combined_metadata);
         let total_estimate =
-            frontmatter.iter().map(|s| s.len() + 1).sum::<usize>() + self.content.len() + 8;
+            frontmatter.iter().map(|s| s.len() + 1).sum::<usize>() + self.body.len() + 8;
         let mut output = String::with_capacity(total_estimate);
         output.push_str("---\n");
         for line in &frontmatter {
@@ -1401,8 +1609,8 @@ impl SkillData {
             output.push('\n');
         }
         output.push_str("---\n");
-        if !self.content.is_empty() {
-            output.push_str(&self.content);
+        if !self.body.is_empty() {
+            output.push_str(&self.body);
         }
         output
     }
@@ -2934,7 +3142,7 @@ fn build_skill_from_repository_files(
             Some(SkillResourceData {
                 relative_path: relative_path.clone(),
                 kind: classify_resource_kind(&relative_path),
-                content: blob.content.clone(),
+                raw: blob.content.clone(),
             })
         })
         .collect();
@@ -3149,7 +3357,7 @@ pub fn load_skills_from_archive(
             skill_resources.push(SkillResourceData {
                 relative_path: rel_path.clone(),
                 kind: classify_resource_kind(rel_path),
-                content: content_bytes.clone(),
+                raw: content_bytes.clone(),
             });
         }
         skill_resources.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
@@ -3493,8 +3701,10 @@ pub fn repository_versions_match(installed: &SkillData, available: &SkillData) -
 #[cfg(test)]
 mod tests {
     use super::{
-        NamedSelection, PACKAGE_ECOSYSTEM_NODE, PACKAGE_ECOSYSTEM_PYTHON, PackageEcosystem,
-        ProjectDependencyOrigin, ScanDependencySelection, SkillData, SkillSourceMetadata,
+        BundleValidationCode, NamedSelection, PACKAGE_ECOSYSTEM_NODE, PACKAGE_ECOSYSTEM_PYTHON,
+        PackageEcosystem, ProjectDependencyOrigin, RepositoryFileBlobData, RepositoryLocationData,
+        RepositorySnapshotData, RepositorySnapshotFetcher, ScanDependencySelection, SkillData,
+        SkillResourceData, SkillSourceMetadata, discover_repository_skills,
         parse_node_dependency_entries, parse_project_requirement_entries,
         parse_project_requirements, validate_node_package_name,
     };
@@ -3763,7 +3973,8 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             name: name.to_string(),
             description: String::new(),
             path: None,
-            content: String::new(),
+            body: String::new(),
+            raw: Vec::new(),
             license: None,
             compatibility: None,
             metadata: BTreeMap::new(),
@@ -3929,7 +4140,8 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             name: "local-skill".to_string(),
             description: "Local skill".to_string(),
             path: None,
-            content: String::new(),
+            body: String::new(),
+            raw: Vec::new(),
             license: None,
             compatibility: None,
             metadata: BTreeMap::new(),
@@ -4187,7 +4399,7 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
         assert_eq!(skills[0].name, "my-skill");
         assert_eq!(skills[0].resources.len(), 1);
         assert_eq!(skills[0].resources[0].relative_path, "scripts/run.py");
-        assert_eq!(skills[0].resources[0].content, b"print('hello')\n");
+        assert_eq!(skills[0].resources[0].raw, b"print('hello')\n");
     }
 
     #[test]
@@ -4232,7 +4444,47 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
         assert!(warnings.is_empty());
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].resources.len(), 1);
-        assert_eq!(skills[0].resources[0].content, vec![0x00, 0xFF, 0xFE, 0xFD]);
+        assert_eq!(skills[0].resources[0].raw, vec![0x00, 0xFF, 0xFE, 0xFD]);
+    }
+
+    #[test]
+    fn from_bundle_preserves_input_bytes_without_filesystem_access() {
+        let markdown =
+            b"---\ndescription: In-memory bundle.\nname: in-memory\n---\nUse the bundle.\n";
+        let resources = vec![SkillResourceData {
+            relative_path: "scripts/run.py".to_string(),
+            kind: "reference".to_string(),
+            raw: b"print('not executed')\n".to_vec(),
+        }];
+
+        let skill = SkillData::from_bundle(markdown, resources).expect("valid bundle");
+
+        assert_eq!(skill.raw, markdown);
+        assert_eq!(skill.resources[0].kind, "reference");
+        assert_eq!(skill.resources[0].raw, b"print('not executed')\n");
+    }
+
+    #[test]
+    fn from_bundle_reports_structured_validation_errors() {
+        let invalid_utf8 = SkillData::from_bundle(b"\xff", Vec::new()).expect_err("invalid UTF-8");
+        assert_eq!(invalid_utf8.code, BundleValidationCode::InvalidUtf8);
+        assert_eq!(invalid_utf8.code.as_str(), "invalid_utf8");
+        assert_eq!(invalid_utf8.path, "SKILL.md");
+
+        let unsafe_resource = SkillData::from_bundle(
+            b"---\nname: safe-name\ndescription: Safe description.\n---\n",
+            vec![SkillResourceData {
+                relative_path: "references/../secret.txt".to_string(),
+                kind: "other".to_string(),
+                raw: Vec::new(),
+            }],
+        )
+        .expect_err("unsafe resource path");
+        assert_eq!(
+            unsafe_resource.code,
+            BundleValidationCode::InvalidResourcePath
+        );
+        assert_eq!(unsafe_resource.path, "references/../secret.txt");
     }
 
     #[test]
@@ -4293,6 +4545,60 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
         assert_eq!(cloud.namespace, "example");
         assert_eq!(cloud.r#ref.as_deref(), Some("main"));
         assert_eq!(cloud.path, "review");
+    }
+
+    struct StaticRepositorySnapshotFetcher {
+        snapshot: RepositorySnapshotData,
+    }
+
+    impl RepositorySnapshotFetcher for StaticRepositorySnapshotFetcher {
+        fn fetch_repository_snapshot(
+            &self,
+            _location: &RepositoryLocationData,
+        ) -> anyhow::Result<RepositorySnapshotData> {
+            Ok(self.snapshot.clone())
+        }
+    }
+
+    #[test]
+    fn repository_discovery_preserves_exact_skill_raw_bytes() {
+        let skill_markdown = b"---\ndescription: Preserve source bytes exactly.\nname: remote-skill\n---\nSource instructions.\n";
+        let mut files = BTreeMap::new();
+        files.insert(
+            "skills/remote-skill/SKILL.md".to_string(),
+            RepositoryFileBlobData {
+                path: "skills/remote-skill/SKILL.md".to_string(),
+                content: skill_markdown.to_vec(),
+                commit_sha: Some("1234567".to_string()),
+            },
+        );
+        files.insert(
+            "skills/remote-skill/scripts/run.py".to_string(),
+            RepositoryFileBlobData {
+                path: "skills/remote-skill/scripts/run.py".to_string(),
+                content: b"print('ok')\n".to_vec(),
+                commit_sha: Some("1234567".to_string()),
+            },
+        );
+        let fetcher = StaticRepositorySnapshotFetcher {
+            snapshot: RepositorySnapshotData {
+                ref_name: "main".to_string(),
+                commit_sha: "1234567".to_string(),
+                files,
+            },
+        };
+
+        let discovered = discover_repository_skills(
+            &fetcher,
+            "https://github.com/example/skills/tree/main/skills/remote-skill",
+            None,
+        )
+        .expect("repository discovery should succeed");
+
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].raw, skill_markdown);
+        assert_ne!(discovered[0].render(None).as_bytes(), skill_markdown);
+        assert_eq!(discovered[0].resources[0].raw, b"print('ok')\n");
     }
 
     #[test]

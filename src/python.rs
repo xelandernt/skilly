@@ -1,8 +1,8 @@
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery};
 use crate::core::{
-    FileSystem, MavenSourceSettings, NamedSelection, NodeSourceSettings, ProjectEnvironment,
-    ProjectSource, PythonSourceSettings, RepositoryProvider, SkillData, SkillDirectoryFlavor,
-    SkillResourceData, SkillSourceMetadata,
+    BundleValidationError, FileSystem, MavenSourceSettings, NamedSelection, NodeSourceSettings,
+    ProjectEnvironment, ProjectSource, PythonSourceSettings, RepositoryProvider, SkillData,
+    SkillDirectoryFlavor, SkillResourceData, SkillSourceMetadata,
     available_dependency_skill_in as rust_available_dependency_skill,
     available_dependency_skill_with_file_system as rust_available_dependency_skill_with_file_system,
     default_skills_directory as rust_default_skills_directory,
@@ -24,7 +24,7 @@ use crate::{cli, core};
 use pyo3::class::basic::CompareOp;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PyModule, PyType};
+use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PyModule, PyTuple, PyType};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
@@ -32,6 +32,19 @@ use std::path::{Path, PathBuf};
 
 fn py_err<E: ToString>(error: E) -> PyErr {
     PyRuntimeError::new_err(error.to_string())
+}
+
+fn bundle_validation_py_err(error: BundleValidationError) -> PyErr {
+    match Python::with_gil(|py| -> PyResult<PyErr> {
+        let error_type = py.import("skilly.skills")?.getattr("SkillBundleError")?;
+        let instance = error_type.call1((error.message,))?;
+        instance.setattr("code", error.code.as_str())?;
+        instance.setattr("path", error.path)?;
+        instance.setattr("field", error.field)?;
+        Ok(PyErr::from_value(instance))
+    }) {
+        Ok(error) | Err(error) => error,
+    }
 }
 
 fn to_py_serialized<T: Serialize>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>> {
@@ -299,11 +312,11 @@ fn optional_string_attr(value: &Bound<'_, PyAny>, name: &str) -> PyResult<Option
 }
 
 fn resource_from_py(value: &Bound<'_, PyAny>) -> PyResult<SkillResourceData> {
-    let content: Vec<u8> = value.getattr("content")?.extract()?;
+    let raw: Vec<u8> = value.getattr("raw")?.extract()?;
     Ok(SkillResourceData {
         relative_path: relative_path_arg(&value.getattr("relative_path")?)?,
         kind: value.getattr("kind")?.extract()?,
-        content,
+        raw,
     })
 }
 
@@ -311,10 +324,19 @@ fn resources_from_py(value: Option<&Bound<'_, PyAny>>) -> PyResult<Vec<SkillReso
     let Some(value) = value else {
         return Ok(Vec::new());
     };
-    let list = value
-        .downcast::<PyList>()
-        .map_err(|_| PyTypeError::new_err("resources must be a list"))?;
-    list.iter().map(|item| resource_from_py(&item)).collect()
+    if let Ok(resources) = value.downcast::<PyList>() {
+        return resources
+            .iter()
+            .map(|item| resource_from_py(&item))
+            .collect();
+    }
+    if let Ok(resources) = value.downcast::<PyTuple>() {
+        return resources
+            .iter()
+            .map(|item| resource_from_py(&item))
+            .collect();
+    }
+    Err(PyTypeError::new_err("resources must be a list or tuple"))
 }
 
 fn py_resource(py: Python<'_>, value: &SkillResourceData) -> PyResult<Py<PyAny>> {
@@ -324,7 +346,7 @@ fn py_resource(py: Python<'_>, value: &SkillResourceData) -> PyResult<Py<PyAny>>
         py_pure_posix_path(py, &value.relative_path)?,
     )?;
     kwargs.set_item("kind", value.kind.clone())?;
-    kwargs.set_item("content", PyBytes::new(py, &value.content))?;
+    kwargs.set_item("raw", PyBytes::new(py, &value.raw))?;
     Ok(py
         .import("skilly.skills")?
         .getattr("SkillResource")?
@@ -654,7 +676,7 @@ impl PySkill {
         name,
         description,
         path=None,
-        content="",
+        body="",
         license=None,
         compatibility=None,
         metadata=None,
@@ -671,7 +693,7 @@ impl PySkill {
         name: String,
         description: String,
         path: Option<&Bound<'_, PyAny>>,
-        content: &str,
+        body: &str,
         license: Option<String>,
         compatibility: Option<String>,
         metadata: Option<BTreeMap<String, String>>,
@@ -683,29 +705,30 @@ impl PySkill {
         package_version: Option<String>,
         package_ecosystem: Option<String>,
     ) -> PyResult<Self> {
-        Ok(Self {
-            inner: SkillData {
-                name,
-                description,
-                path: optional_path_arg(path)?,
-                content: content.to_string(),
-                license,
-                compatibility,
-                metadata: metadata.unwrap_or_default(),
-                allowed_tools,
-                resources: resources_from_py(resources)?,
-                resource_warnings: resource_warnings.unwrap_or_default(),
-                source: source.unwrap_or_else(|| core::SKILLY_UNKNOWN_SOURCE.to_string()),
-                package_name,
-                package_version,
-                repository_provider: None,
-                repository_url: None,
-                repository_commit_sha: None,
-                package_ecosystem: package_ecosystem
-                    .as_deref()
-                    .map(core::PackageEcosystem::new),
-            },
-        })
+        let mut inner = SkillData {
+            name,
+            description,
+            path: optional_path_arg(path)?,
+            body: body.to_string(),
+            raw: Vec::new(),
+            license,
+            compatibility,
+            metadata: metadata.unwrap_or_default(),
+            allowed_tools,
+            resources: resources_from_py(resources)?,
+            resource_warnings: resource_warnings.unwrap_or_default(),
+            source: source.unwrap_or_else(|| core::SKILLY_UNKNOWN_SOURCE.to_string()),
+            package_name,
+            package_version,
+            repository_provider: None,
+            repository_url: None,
+            repository_commit_sha: None,
+            package_ecosystem: package_ecosystem
+                .as_deref()
+                .map(core::PackageEcosystem::new),
+        };
+        inner.raw = inner.render(None).into_bytes();
+        Ok(Self { inner })
     }
 
     #[classmethod]
@@ -738,6 +761,20 @@ impl PySkill {
             package_ecosystem,
             file_system,
         )
+    }
+
+    /// Load a complete skill bundle from in-memory bytes without filesystem access.
+    #[classmethod]
+    #[pyo3(signature = (skill_markdown, resources=None))]
+    fn from_bundle(
+        _cls: &Bound<'_, PyType>,
+        skill_markdown: Vec<u8>,
+        resources: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let resources = resources_from_py(resources)?;
+        SkillData::from_bundle(&skill_markdown, resources)
+            .map(Self::from_data)
+            .map_err(bundle_validation_py_err)
     }
 
     #[classmethod]
@@ -822,8 +859,13 @@ impl PySkill {
     }
 
     #[getter]
-    fn content(&self) -> String {
-        self.inner.content.clone()
+    fn text(&self) -> String {
+        self.inner.render(None)
+    }
+
+    #[getter]
+    fn raw<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.inner.raw)
     }
 
     #[getter]
@@ -956,6 +998,10 @@ impl PySkill {
         self.inner.can_update()
     }
 
+    fn is_text(&self) -> bool {
+        std::str::from_utf8(&self.inner.raw).is_ok()
+    }
+
     fn matches(&self, other: &PySkill) -> bool {
         self.inner.matches(&other.inner)
     }
@@ -966,11 +1012,6 @@ impl PySkill {
 
     fn managed_metadata(&self) -> BTreeMap<String, String> {
         self.inner.managed_metadata()
-    }
-
-    #[pyo3(signature = (metadata=None))]
-    fn render(&self, metadata: Option<BTreeMap<String, String>>) -> String {
-        self.inner.render(metadata.as_ref())
     }
 
     #[pyo3(signature = (directory=None, skill_name=None, overwrite=false, file_system=None))]
@@ -1147,12 +1188,6 @@ fn skill_from_dir_py(
         package_ecosystem,
         file_system,
     )
-}
-
-#[pyfunction]
-#[pyo3(name = "skill_render", signature = (skill, metadata=None))]
-fn skill_render_py(skill: &PySkill, metadata: Option<BTreeMap<String, String>>) -> String {
-    skill.inner.render(metadata.as_ref())
 }
 
 #[pyfunction]
@@ -1640,7 +1675,6 @@ fn python_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(skill_from_text_py, m)?)?;
     m.add_function(wrap_pyfunction!(skill_from_file_py, m)?)?;
     m.add_function(wrap_pyfunction!(skill_from_dir_py, m)?)?;
-    m.add_function(wrap_pyfunction!(skill_render_py, m)?)?;
     m.add_function(wrap_pyfunction!(skill_install_to_py, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_skills_directory_py, m)?)?;
     m.add_function(wrap_pyfunction!(discover_installed_skills_py, m)?)?;

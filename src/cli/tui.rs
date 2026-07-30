@@ -519,7 +519,8 @@ impl CreateFormState {
             name: self.name.text().trim().to_string(),
             description: self.description.text().trim().to_string(),
             path: None,
-            content: self.instructions.text(),
+            body: self.instructions.text(),
+            raw: Vec::new(),
             license: empty_to_none(self.license.text()),
             compatibility: empty_to_none(self.compatibility.text()),
             metadata: crate::cli::tui::parse_metadata(&self.metadata_lines())?,
@@ -563,7 +564,8 @@ impl CreateFormState {
             name: placeholder_if_empty(self.name.text(), "skill-name"),
             description: placeholder_if_empty(self.description.text(), "Skill description."),
             path: None,
-            content: self.instructions.text(),
+            body: self.instructions.text(),
+            raw: Vec::new(),
             license: empty_to_none(self.license.text()),
             compatibility: empty_to_none(self.compatibility.text()),
             metadata: crate::cli::tui::parse_metadata(&self.metadata_lines())?,
@@ -2730,10 +2732,15 @@ impl ScrollState {
 pub(crate) fn build_file_tree(skill: &SkillData) -> Vec<FileViewEntry> {
     let mut entries = Vec::new();
 
+    let skill_markdown = if skill.raw.is_empty() {
+        skill.render(None).into_bytes()
+    } else {
+        skill.raw.clone()
+    };
     entries.push(FileViewEntry {
         name: "SKILL.md".to_string(),
         relative_path: "SKILL.md".to_string(),
-        content: skill.content.clone().into_bytes(),
+        content: skill_markdown,
         depth: 0,
         is_dir: false,
     });
@@ -2771,7 +2778,7 @@ pub(crate) fn build_file_tree(skill: &SkillData) -> Vec<FileViewEntry> {
             entries.push(FileViewEntry {
                 name: parts[file_depth].to_string(),
                 relative_path: path.to_string(),
-                content: resource.content.clone(),
+                content: resource.raw.clone(),
                 depth: file_depth as u32,
                 is_dir: false,
             });

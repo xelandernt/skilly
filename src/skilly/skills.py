@@ -17,11 +17,30 @@ if TYPE_CHECKING:
 ResourceKind: TypeAlias = Literal["script", "reference", "asset", "other"]
 
 
+class SkillBundleError(ValueError):
+    """Raised when :meth:`Skill.from_bundle` receives an invalid bundle."""
+
+    code: str
+    path: str
+    field: str | None
+
+
 @dataclass(frozen=True)
 class SkillResource:
     relative_path: PurePosixPath
     kind: ResourceKind
-    content: bytes = b""
+    raw: bytes = b""
+
+    @property
+    def text(self) -> str:
+        return self.raw.decode("utf-8")
+
+    def is_text(self) -> bool:
+        try:
+            self.raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+        return True
 
 
 @dataclass(frozen=True)

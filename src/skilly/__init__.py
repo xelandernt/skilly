@@ -14,6 +14,7 @@ from skilly.skills import (
     Skill,
     RepositoryLocation,
     SkillResource,
+    SkillBundleError,
     discover_installed_skills,
     discover_package_source_skills,
     discover_repository_skills,
@@ -24,6 +25,7 @@ from skilly.skills import (
 __all__ = [
     "ResourceKind",
     "Skill",
+    "SkillBundleError",
     "RepositoryLocation",
     "SkillMatch",
     "SkillRepository",
