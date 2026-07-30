@@ -295,16 +295,6 @@ pub struct GitHubSkillLocationData {
     pub url: String,
 }
 
-#[cfg(feature = "python-bindings")]
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct GitHubContentItemData {
-    pub r#type: String,
-    pub name: String,
-    pub path: String,
-    pub commit_sha: Option<String>,
-}
-
 /// A single file blob retrieved from a GitHub repository snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GitHubFileBlobData {

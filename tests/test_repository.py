@@ -1,8 +1,10 @@
 import zipfile
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
+from skilly import RepositoryDiscoveryClient
 from skilly.repository import (
     MavenSource,
     NodeSource,
@@ -340,7 +342,7 @@ Body
 
 def test_repository_available_update_detects_repository_skill_update(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     installed = Skill.from_text(
         """---
@@ -371,12 +373,25 @@ Updated body
         path=tmp_path / "refreshed",
     )
 
+    class Transport:
+        def get(
+            self,
+            url: str,
+            *,
+            headers: Mapping[str, str],
+            params: Mapping[str, str],
+        ) -> bytes:
+            del url, headers, params
+            raise AssertionError("the native transport should not run in this test")
+
     monkeypatch.setattr(
-        "skilly.repository.discover_repository_skills",
-        lambda repository_url, *, provider=None, token=None: [refreshed],
+        "skilly.skills.bridge.discover_repository_skills",
+        lambda repository_url, *, provider=None, transport=None: [refreshed],
     )
 
-    update = SkillRepository().available_update(installed)
+    update = SkillRepository(
+        discovery_client=RepositoryDiscoveryClient(Transport())
+    ).available_update(installed)
 
     assert update == refreshed
 

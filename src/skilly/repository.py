@@ -13,9 +13,9 @@ from .constants import (
     SkillInstallStatus,
 )
 from .skills import (
+    RepositoryDiscoveryClient,
     Skill,
     discover_installed_skills,
-    discover_repository_skills,
     repository_versions_match,
 )
 
@@ -113,10 +113,12 @@ class SkillRepository:
         directory: Path = DEFAULT_SKILLS_PATH,
         project: ProjectSettings | None = None,
         file_system: FileSystem | None = None,
+        discovery_client: RepositoryDiscoveryClient | None = None,
     ) -> None:
         self.directory = directory
         self.project = project if project is not None else ProjectSettings.defaults()
         self._file_system = file_system
+        self._discovery_client = discovery_client
 
     def _directory(self, directory: Path | None) -> Path:
         return self.directory if directory is None else directory
@@ -280,7 +282,11 @@ class SkillRepository:
             installed_skill.repository_url is not None
             and installed_skill.repository_provider is not None
         ):
-            discovered = discover_repository_skills(
+            if self._discovery_client is None:
+                raise RuntimeError(
+                    "repository updates require a RepositoryDiscoveryClient"
+                )
+            discovered = self._discovery_client.discover(
                 installed_skill.repository_url,
                 provider=installed_skill.repository_provider,
             )

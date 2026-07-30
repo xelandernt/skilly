@@ -1,7 +1,8 @@
 # SkillsMP client
 
 The SkillsMP client provides a typed interface for searching the SkillsMP
-registry. Download a selected result with `discover_repository_skills()`.
+registry. Discover a selected repository through a caller-owned
+`RepositoryDiscoveryClient`.
 
 ```python
 from skilly.skillsmp import ClientSettings, SkillsMp, SkillsMpSearchQuery
@@ -39,10 +40,13 @@ result: SkillsMpSearchResult = client.search(
 # AI-powered search
 result: SkillsMpAiSearchResult = client.ai_search("code review skills")
 
-# Download through the provider-neutral repository API
-from skilly import discover_repository_skills
+# Discover through the provider-neutral repository API. The application
+# supplies the transport that enforces its network policy.
+from skilly import RepositoryDiscoveryClient
 
-skills = discover_repository_skills(result.data.skills[0].repository_url)
+skills = RepositoryDiscoveryClient(application_transport).discover(
+    result.data.skills[0].repository_url
+)
 ```
 
 ## AsyncSkillsMp

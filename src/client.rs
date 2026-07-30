@@ -1,8 +1,6 @@
 //! Blocking HTTP transport for SkillsMP search and repository snapshot fetching.
 
 use crate::config::ProviderCredential;
-#[cfg(feature = "python-bindings")]
-use crate::core::GitHubContentItemData;
 use crate::core::{
     GitHubFileBlobData, GitHubRepositorySnapshotData, GitHubSkillLocationData,
     GitHubSnapshotFetcher, MAX_ARCHIVE_CUMULATIVE_SIZE, MAX_ARCHIVE_ENTRIES,
@@ -10,10 +8,6 @@ use crate::core::{
     RepositoryProvider, RepositorySnapshotData, RepositorySnapshotFetcher,
 };
 use anyhow::{Context, Result, bail};
-#[cfg(feature = "python-bindings")]
-use base64::Engine;
-#[cfg(feature = "python-bindings")]
-use base64::engine::general_purpose::STANDARD;
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
@@ -272,27 +266,6 @@ pub struct SkillsMpAiSearchApiResponse {
     pub meta: Option<SkillsMpMeta>,
 }
 
-#[cfg(feature = "python-bindings")]
-#[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
-struct GitHubContentEntry {
-    r#type: String,
-    name: String,
-    path: String,
-    html_url: Option<String>,
-}
-
-#[cfg(feature = "python-bindings")]
-#[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
-struct GitHubFileContent {
-    path: String,
-    html_url: Option<String>,
-    size: Option<usize>,
-    encoding: Option<String>,
-    content: Option<String>,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 struct GitHubRepositoryInfo {
     default_branch: String,
@@ -343,6 +316,43 @@ struct BitbucketDataCenterCommit {
 pub struct SkillsMpClient {
     config: ClientConfig,
     client: Client,
+}
+
+/// Internal request boundary for repository discovery.
+///
+/// Provider discovery constructs each request once and delegates its execution
+/// through this boundary. Public Python callers supply the transport that owns
+/// network policy and response bounds.
+pub(crate) trait RepositoryHttpTransport {
+    fn get(&self, url: &str, headers: HeaderMap, params: &[(String, String)]) -> Result<Vec<u8>>;
+}
+
+struct ReqwestRepositoryHttpTransport<'a> {
+    client: &'a Client,
+}
+
+impl RepositoryHttpTransport for ReqwestRepositoryHttpTransport<'_> {
+    fn get(&self, url: &str, headers: HeaderMap, params: &[(String, String)]) -> Result<Vec<u8>> {
+        Ok(self
+            .client
+            .get(url)
+            .headers(headers)
+            .query(params)
+            .send()?
+            .error_for_status()?
+            .bytes()?
+            .to_vec())
+    }
+}
+
+fn repository_get_json<T: for<'de> Deserialize<'de>>(
+    transport: &dyn RepositoryHttpTransport,
+    url: &str,
+    headers: HeaderMap,
+    params: &[(String, String)],
+) -> Result<T> {
+    let body = transport.get(url, headers, params)?;
+    serde_json::from_slice(&body).context("repository response is not valid JSON")
 }
 
 impl SkillsMpClient {
@@ -415,32 +425,6 @@ impl SkillsMpClient {
         format!("{}{}", self.config.base_url().trim_end_matches('/'), path)
     }
 
-    #[cfg(feature = "python-bindings")]
-    #[allow(dead_code)]
-    fn github_ref_params(&self, location: &GitHubSkillLocationData) -> Vec<(String, String)> {
-        let mut params = Vec::new();
-        if let Some(reference) = location.r#ref.as_ref() {
-            params.push(("ref".to_string(), reference.clone()));
-        }
-        params
-    }
-
-    #[cfg(feature = "python-bindings")]
-    #[allow(dead_code)]
-    fn github_contents_url(&self, location: &GitHubSkillLocationData, path: &str) -> String {
-        let base = format!(
-            "{}/repos/{}/{}/contents",
-            self.config.github_api_base_url().trim_end_matches('/'),
-            location.owner,
-            location.repo
-        );
-        if path == "." || path.is_empty() {
-            base
-        } else {
-            format!("{base}/{path}")
-        }
-    }
-
     fn github_repo_url(&self, location: &GitHubSkillLocationData, suffix: &str) -> String {
         let base = format!(
             "{}/repos/{}/{}",
@@ -471,23 +455,6 @@ impl SkillsMpClient {
             .json::<T>()?)
     }
 
-    fn get_bytes(
-        &self,
-        url: &str,
-        headers: HeaderMap,
-        params: &[(String, String)],
-    ) -> Result<Vec<u8>> {
-        Ok(self
-            .client
-            .get(url)
-            .headers(headers)
-            .query(params)
-            .send()?
-            .error_for_status()?
-            .bytes()?
-            .to_vec())
-    }
-
     pub fn search(&self, query: &SkillsMpSearchQuery) -> Result<SkillsMpSearchApiResponse> {
         self.get_json(
             &self.skillsmp_url("/skills/search"),
@@ -506,52 +473,9 @@ impl SkillsMpClient {
         )
     }
 
-    #[cfg(feature = "python-bindings")]
-    #[allow(dead_code)]
-    pub fn fetch_github_directory(
+    fn resolve_github_ref_and_commit_sha_with(
         &self,
-        location: &GitHubSkillLocationData,
-        current_path: &str,
-    ) -> Result<Vec<GitHubContentItemData>> {
-        let entries = self.get_json::<Vec<GitHubContentEntry>>(
-            &self.github_contents_url(location, current_path),
-            self.github_headers()?,
-            &self.github_ref_params(location),
-        )?;
-        Ok(entries
-            .into_iter()
-            .map(|entry| GitHubContentItemData {
-                r#type: entry.r#type,
-                name: entry.name,
-                path: entry.path,
-                commit_sha: extract_commit_sha_from_html_url(entry.html_url.as_deref()),
-            })
-            .collect())
-    }
-
-    #[cfg(feature = "python-bindings")]
-    #[allow(dead_code)]
-    pub fn fetch_github_file(
-        &self,
-        location: &GitHubSkillLocationData,
-        path: &str,
-    ) -> Result<GitHubFileBlobData> {
-        let file = self.get_json::<GitHubFileContent>(
-            &self.github_contents_url(location, path),
-            self.github_headers()?,
-            &self.github_ref_params(location),
-        )?;
-        let content = decode_github_file_content(&file)?;
-        Ok(GitHubFileBlobData {
-            path: file.path,
-            size: file.size.unwrap_or(content.len()),
-            content,
-            commit_sha: extract_commit_sha_from_html_url(file.html_url.as_deref()),
-        })
-    }
-
-    pub fn resolve_github_ref_and_commit_sha(
-        &self,
+        transport: &dyn RepositoryHttpTransport,
         location: &GitHubSkillLocationData,
     ) -> Result<(String, String)> {
         if let Some(reference) = location.r#ref.as_ref()
@@ -563,7 +487,8 @@ impl SkillsMpClient {
         let reference = match location.r#ref.as_ref() {
             Some(reference) => reference.clone(),
             None => {
-                self.get_json::<GitHubRepositoryInfo>(
+                repository_get_json::<GitHubRepositoryInfo>(
+                    transport,
                     &self.github_repo_url(location, ""),
                     self.github_headers()?,
                     &[],
@@ -572,7 +497,8 @@ impl SkillsMpClient {
             }
         };
 
-        let commit = self.get_json::<GitHubCommitInfo>(
+        let commit = repository_get_json::<GitHubCommitInfo>(
+            transport,
             &self.github_repo_url(location, &format!("commits/{reference}")),
             self.github_headers()?,
             &[],
@@ -580,12 +506,14 @@ impl SkillsMpClient {
         Ok((reference, commit.sha))
     }
 
-    pub fn fetch_github_snapshot(
+    fn fetch_github_snapshot_with(
         &self,
+        transport: &dyn RepositoryHttpTransport,
         location: &GitHubSkillLocationData,
     ) -> Result<GitHubRepositorySnapshotData> {
-        let (reference, commit_sha) = self.resolve_github_ref_and_commit_sha(location)?;
-        let archive_bytes = self.get_bytes(
+        let (reference, commit_sha) =
+            self.resolve_github_ref_and_commit_sha_with(transport, location)?;
+        let archive_bytes = transport.get(
             &self.github_repo_url(location, &format!("tarball/{commit_sha}")),
             self.github_headers()?,
             &[],
@@ -597,30 +525,39 @@ impl SkillsMpClient {
         })
     }
 
-    fn fetch_repository_snapshot(
+    pub(crate) fn fetch_repository_snapshot_with(
         &self,
+        transport: &dyn RepositoryHttpTransport,
         location: &RepositoryLocationData,
     ) -> Result<RepositorySnapshotData> {
         match location.provider {
-            RepositoryProvider::GitHub => self.fetch_github_repository_snapshot(location),
-            RepositoryProvider::BitbucketCloud => self.fetch_bitbucket_cloud_snapshot(location),
+            RepositoryProvider::GitHub => {
+                self.fetch_github_repository_snapshot_with(transport, location)
+            }
+            RepositoryProvider::BitbucketCloud => {
+                self.fetch_bitbucket_cloud_snapshot_with(transport, location)
+            }
             RepositoryProvider::BitbucketDataCenter => {
-                self.fetch_bitbucket_data_center_snapshot(location)
+                self.fetch_bitbucket_data_center_snapshot_with(transport, location)
             }
         }
     }
 
-    fn fetch_github_repository_snapshot(
+    fn fetch_github_repository_snapshot_with(
         &self,
+        transport: &dyn RepositoryHttpTransport,
         location: &RepositoryLocationData,
     ) -> Result<RepositorySnapshotData> {
-        let snapshot = self.fetch_github_snapshot(&GitHubSkillLocationData {
-            owner: location.namespace.clone(),
-            repo: location.repo.clone(),
-            r#ref: location.r#ref.clone(),
-            path: location.path.clone(),
-            url: location.url.clone(),
-        })?;
+        let snapshot = self.fetch_github_snapshot_with(
+            transport,
+            &GitHubSkillLocationData {
+                owner: location.namespace.clone(),
+                repo: location.repo.clone(),
+                r#ref: location.r#ref.clone(),
+                path: location.path.clone(),
+                url: location.url.clone(),
+            },
+        )?;
         Ok(RepositorySnapshotData {
             ref_name: snapshot.ref_name,
             commit_sha: snapshot.commit_sha,
@@ -641,32 +578,31 @@ impl SkillsMpClient {
         })
     }
 
-    fn fetch_bitbucket_cloud_snapshot(
+    fn fetch_bitbucket_cloud_snapshot_with(
         &self,
+        transport: &dyn RepositoryHttpTransport,
         location: &RepositoryLocationData,
     ) -> Result<RepositorySnapshotData> {
         let repository_url = self.bitbucket_cloud_repository_url(location, "");
         let reference = match location.r#ref.as_ref() {
             Some(reference) => reference.clone(),
-            None => self
-                .get_json::<BitbucketCloudRepositoryInfo>(
-                    &repository_url,
-                    self.repository_headers(
-                        RepositoryProvider::BitbucketCloud,
-                        &location.base_url,
-                    )?,
-                    &[],
-                )?
-                .mainbranch
-                .map(|branch| branch.name)
-                .context("Bitbucket Cloud repository does not define a main branch")?,
+            None => repository_get_json::<BitbucketCloudRepositoryInfo>(
+                transport,
+                &repository_url,
+                self.repository_headers(RepositoryProvider::BitbucketCloud, &location.base_url)?,
+                &[],
+            )?
+            .mainbranch
+            .map(|branch| branch.name)
+            .context("Bitbucket Cloud repository does not define a main branch")?,
         };
-        let commit = self.get_json::<BitbucketCloudCommit>(
+        let commit = repository_get_json::<BitbucketCloudCommit>(
+            transport,
             &self.bitbucket_cloud_repository_url(location, &format!("commit/{reference}")),
             self.repository_headers(RepositoryProvider::BitbucketCloud, &location.base_url)?,
             &[],
         )?;
-        let files = self.fetch_bitbucket_cloud_files(location, &commit.hash)?;
+        let files = self.fetch_bitbucket_cloud_files_with(transport, location, &commit.hash)?;
         Ok(RepositorySnapshotData {
             ref_name: reference,
             commit_sha: commit.hash,
@@ -674,8 +610,9 @@ impl SkillsMpClient {
         })
     }
 
-    fn fetch_bitbucket_cloud_files(
+    fn fetch_bitbucket_cloud_files_with(
         &self,
+        transport: &dyn RepositoryHttpTransport,
         location: &RepositoryLocationData,
         commit_sha: &str,
     ) -> Result<BTreeMap<String, RepositoryFileBlobData>> {
@@ -690,7 +627,8 @@ impl SkillsMpClient {
             }
             let mut page_url = self.bitbucket_cloud_source_url(location, commit_sha, &directory);
             loop {
-                let page = self.get_json::<BitbucketCloudSourcePage>(
+                let page = repository_get_json::<BitbucketCloudSourcePage>(
+                    transport,
                     &page_url,
                     self.repository_headers(
                         RepositoryProvider::BitbucketCloud,
@@ -712,7 +650,7 @@ impl SkillsMpClient {
                                     "Bitbucket Cloud source tree exceeds maximum {MAX_ARCHIVE_ENTRIES} files"
                                 );
                             }
-                            let bytes = self.get_bytes(
+                            let bytes = transport.get(
                                 &self.bitbucket_cloud_source_url(location, commit_sha, &path),
                                 self.repository_headers(
                                     RepositoryProvider::BitbucketCloud,
@@ -758,15 +696,17 @@ impl SkillsMpClient {
         Ok(files)
     }
 
-    fn fetch_bitbucket_data_center_snapshot(
+    fn fetch_bitbucket_data_center_snapshot_with(
         &self,
+        transport: &dyn RepositoryHttpTransport,
         location: &RepositoryLocationData,
     ) -> Result<RepositorySnapshotData> {
         let repository_url = self.bitbucket_data_center_repository_url(location, "");
         let reference = match location.r#ref.as_ref() {
             Some(reference) => reference.clone(),
             None => {
-                self.get_json::<BitbucketDataCenterRef>(
+                repository_get_json::<BitbucketDataCenterRef>(
+                    transport,
                     &format!("{repository_url}/default-branch"),
                     self.repository_headers(
                         RepositoryProvider::BitbucketDataCenter,
@@ -777,12 +717,13 @@ impl SkillsMpClient {
                 .id
             }
         };
-        let commit = self.get_json::<BitbucketDataCenterCommit>(
+        let commit = repository_get_json::<BitbucketDataCenterCommit>(
+            transport,
             &format!("{repository_url}/commits/{reference}"),
             self.repository_headers(RepositoryProvider::BitbucketDataCenter, &location.base_url)?,
             &[],
         )?;
-        let archive_bytes = self.get_bytes(
+        let archive_bytes = transport.get(
             &format!("{repository_url}/archive"),
             self.repository_headers(RepositoryProvider::BitbucketDataCenter, &location.base_url)?,
             &[
@@ -853,12 +794,21 @@ impl SkillsMpClient {
     }
 }
 
+impl RepositoryHttpTransport for SkillsMpClient {
+    fn get(&self, url: &str, headers: HeaderMap, params: &[(String, String)]) -> Result<Vec<u8>> {
+        ReqwestRepositoryHttpTransport {
+            client: &self.client,
+        }
+        .get(url, headers, params)
+    }
+}
+
 impl GitHubSnapshotFetcher for SkillsMpClient {
     fn fetch_github_snapshot(
         &self,
         location: &GitHubSkillLocationData,
     ) -> Result<GitHubRepositorySnapshotData> {
-        SkillsMpClient::fetch_github_snapshot(self, location)
+        self.fetch_github_snapshot_with(self, location)
     }
 }
 
@@ -867,43 +817,8 @@ impl RepositorySnapshotFetcher for SkillsMpClient {
         &self,
         location: &RepositoryLocationData,
     ) -> Result<RepositorySnapshotData> {
-        SkillsMpClient::fetch_repository_snapshot(self, location)
+        self.fetch_repository_snapshot_with(self, location)
     }
-}
-
-#[cfg(feature = "python-bindings")]
-#[allow(dead_code)]
-fn decode_github_file_content(file: &GitHubFileContent) -> Result<String> {
-    let Some(content) = file.content.as_ref() else {
-        bail!("GitHub file response for {} is missing content", file.path);
-    };
-    if !matches!(file.encoding.as_deref(), None | Some("base64")) {
-        bail!(
-            "unsupported GitHub file encoding for {}: {}",
-            file.path,
-            file.encoding.as_deref().unwrap_or_default()
-        );
-    }
-    let normalized = content.replace('\n', "");
-    let decoded = STANDARD.decode(normalized)?;
-    String::from_utf8(decoded).map_err(Into::into)
-}
-
-#[cfg(feature = "python-bindings")]
-#[allow(dead_code)]
-fn extract_commit_sha_from_html_url(html_url: Option<&str>) -> Option<String> {
-    let html_url = html_url?;
-    let parts = html_url
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    if parts.len() < 6 || !matches!(parts[0], "http:" | "https:") {
-        return None;
-    }
-    if parts[1] != "github.com" || !matches!(parts[4], "blob" | "tree") {
-        return None;
-    }
-    Some(parts[5].to_string())
 }
 
 fn looks_like_commit_sha(value: &str) -> bool {
