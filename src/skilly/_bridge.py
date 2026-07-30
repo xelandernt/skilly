@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, TypedDict
 
 from . import _core
 from .filesystem import FileSystem, StrPath
+from .transport import RepositoryTransport
 
 if TYPE_CHECKING:
     from ._core import (
@@ -212,13 +213,13 @@ def parse_repository_location(
 
 def discover_repository_skills(
     repository_url: str,
+    transport: RepositoryTransport,
     provider: RepositoryProvider | None = None,
-    token: str | None = None,
 ) -> list[Skill]:
     return _core.discover_repository_skills(
         repository_url,
         provider=provider,
-        token=token,
+        transport=transport,
     )
 
 

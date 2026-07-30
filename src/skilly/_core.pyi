@@ -4,6 +4,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol, TypeAlias, TypedDict
 
 from .filesystem import FileSystem
+from .transport import RepositoryTransport
 
 ResourceKind: TypeAlias = Literal["script", "reference", "asset", "other"]
 RepositoryProvider: TypeAlias = Literal[
@@ -280,8 +281,8 @@ def parse_repository_location(
 ) -> RepositoryLocationData: ...
 def discover_repository_skills(
     repository_url: str,
+    transport: RepositoryTransport,
     provider: RepositoryProvider | None = ...,
-    token: str | None = ...,
 ) -> list[Skill]: ...
 def repository_versions_match(installed: Skill, available: Skill) -> bool: ...
 def remove_skill(

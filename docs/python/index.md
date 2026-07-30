@@ -1,7 +1,8 @@
 # Python API
 
-The `skilly` Python package provides both stateful workflows through
-`SkillRepository` and focused stateless discovery functions.
+The `skilly` Python package provides stateful workflows through
+`SkillRepository`, local discovery functions, and caller-controlled repository
+discovery.
 
 ## Compatibility
 
@@ -14,12 +15,12 @@ via PyO3 (pre-built wheels for Linux x64, macOS arm64/x64, Windows x64).
 from skilly import (
     ResourceKind,
     Skill,
-    SkillOrigin,
     RepositoryLocation,
+    RepositoryDiscoveryClient,
+    RepositoryTransport,
     SkillResource,
     discover_installed_skills,
     discover_package_source_skills,
-    discover_repository_skills,
     FileSystem,
     InstalledSkillUpdate,
     MavenSource,

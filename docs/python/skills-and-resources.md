@@ -71,10 +71,29 @@ for resource in skill.resources:
 ### Repository discovery
 
 ```python
-from skilly import discover_repository_skills, parse_repository_location
+from collections.abc import Mapping
+
+from skilly import RepositoryDiscoveryClient, parse_repository_location
+
+
+class ApplicationTransport:
+    def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        params: Mapping[str, str],
+    ) -> bytes:
+        # Delegate to the application's vetted HTTP client. It must enforce
+        # its DNS, redirect, timeout, response-size, concurrency, and status
+        # policies before returning the complete body.
+        return application_http_client.get_bytes(
+            url, headers=headers, params=params
+        )
 
 location = parse_repository_location("https://bitbucket.org/example/skills")
-skills = discover_repository_skills("https://bitbucket.org/example/skills")
+discovery = RepositoryDiscoveryClient(ApplicationTransport())
+skills = discovery.discover("https://bitbucket.org/example/skills")
 
 data_center = parse_repository_location(
     "https://git.example.com/bitbucket/projects/ENG/repos/skills",
@@ -85,7 +104,15 @@ data_center = parse_repository_location(
 Supported providers are `"github"`, `"bitbucket-cloud"`, and
 `"bitbucket-data-center"`. GitHub and Bitbucket Cloud are detected from their
 public URLs. Pass `provider="bitbucket-data-center"` for Bitbucket Data Center.
-Pass `token=` for a one-off credential or use a provider environment variable.
+
+`RepositoryDiscoveryClient` has no built-in network fallback. Its transport
+receives every request made during ref resolution, provider traversal,
+pagination, and archive/file retrieval. The transport must reject unwanted
+redirects and non-public resolved addresses, apply connect/read/total timeouts,
+cap the complete response body before returning it, limit its own concurrency,
+and raise for unsuccessful responses. It also owns authentication and proxy/TLS
+policy. Skilly continues to validate provider payloads, repository paths, and
+archive/resource limits.
 
 ### Class methods
 
@@ -181,8 +208,10 @@ resource = SkillResource(
 
 Type alias for `Literal["script", "reference", "asset", "other"]`.
 
-## SkillOrigin
+## Repository provenance
 
 Repository discovery records `repository_provider`, `repository_url`, and
-`repository_commit_sha` automatically. Use `discover_repository_skills()` for
-all remote skills, then install the selected result with `SkillRepository`.
+`repository_commit_sha` automatically. Use `RepositoryDiscoveryClient` for all
+remote skills, then install the selected result with `SkillRepository`. Pass the
+same client to `SkillRepository(discovery_client=...)` when repository-backed
+updates must use that network boundary too.

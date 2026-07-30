@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 from . import _bridge as bridge
 from ._core import Skill
 from .constants import DEFAULT_SKILLS_PATH
+from .transport import RepositoryTransport
 
 if TYPE_CHECKING:
     from ._core import RepositoryLocationData
@@ -66,6 +67,26 @@ class RepositoryLocation:
         )
 
 
+class RepositoryDiscoveryClient:
+    """Discover repository skills through a caller-owned transport."""
+
+    def __init__(self, transport: RepositoryTransport) -> None:
+        self._transport = transport
+
+    def discover(
+        self,
+        repository_url: str,
+        *,
+        provider: Literal["github", "bitbucket-cloud", "bitbucket-data-center"]
+        | None = None,
+    ) -> list[Skill]:
+        return bridge.discover_repository_skills(
+            repository_url,
+            provider=provider,
+            transport=self._transport,
+        )
+
+
 def discover_installed_skills(
     directory: Path = DEFAULT_SKILLS_PATH,
     *,
@@ -111,20 +132,6 @@ def discover_package_source_skills(
 ) -> list[Skill]:
     return bridge.discover_package_source_skills(
         _source_to_dict(source), file_system=file_system
-    )
-
-
-def discover_repository_skills(
-    repository_url: str,
-    *,
-    provider: Literal["github", "bitbucket-cloud", "bitbucket-data-center"]
-    | None = None,
-    token: str | None = None,
-) -> list[Skill]:
-    return bridge.discover_repository_skills(
-        repository_url,
-        provider=provider,
-        token=token,
     )
 
 

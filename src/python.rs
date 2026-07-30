@@ -1,7 +1,8 @@
-use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery};
+use crate::client::{ClientConfig, RepositoryHttpTransport, SkillsMpClient, SkillsMpSearchQuery};
 use crate::core::{
     BundleValidationError, FileSystem, MavenSourceSettings, NamedSelection, NodeSourceSettings,
-    ProjectEnvironment, ProjectSource, PythonSourceSettings, RepositoryProvider, SkillData,
+    ProjectEnvironment, ProjectSource, PythonSourceSettings, RepositoryLocationData,
+    RepositoryProvider, RepositorySnapshotData, RepositorySnapshotFetcher, SkillData,
     SkillDirectoryFlavor, SkillResourceData, SkillSourceMetadata,
     available_dependency_skill_in as rust_available_dependency_skill,
     available_dependency_skill_with_file_system as rust_available_dependency_skill_with_file_system,
@@ -25,6 +26,7 @@ use pyo3::class::basic::CompareOp;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PyModule, PyTuple, PyType};
+use reqwest::header::HeaderMap;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
@@ -635,25 +637,77 @@ fn skill_from_dir_impl(
     Ok(PySkill::from_data(skill))
 }
 
+struct PythonRepositoryTransport {
+    inner: Py<PyAny>,
+}
+
+impl PythonRepositoryTransport {
+    fn new(inner: Py<PyAny>) -> Self {
+        Self { inner }
+    }
+}
+
+impl RepositoryHttpTransport for PythonRepositoryTransport {
+    fn get(
+        &self,
+        url: &str,
+        headers: HeaderMap,
+        params: &[(String, String)],
+    ) -> anyhow::Result<Vec<u8>> {
+        Python::with_gil(|py| -> PyResult<Vec<u8>> {
+            let header_values = PyDict::new(py);
+            for (name, value) in &headers {
+                header_values.set_item(name.as_str(), value.to_str().map_err(py_err)?)?;
+            }
+            let parameter_values = PyDict::new(py);
+            for (name, value) in params {
+                parameter_values.set_item(name, value)?;
+            }
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("headers", header_values)?;
+            kwargs.set_item("params", parameter_values)?;
+            let response = self
+                .inner
+                .bind(py)
+                .call_method("get", (url,), Some(&kwargs))?;
+            Ok(response.downcast::<PyBytes>()?.as_bytes().to_vec())
+        })
+        .map_err(Into::into)
+    }
+}
+
+struct PythonRepositorySnapshotFetcher {
+    client: SkillsMpClient,
+    transport: PythonRepositoryTransport,
+}
+
+impl RepositorySnapshotFetcher for PythonRepositorySnapshotFetcher {
+    fn fetch_repository_snapshot(
+        &self,
+        location: &RepositoryLocationData,
+    ) -> anyhow::Result<RepositorySnapshotData> {
+        self.client
+            .fetch_repository_snapshot_with(&self.transport, location)
+    }
+}
+
 fn discover_repository_skills_impl(
-    py: Python<'_>,
+    _py: Python<'_>,
     repository_url: String,
     provider: Option<String>,
-    token: Option<String>,
+    transport: Py<PyAny>,
 ) -> PyResult<Vec<PySkill>> {
     let provider = provider
         .as_deref()
         .map(str::parse::<RepositoryProvider>)
         .transpose()
         .map_err(py_err)?;
-    let skills = py
-        .allow_threads(|| {
-            let client = SkillsMpClient::new(
-                ClientConfig::new(None, None, None, None).with_repository_token(token),
-            )?;
-            rust_discover_repository_skills(&client, &repository_url, provider)
-        })
-        .map_err(py_err)?;
+    let fetcher = PythonRepositorySnapshotFetcher {
+        client: SkillsMpClient::new(ClientConfig::new(None, None, None, None)).map_err(py_err)?,
+        transport: PythonRepositoryTransport::new(transport),
+    };
+    let skills =
+        rust_discover_repository_skills(&fetcher, &repository_url, provider).map_err(py_err)?;
     Ok(skills.into_iter().map(PySkill::from_data).collect())
 }
 
@@ -1551,14 +1605,14 @@ fn parse_repository_location_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "discover_repository_skills", signature = (repository_url, provider=None, token=None))]
+#[pyo3(name = "discover_repository_skills", signature = (repository_url, transport, provider=None))]
 fn discover_repository_skills_py(
     py: Python<'_>,
     repository_url: String,
+    transport: Py<PyAny>,
     provider: Option<String>,
-    token: Option<String>,
 ) -> PyResult<Vec<PySkill>> {
-    discover_repository_skills_impl(py, repository_url, provider, token)
+    discover_repository_skills_impl(py, repository_url, provider, transport)
 }
 
 #[pyfunction]
