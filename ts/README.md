@@ -104,6 +104,12 @@ uvx skilly list --copilot      # .github/skills (local), ~/.copilot/skills (glob
 uvx skilly list --directory ~/custom     # Explicit directory
 ```
 
+In an interactive terminal, skill rows show their source beneath the name (for
+example, `GitHub · owner/repo`). `list` checks known update sources in the
+background without blocking navigation: a spinner marks pending checks, while
+`✓`, `↑`, and `!` mark current, updatable, and failed checks. Plain
+non-interactive output remains local-only.
+
 | Flags                | Resolved destination                                          |
 |----------------------|---------------------------------------------------------------|
 | _none_               | `SKILLY_DEFAULT_DIRECTORY` if set, otherwise `.agents/skills` |
