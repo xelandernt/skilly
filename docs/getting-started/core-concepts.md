@@ -42,10 +42,10 @@ When scanning or listing skills, each skill has one of these statuses:
 -   **installed** — present and up to date.
 -   **updatable** — installed but a newer version is available.
 
-Interactive update checks animate pending rows with dots and use transient
-**up to date** and **check failed** labels for successful unchanged and
-unsuccessful remote checks. These indicators do not change the installed
-skill's persisted status.
+Interactive skill rows show provenance beneath the name. Update checks use an
+animated spinner while pending, then `✓` for unchanged skills and `!` for
+failed checks; `↑` marks an available update. These indicators do not change
+the installed skill's persisted status.
 
 ## Destinations
 

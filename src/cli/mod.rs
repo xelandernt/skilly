@@ -58,7 +58,6 @@ pub(crate) const DEFAULT_CREATE_INSTRUCTIONS: &str =
 pub(crate) const CREATE_HELP_TEXT: &str =
     "^S create | F2 create | ^X cancel | F10 cancel | Tab next field";
 pub(crate) const LOADING_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
-const UPDATE_CHECKING_FRAMES: [&str; 4] = [".", "..", "...", ".."];
 pub(crate) const LOADING_POLL_INTERVAL_MS: u64 = 120;
 
 pub fn run(args: Vec<String>) -> i32 {
@@ -460,7 +459,8 @@ fn run_scan(
         let mut items = all_matches
             .iter()
             .map(|item| MenuItemUi {
-                label: scan_choice_label(item),
+                label: item.available.name.clone(),
+                subtitle: Some(skill_source_label(&item.available)),
                 preview_lines: scan_match_preview_lines(item),
                 status: scan_menu_status(item),
                 selectable: true,
@@ -521,6 +521,7 @@ fn run_scan(
                                 .iter()
                                 .map(|item| MenuItemUi {
                                     label: (*item).to_string(),
+                                    subtitle: None,
                                     preview_lines: scan_match_preview_lines(&selected),
                                     status: MenuItemStatus::Default,
                                     selectable: true,
@@ -598,6 +599,7 @@ fn run_scan(
                                 .iter()
                                 .map(|a| MenuItemUi {
                                     label: (*a).to_string(),
+                                    subtitle: None,
                                     preview_lines: preview_names
                                         .lines()
                                         .map(str::to_owned)
@@ -800,7 +802,8 @@ fn download_selected_skills(
         let mut items = matches
             .iter()
             .map(|item| MenuItemUi {
-                label: downloadable_skill_label(item),
+                label: item.available.name.clone(),
+                subtitle: Some(skill_source_label(&item.available)),
                 preview_lines: downloadable_skill_preview_lines(item, directory),
                 status: downloadable_skill_menu_status(item),
                 selectable: true,
@@ -862,6 +865,7 @@ fn download_selected_skills(
                                 .iter()
                                 .map(|item| MenuItemUi {
                                     label: (*item).to_string(),
+                                    subtitle: None,
                                     preview_lines: downloadable_skill_preview_lines(
                                         &selected, directory,
                                     ),
@@ -967,6 +971,7 @@ fn download_selected_skills(
                                 .iter()
                                 .map(|a| MenuItemUi {
                                     label: (*a).to_string(),
+                                    subtitle: None,
                                     preview_lines: preview_names
                                         .lines()
                                         .map(str::to_owned)
@@ -1260,7 +1265,8 @@ fn run_list(
             .map(|entry| {
                 let state = update_check_state_for(checks, directory, entry);
                 MenuItemUi {
-                    label: listed_skill_label_with_update_state(entry, state.as_ref(), 0),
+                    label: listed_skill_name(entry),
+                    subtitle: listed_skill_source_label(entry),
                     preview_lines: listed_skill_preview_lines_with_update_state(
                         entry,
                         state.as_ref(),
@@ -1340,6 +1346,7 @@ fn run_list(
                                     .iter()
                                     .map(|item| MenuItemUi {
                                         label: (*item).to_string(),
+                                        subtitle: None,
                                         preview_lines: listed_skill_preview_lines_with_update_state(
                                             &ListedSkillEntry::Valid(selected.clone()),
                                             state.as_ref(),
@@ -1457,6 +1464,7 @@ fn run_list(
                                     .iter()
                                     .map(|item| MenuItemUi {
                                         label: (*item).to_string(),
+                                        subtitle: None,
                                         preview_lines: listed_skill_preview_lines(
                                             &ListedSkillEntry::Invalid(selected.clone()),
                                         ),
@@ -1551,6 +1559,7 @@ fn run_list(
                             .iter()
                             .map(|action| MenuItemUi {
                                 label: (*action).to_string(),
+                                subtitle: None,
                                 preview_lines: preview_names.lines().map(str::to_owned).collect(),
                                 status: MenuItemStatus::Default,
                                 selectable: true,
@@ -1898,7 +1907,8 @@ fn run_skillsmp_search(
             .iter()
             .zip(search_matches.iter())
             .map(|(skill, (_matched_skill, installed))| MenuItemUi {
-                label: search_skill_label(skill, installed.as_ref()),
+                label: skill.name.clone(),
+                subtitle: Some(skillsmp_search_source_label(skill)),
                 preview_lines: skillsmp_search_preview_lines(skill, installed.as_ref(), directory),
                 status: skillsmp_search_menu_status(installed.as_ref()),
                 selectable: true,
@@ -1980,6 +1990,7 @@ fn run_skillsmp_search(
                     .iter()
                     .map(|item| MenuItemUi {
                         label: (*item).to_string(),
+                        subtitle: None,
                         preview_lines: skillsmp_installable_preview_lines(
                             skill,
                             &downloadable_match,
@@ -2115,7 +2126,8 @@ fn run_skillsmp_list(
         let mut items = skills
             .iter()
             .map(|skill| MenuItemUi {
-                label: installed_skill_label(skill),
+                label: skill.name.clone(),
+                subtitle: Some(skill_source_label(skill)),
                 preview_lines: installed_skill_preview_lines(skill),
                 status: MenuItemStatus::Default,
                 selectable: true,
@@ -2174,6 +2186,7 @@ fn run_skillsmp_list(
                             .iter()
                             .map(|item| MenuItemUi {
                                 label: (*item).to_string(),
+                                subtitle: None,
                                 preview_lines: installed_skill_preview_lines(&selected),
                                 status: MenuItemStatus::Default,
                                 selectable: true,
@@ -2388,16 +2401,6 @@ fn skillsmp_search_status(installed: Option<&SkillData>) -> &'static str {
     }
 }
 
-fn search_skill_label(skill: &SkillsMpSkill, installed: Option<&SkillData>) -> String {
-    format!(
-        "{} [{}] ({}) [{}]",
-        skill.name,
-        skill.author,
-        skill.id,
-        skillsmp_search_status(installed)
-    )
-}
-
 fn skill_directory_name(skill: &SkillData) -> String {
     skill.directory_name()
 }
@@ -2409,6 +2412,60 @@ fn skill_origin_label(skill: &SkillData) -> &str {
             .map_or("repository", |provider| provider.as_str());
     }
     &skill.source
+}
+
+fn skill_source_label(skill: &SkillData) -> String {
+    if let (Some(repository_url), Some(provider)) =
+        (skill.repository_url.as_deref(), skill.repository_provider)
+        && let Ok(location) = parse_repository_location(repository_url, Some(provider))
+    {
+        return repository_source_label(&location);
+    }
+    if let Some(package_reference) = skill.package_reference() {
+        let ecosystem = skill
+            .package_ecosystem
+            .as_ref()
+            .map_or("dependency", |ecosystem| ecosystem.as_str());
+        return format!("{} dependency · {package_reference}", title_case(ecosystem));
+    }
+    if skill.source == SKILLY_UNKNOWN_SOURCE {
+        "Local".to_string()
+    } else {
+        title_case(&skill.source)
+    }
+}
+
+fn skillsmp_search_source_label(skill: &SkillsMpSkill) -> String {
+    parse_repository_location(&skill.repository_url, None)
+        .map(|location| repository_source_label(&location))
+        .unwrap_or_else(|_| format!("SkillsMP · {}", skill.author))
+}
+
+fn repository_source_label(location: &RepositoryLocationData) -> String {
+    let provider = match location.provider {
+        RepositoryProvider::GitHub => "GitHub".to_string(),
+        RepositoryProvider::BitbucketCloud => "Bitbucket".to_string(),
+        RepositoryProvider::BitbucketDataCenter => location
+            .base_url
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .to_string(),
+    };
+    format!("{provider} · {}/{}", location.namespace, location.repo)
+}
+
+fn repository_preview_label(provider: RepositoryProvider, repository_url: &str) -> String {
+    parse_repository_location(repository_url, Some(provider))
+        .map(|location| repository_source_label(&location))
+        .unwrap_or_else(|_| provider.as_str().to_string())
+}
+
+fn title_case(value: &str) -> String {
+    let mut characters = value.chars();
+    let Some(first) = characters.next() else {
+        return String::new();
+    };
+    first.to_uppercase().chain(characters).collect()
 }
 
 fn installed_skill_label(skill: &SkillData) -> String {
@@ -2441,22 +2498,18 @@ fn listed_skill_label(entry: &ListedSkillEntry) -> String {
     }
 }
 
-fn listed_skill_label_with_update_state(
-    entry: &ListedSkillEntry,
-    state: Option<&UpdateCheckState>,
-    frame_index: usize,
-) -> String {
-    let label = listed_skill_label(entry);
-    let suffix = match state {
-        Some(UpdateCheckState::Checking) => {
-            UPDATE_CHECKING_FRAMES[frame_index % UPDATE_CHECKING_FRAMES.len()]
-        }
-        Some(UpdateCheckState::Current) => "(up to date)",
-        Some(UpdateCheckState::Updatable(_)) => "(updatable)",
-        Some(UpdateCheckState::Failed(_)) => "(check failed)",
-        None => return label,
-    };
-    format!("{label} {suffix}")
+fn listed_skill_name(entry: &ListedSkillEntry) -> String {
+    match entry {
+        ListedSkillEntry::Valid(skill) => skill.name.clone(),
+        ListedSkillEntry::Invalid(skill) => skill.directory_name.clone(),
+    }
+}
+
+fn listed_skill_source_label(entry: &ListedSkillEntry) -> Option<String> {
+    match entry {
+        ListedSkillEntry::Valid(skill) => Some(skill_source_label(skill)),
+        ListedSkillEntry::Invalid(_) => Some("Invalid skill".to_string()),
+    }
 }
 
 fn listed_skill_menu_status(
@@ -2468,7 +2521,7 @@ fn listed_skill_menu_status(
             Some(UpdateCheckState::Checking) => MenuItemStatus::Checking,
             Some(UpdateCheckState::Updatable(_)) => MenuItemStatus::Updatable,
             Some(UpdateCheckState::Failed(_)) => MenuItemStatus::CheckFailed,
-            Some(UpdateCheckState::Current) => MenuItemStatus::UpToDate,
+            Some(UpdateCheckState::Latest) => MenuItemStatus::UpToDate,
             None => MenuItemStatus::Default,
         },
         ListedSkillEntry::Invalid(_) => MenuItemStatus::Disabled,
@@ -2529,7 +2582,8 @@ fn refresh_list_menu(
 ) -> bool {
     for (item, entry) in menu.items.iter_mut().zip(entries) {
         let state = update_check_state_for(checks, directory, entry);
-        item.label = listed_skill_label_with_update_state(entry, state.as_ref(), frame_index);
+        item.label = listed_skill_name(entry);
+        item.subtitle = listed_skill_source_label(entry);
         item.preview_lines = listed_skill_preview_lines_with_update_state(entry, state.as_ref());
         item.status = listed_skill_menu_status(entry, state.as_ref());
     }
@@ -2573,7 +2627,7 @@ fn scan_menu_status(item: &SkillMatchData) -> MenuItemStatus {
     match scan_match_status(&item.available, item.installed.as_ref()) {
         STATUS_UPDATABLE => MenuItemStatus::Updatable,
         STATUS_INSTALLED => MenuItemStatus::Installed,
-        _ => MenuItemStatus::Default,
+        _ => MenuItemStatus::Installable,
     }
 }
 
@@ -2700,15 +2754,6 @@ fn listed_skill_entries(report: InstalledSkillDiscoveryReport) -> Vec<ListedSkil
     entries
 }
 
-fn downloadable_skill_label(item: &DownloadableSkillMatch) -> String {
-    format!(
-        "{}: {} [{}]",
-        skill_directory_name(&item.available),
-        item.available.name,
-        item.status()
-    )
-}
-
 fn downloadable_skill_actions(item: &DownloadableSkillMatch) -> Vec<&'static str> {
     match item.status() {
         STATUS_INSTALLABLE => vec![INSTALL_CHOICE, VIEW_FILES_CHOICE, BACK_CHOICE, EXIT_CHOICE],
@@ -2729,7 +2774,7 @@ fn downloadable_skill_menu_status(item: &DownloadableSkillMatch) -> MenuItemStat
     match item.status() {
         STATUS_INSTALLED => MenuItemStatus::Installed,
         STATUS_UPDATABLE => MenuItemStatus::Updatable,
-        _ => MenuItemStatus::Default,
+        _ => MenuItemStatus::Installable,
     }
 }
 
@@ -2737,7 +2782,7 @@ fn skillsmp_search_menu_status(installed: Option<&SkillData>) -> MenuItemStatus 
     if installed.is_some() {
         MenuItemStatus::Installed
     } else {
-        MenuItemStatus::Default
+        MenuItemStatus::Installable
     }
 }
 
@@ -2789,6 +2834,7 @@ fn select_download_skill(skills: &[SkillData], skill_name: &str) -> Result<Skill
 fn exit_menu_item(label: &str) -> MenuItemUi {
     MenuItemUi {
         label: EXIT_CHOICE.to_string(),
+        subtitle: None,
         preview_lines: vec![label.to_string()],
         status: MenuItemStatus::Default,
         selectable: true,
@@ -2812,21 +2858,28 @@ fn skill_preview_lines(skill: &SkillData, extra_lines: &[String]) -> Vec<String>
     let mut lines = vec![
         format!("Name: {}", skill.name),
         format!("Description: {}", skill.description),
-        format!("Source: {}", skill_origin_label(skill)),
-        format!("Installed: {}", skill.is_installed()),
     ];
+    if let (Some(provider), Some(repository_url)) =
+        (skill.repository_provider, skill.repository_url.as_deref())
+    {
+        lines.push(format!(
+            "Repository: {}",
+            repository_preview_label(provider, repository_url)
+        ));
+    } else {
+        lines.push(format!("Source: {}", skill_origin_label(skill)));
+    }
+    lines.push(format!("Installed: {}", skill.is_installed()));
     if let Some(skill_path) = absolute_skill_path(skill) {
         lines.push(format!("Skill Path: {}", skill_path.display()));
     }
     if let Some(package_reference) = skill.package_reference() {
         lines.push(format!("Package: {package_reference}"));
     }
-    if let (Some(provider), Some(repository_url), Some(commit_sha)) = (
-        skill.repository_provider,
+    if let (Some(repository_url), Some(commit_sha)) = (
         skill.repository_url.as_ref(),
         skill.repository_commit_sha.as_ref(),
     ) {
-        lines.push(format!("Repository Provider: {}", provider.as_str()));
         lines.push(format!("Repository Url: {repository_url}"));
         lines.push(format!("Repository Commit: {commit_sha}"));
     }
@@ -2890,7 +2943,7 @@ fn listed_skill_preview_lines_with_update_state(
         ListedSkillEntry::Valid(skill) => {
             let extra = match state {
                 Some(UpdateCheckState::Checking) => vec!["Update Status: checking".to_string()],
-                Some(UpdateCheckState::Current) => vec!["Update Status: current".to_string()],
+                Some(UpdateCheckState::Latest) => vec!["Update Status: latest".to_string()],
                 Some(UpdateCheckState::Updatable(available)) => vec![
                     "Update Status: updatable".to_string(),
                     format!(
@@ -3018,7 +3071,7 @@ mod tests {
     use super::tui::{
         DownloadableSkillMatch, MenuAction, MenuItemStatus, MenuItemUi, TextBuffer,
         adjust_focused_on_filter, build_visible_indices, create_action, filter_matches,
-        filterable_count, fit_menu_label, menu_action, styled_menu_label, visible_position,
+        filterable_count, menu_action, menu_item_lines, menu_status_glyph, visible_position,
     };
     use super::update_checks::{UpdateCheckProgress, UpdateCheckRequest, UpdateCheckState};
     use super::{
@@ -3028,10 +3081,11 @@ mod tests {
         downloadable_skill_actions, downloadable_skill_menu_status,
         downloadable_skill_preview_lines, exit_menu_item, format_pending_update,
         installed_skill_actions, installed_skill_label, installed_skill_preview_lines,
-        installed_skillsmp_match, listed_skill_label_with_update_state, listed_skill_menu_status,
-        listed_skill_preview_lines_with_update_state, retained_multi_select_indices,
-        scan_choice_label, scan_match_preview_lines, search_skill_label,
-        skillsmp_search_preview_lines, update_check_status,
+        installed_skillsmp_match, listed_skill_menu_status, listed_skill_name,
+        listed_skill_preview_lines_with_update_state, listed_skill_source_label,
+        retained_multi_select_indices, scan_choice_label, scan_match_preview_lines,
+        skill_source_label, skillsmp_search_preview_lines, skillsmp_search_source_label,
+        update_check_status,
     };
     use crate::client::SkillsMpSkill;
     use crate::core::{
@@ -3040,7 +3094,7 @@ mod tests {
     };
     use clap::Parser;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::style::{Color, Style};
     use serde_json::Value as JsonValue;
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
@@ -3123,20 +3177,22 @@ mod tests {
     }
 
     #[test]
-    fn skillsmp_search_label_and_preview_include_installed_status() {
+    fn skillsmp_search_source_and_preview_include_installed_status() {
         let matched = installed_skill(
             None,
             Some("https://github.com/example/project/tree/main/skills/python"),
         );
 
-        let label = search_skill_label(&search_result(), Some(&matched));
         let preview = skillsmp_search_preview_lines(
             &search_result(),
             Some(&matched),
             Path::new("/tmp/install"),
         );
 
-        assert_eq!(label, "python-production [idossha] (skill-1) [installed]");
+        assert_eq!(
+            skillsmp_search_source_label(&search_result()),
+            "GitHub · example/project"
+        );
         assert!(preview.iter().any(|line| line == "Status: installed"));
         assert!(
             preview
@@ -3447,49 +3503,22 @@ mod tests {
     }
 
     #[test]
-    fn installed_list_animates_checking_and_suffixes_completed_states() {
+    fn installed_list_uses_provenance_and_status_glyphs() {
         let installed = installed_skill(None, Some("https://github.com/example/repo"));
         let entry = super::tui::ListedSkillEntry::Valid(Box::new(installed.clone()));
-        let available = SkillData {
-            repository_commit_sha: Some("fedcba98765432100123456789abcdef01234567".to_string()),
-            ..installed
-        };
-
-        assert!(
-            listed_skill_label_with_update_state(&entry, Some(&UpdateCheckState::Checking), 0)
-                .ends_with(" .")
+        assert_eq!(listed_skill_name(&entry), "python");
+        assert_eq!(
+            listed_skill_source_label(&entry).as_deref(),
+            Some("GitHub · example/repo")
         );
-        assert!(
-            listed_skill_label_with_update_state(&entry, Some(&UpdateCheckState::Checking), 1)
-                .ends_with(" ..")
-        );
-        assert!(
-            listed_skill_label_with_update_state(&entry, Some(&UpdateCheckState::Checking), 2)
-                .ends_with(" ...")
-        );
-        assert!(
-            listed_skill_label_with_update_state(&entry, Some(&UpdateCheckState::Checking), 3)
-                .ends_with(" ..")
-        );
-        assert!(
-            listed_skill_label_with_update_state(
-                &entry,
-                Some(&UpdateCheckState::Updatable(Box::new(available))),
-                0,
-            )
-            .ends_with(" (updatable)")
-        );
-        assert!(
-            listed_skill_label_with_update_state(
-                &entry,
-                Some(&UpdateCheckState::Failed("offline".to_string())),
-                0,
-            )
-            .ends_with(" (check failed)")
-        );
-        assert!(
-            listed_skill_label_with_update_state(&entry, Some(&UpdateCheckState::Current), 0)
-                .ends_with(" (up to date)")
+        assert_eq!(skill_source_label(&installed), "GitHub · example/repo");
+        assert_eq!(menu_status_glyph(MenuItemStatus::Installable, 0), Some("+"));
+        assert_eq!(menu_status_glyph(MenuItemStatus::UpToDate, 0), Some("✓"));
+        assert_eq!(menu_status_glyph(MenuItemStatus::Updatable, 0), Some("↑"));
+        assert_eq!(menu_status_glyph(MenuItemStatus::CheckFailed, 0), Some("!"));
+        assert_ne!(
+            menu_status_glyph(MenuItemStatus::Checking, 0),
+            menu_status_glyph(MenuItemStatus::Checking, 1)
         );
         assert_eq!(
             listed_skill_menu_status(&entry, Some(&UpdateCheckState::Checking)),
@@ -3503,60 +3532,51 @@ mod tests {
             MenuItemStatus::CheckFailed
         );
         assert_eq!(
-            listed_skill_menu_status(&entry, Some(&UpdateCheckState::Current)),
+            listed_skill_menu_status(&entry, Some(&UpdateCheckState::Latest)),
             MenuItemStatus::UpToDate
         );
+    }
 
-        let narrow_checking = fit_menu_label(
-            "repository-skill: repository-skill [github] ...",
-            MenuItemStatus::Checking,
-            32,
-        );
-        assert_eq!(narrow_checking.chars().count(), 32);
-        assert!(narrow_checking.contains('…'));
-        assert!(narrow_checking.ends_with(" ..."));
+    #[test]
+    fn skill_rows_render_dimmed_provenance_with_an_inline_status_glyph() {
+        let item = MenuItemUi {
+            label: "review".to_string(),
+            subtitle: Some("GitHub · xelandernt/skilly".to_string()),
+            preview_lines: Vec::new(),
+            status: MenuItemStatus::Updatable,
+            selectable: true,
+            filter_text: Some("review".to_string()),
+        };
 
-        let narrow_checking_start = fit_menu_label(
-            "repository-skill: repository-skill [github] .",
-            MenuItemStatus::Checking,
-            32,
-        );
+        let lines = menu_item_lines(&item, "", Style::default(), 36, 2, 0);
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].spans[0].content, "review");
+        assert_eq!(lines[1].spans[1].style, lines[1].spans[2].style);
         assert_eq!(
-            narrow_checking_start.strip_suffix(" ."),
-            narrow_checking.strip_suffix(" ...")
+            lines[1]
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>(),
+            "  GitHub · xelandernt/skilly · ↑"
         );
+    }
 
-        let styled = styled_menu_label(
-            "repository-skill (up to date)",
-            "",
-            Style::default(),
-            MenuItemStatus::UpToDate,
-        );
-        assert_eq!(styled.spans.len(), 2);
-        assert!(
-            !styled.spans[0]
-                .style
-                .add_modifier
-                .contains(Modifier::ITALIC)
-        );
-        assert!(
-            styled.spans[1]
-                .style
-                .add_modifier
-                .contains(Modifier::ITALIC)
-        );
+    #[test]
+    fn action_rows_remain_single_line() {
+        let item = MenuItemUi {
+            label: "view files".to_string(),
+            subtitle: None,
+            preview_lines: Vec::new(),
+            status: MenuItemStatus::Default,
+            selectable: true,
+            filter_text: None,
+        };
 
-        let checking = styled_menu_label(
-            "repository-skill ...",
-            "",
-            Style::default(),
-            MenuItemStatus::Checking,
-        );
-        assert!(
-            !checking.spans[1]
-                .style
-                .add_modifier
-                .contains(Modifier::ITALIC)
+        assert_eq!(
+            menu_item_lines(&item, "", Style::default(), 36, 2, 0).len(),
+            1
         );
     }
 
@@ -3584,6 +3604,19 @@ mod tests {
                 .iter()
                 .any(|line| line == "Update Check Error: network error [31m")
         );
+    }
+
+    #[test]
+    fn latest_update_check_preview_uses_latest_label() {
+        let entry = super::tui::ListedSkillEntry::Valid(Box::new(installed_skill(
+            None,
+            Some("https://github.com/example/repo"),
+        )));
+
+        let preview =
+            listed_skill_preview_lines_with_update_state(&entry, Some(&UpdateCheckState::Latest));
+
+        assert!(preview.iter().any(|line| line == "Update Status: latest"));
     }
 
     #[test]
@@ -3675,6 +3708,7 @@ mod tests {
         let items = vec![
             MenuItemUi {
                 label: "python".to_string(),
+                subtitle: None,
                 preview_lines: Vec::new(),
                 status: MenuItemStatus::Default,
                 selectable: true,
@@ -3682,6 +3716,7 @@ mod tests {
             },
             MenuItemUi {
                 label: ".system".to_string(),
+                subtitle: None,
                 preview_lines: Vec::new(),
                 status: MenuItemStatus::Disabled,
                 selectable: false,
@@ -3757,7 +3792,7 @@ mod tests {
     }
 
     #[test]
-    fn repository_skills_display_their_provider_as_origin() {
+    fn repository_skill_labels_display_their_provider_as_origin() {
         for (provider, label) in [
             (RepositoryProvider::GitHub, "github"),
             (RepositoryProvider::BitbucketCloud, "bitbucket-cloud"),
@@ -3775,12 +3810,29 @@ mod tests {
                 installed_skill_label(&skill),
                 format!("python: python [{label}]")
             );
-            assert!(
-                installed_skill_preview_lines(&skill)
-                    .iter()
-                    .any(|line| line == &format!("Source: {label}"))
-            );
         }
+    }
+
+    #[test]
+    fn repository_skill_preview_collapses_source_and_provider() {
+        let skill = installed_skill(
+            None,
+            Some("https://github.com/example/repo/tree/main/skills/python"),
+        );
+
+        let preview = installed_skill_preview_lines(&skill);
+
+        assert!(
+            preview
+                .iter()
+                .any(|line| line == "Repository: GitHub · example/repo")
+        );
+        assert!(!preview.iter().any(|line| line.starts_with("Source:")));
+        assert!(
+            !preview
+                .iter()
+                .any(|line| line.starts_with("Repository Provider:"))
+        );
     }
 
     #[test]
@@ -4246,6 +4298,7 @@ mod tests {
     fn skill_item(name: &str) -> MenuItemUi {
         MenuItemUi {
             label: name.to_string(),
+            subtitle: None,
             preview_lines: Vec::new(),
             status: MenuItemStatus::Default,
             selectable: true,
@@ -4256,6 +4309,7 @@ mod tests {
     fn exit_item() -> MenuItemUi {
         MenuItemUi {
             label: "Exit".to_string(),
+            subtitle: None,
             preview_lines: vec!["Exit menu".to_string()],
             status: MenuItemStatus::Default,
             selectable: true,
@@ -4266,6 +4320,7 @@ mod tests {
     fn disabled_item(label: &str) -> MenuItemUi {
         MenuItemUi {
             label: label.to_string(),
+            subtitle: None,
             preview_lines: Vec::new(),
             status: MenuItemStatus::Disabled,
             selectable: false,

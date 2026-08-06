@@ -104,11 +104,11 @@ uvx skilly list --copilot      # .github/skills (local), ~/.copilot/skills (glob
 uvx skilly list --directory ~/custom     # Explicit directory
 ```
 
-In an interactive terminal, `list` checks known update sources in the
-background without blocking navigation. Pending rows animate with `.`, `..`,
-and `...`; completed row statuses appear on the right in italics as
-`(up to date)`, `(updatable)`, or `(check failed)`. Plain non-interactive output
-remains local-only.
+In an interactive terminal, skill rows show their source beneath the name (for
+example, `GitHub · owner/repo`). `list` checks known update sources in the
+background without blocking navigation: a spinner marks pending checks, while
+`✓`, `↑`, and `!` mark current, updatable, and failed checks. Plain
+non-interactive output remains local-only.
 
 | Flags                | Resolved destination                                          |
 |----------------------|---------------------------------------------------------------|

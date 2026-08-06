@@ -72,10 +72,9 @@ skills display their provider (`github`, `bitbucket-cloud`, or
 
 In an interactive terminal, Skilly checks every dependency- and
 repository-backed skill in the background while keeping the menu responsive.
-The status line shows animated progress, pending rows animate with `.`, `..`,
-and `...`, and completed row statuses appear on the right. Available updates
-show `(updatable)` in italic color, unchanged skills show `(up to date)`, and
-unsuccessful checks show `(check failed)` with the reason in the preview. Plain
+Each skill row shows its provenance beneath the name; a spinner marks pending
+checks, while `↑`, `✓`, and `!` mark updates, unchanged skills, and failed
+checks. The preview includes the reason for a failed check. Plain
 non-interactive output only lists locally installed skills and does not contact
 update sources.
 

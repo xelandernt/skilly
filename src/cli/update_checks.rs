@@ -29,7 +29,7 @@ impl UpdateCheckKey {
 #[derive(Debug, Clone)]
 pub(super) enum UpdateCheckState {
     Checking,
-    Current,
+    Latest,
     Updatable(Box<SkillData>),
     Failed(String),
 }
@@ -228,7 +228,7 @@ fn check_dependencies(
                 || UpdateCheckState::Failed("dependency source not found".to_string()),
                 |item| {
                     if installed.package_version == item.available.package_version {
-                        UpdateCheckState::Current
+                        UpdateCheckState::Latest
                     } else {
                         UpdateCheckState::Updatable(Box::new(item.available.clone()))
                     }
@@ -258,7 +258,7 @@ fn check_repository(
                         || UpdateCheckState::Failed("repository source not found".to_string()),
                         |candidate| {
                             if repository_versions_match(&installed, candidate) {
-                                UpdateCheckState::Current
+                                UpdateCheckState::Latest
                             } else {
                                 UpdateCheckState::Updatable(Box::new(candidate.clone()))
                             }
@@ -313,9 +313,9 @@ mod tests {
             (
                 UpdateCheckKey {
                     directory: PathBuf::from("one"),
-                    skill_directory_name: "current".to_string(),
+                    skill_directory_name: "latest".to_string(),
                 },
-                UpdateCheckState::Current,
+                UpdateCheckState::Latest,
             ),
             (
                 UpdateCheckKey {
