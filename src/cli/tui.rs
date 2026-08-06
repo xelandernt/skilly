@@ -25,6 +25,7 @@ use std::time::Duration;
 #[derive(Debug, Clone)]
 pub(crate) struct MenuItemUi {
     pub(crate) label: String,
+    pub(crate) subtitle: Option<String>,
     pub(crate) preview_lines: Vec<String>,
     pub(crate) status: MenuItemStatus,
     pub(crate) selectable: bool,
@@ -54,8 +55,12 @@ pub(crate) struct MenuTabUi {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuItemStatus {
     Default,
+    Installable,
     Installed,
+    Checking,
+    UpToDate,
     Updatable,
+    CheckFailed,
     Disabled,
 }
 
@@ -840,15 +845,101 @@ pub(crate) fn render_menu_tabs(
 pub(crate) fn menu_item_style(item: &MenuItemUi) -> Style {
     match item.status {
         MenuItemStatus::Default => Style::default(),
+        MenuItemStatus::Installable => Style::default().fg(Color::Blue),
         MenuItemStatus::Installed => Style::default().fg(Color::Green),
+        MenuItemStatus::Checking => Style::default().fg(Color::Cyan),
+        MenuItemStatus::UpToDate => Style::default().fg(Color::Green),
         MenuItemStatus::Updatable => Style::default()
             .fg(Color::Magenta)
             .add_modifier(Modifier::BOLD),
+        MenuItemStatus::CheckFailed => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         MenuItemStatus::Disabled => Style::default().fg(Color::DarkGray),
     }
 }
 
+pub(crate) fn menu_status_glyph(
+    status: MenuItemStatus,
+    frame_index: usize,
+) -> Option<&'static str> {
+    match status {
+        MenuItemStatus::Installable => Some("+"),
+        MenuItemStatus::Installed | MenuItemStatus::UpToDate => Some("✓"),
+        MenuItemStatus::Checking => {
+            Some(super::LOADING_FRAMES[frame_index % super::LOADING_FRAMES.len()])
+        }
+        MenuItemStatus::Updatable => Some("↑"),
+        MenuItemStatus::CheckFailed => Some("!"),
+        MenuItemStatus::Default | MenuItemStatus::Disabled => None,
+    }
+}
+
+fn menu_status_glyph_style(status: MenuItemStatus) -> Style {
+    match status {
+        MenuItemStatus::Installable => Style::default().fg(Color::Blue),
+        MenuItemStatus::Installed | MenuItemStatus::UpToDate => Style::default().fg(Color::Green),
+        MenuItemStatus::Checking => Style::default().fg(Color::Cyan),
+        MenuItemStatus::Updatable => Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+        MenuItemStatus::CheckFailed => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        MenuItemStatus::Default | MenuItemStatus::Disabled => Style::default(),
+    }
+}
+
+pub(crate) fn menu_item_lines(
+    item: &MenuItemUi,
+    query: &str,
+    base_style: Style,
+    max_width: usize,
+    subtitle_indent: usize,
+    frame_index: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![styled_menu_label(
+        &fit_menu_label(&item.label, item.status, max_width),
+        query,
+        base_style,
+        item.status,
+    )];
+    let Some(subtitle) = item.subtitle.as_deref() else {
+        return lines;
+    };
+    let glyph = menu_status_glyph(item.status, frame_index);
+    let glyph_width = glyph.map_or(0, |value| value.chars().count());
+    let glyph_separator_width = glyph.map_or(0, |_| " · ".chars().count());
+    let text_width = max_width.saturating_sub(glyph_width + glyph_separator_width);
+    let subtitle = fit_menu_text(subtitle, text_width);
+    let subtitle_style = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::DIM);
+    let mut spans = vec![Span::raw(" ".repeat(subtitle_indent))];
+    spans.push(Span::styled(subtitle, subtitle_style));
+    if let Some(glyph) = glyph {
+        spans.push(Span::styled(" · ", subtitle_style));
+        spans.push(Span::styled(glyph, menu_status_glyph_style(item.status)));
+    }
+    lines.push(Line::from(spans));
+    lines
+}
+
+fn read_menu_event(ticking: bool) -> Result<Option<Event>> {
+    if ticking && !event::poll(Duration::from_millis(LOADING_POLL_INTERVAL_MS))? {
+        return Ok(None);
+    }
+    Ok(Some(event::read()?))
+}
+
 pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result<SelectMenuResult> {
+    select_menu_with_tick(session, menu, |_, _| false)
+}
+
+pub(crate) fn select_menu_with_tick<F>(
+    session: &mut TerminalSession,
+    mut menu: MenuUi,
+    mut on_tick: F,
+) -> Result<SelectMenuResult>
+where
+    F: FnMut(&mut MenuUi, usize) -> bool,
+{
     if menu.items.is_empty() {
         return Ok(SelectMenuResult::Cancel);
     }
@@ -870,8 +961,10 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
     };
     let vis_pos = visible_position(&visible, selected).unwrap_or(0);
     state.select(Some(vis_pos));
+    let mut frame_index = 0usize;
 
     loop {
+        let ticking = on_tick(&mut menu, frame_index);
         session.terminal.draw(|frame| {
             let status_height = if menu.status.is_some() { 1 } else { 0 };
             let tab_height = if menu.tabs.len() > 1 { 1 } else { 0 };
@@ -906,12 +999,15 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
                 .map(|&i| {
                     let item = &menu.items[i];
                     let style = menu_item_style(item);
-                    let line = if filter_active && !filter_text.is_empty() {
-                        highlighted_line(&item.label, &filter_text, style)
-                    } else {
-                        Line::from(Span::styled(item.label.clone(), style))
-                    };
-                    ListItem::new(line)
+                    let query = if filter_active { &filter_text } else { "" };
+                    ListItem::new(menu_item_lines(
+                        item,
+                        query,
+                        style,
+                        panes[0].width.saturating_sub(4) as usize,
+                        2,
+                        frame_index,
+                    ))
                 })
                 .collect::<Vec<_>>();
             let list_title = if filter_active {
@@ -980,7 +1076,12 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
             );
         })?;
 
-        if let Event::Key(key) = event::read()? {
+        let Some(terminal_event) = read_menu_event(ticking)? else {
+            frame_index = frame_index.wrapping_add(1);
+            continue;
+        };
+
+        if let Event::Key(key) = terminal_event {
             if key.kind != KeyEventKind::Press {
                 continue;
             }
@@ -1075,7 +1176,7 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
                     }
                 }
                 Some(MenuAction::Select) => {
-                    if filter_active && visible.is_empty() {
+                    if (filter_active && visible.is_empty()) || !menu.items[selected].selectable {
                         // no matches — ignore, must Esc first
                     } else {
                         return Ok(SelectMenuResult::Selected(selected));
@@ -1096,6 +1197,25 @@ pub(crate) fn multi_select_menu(
     selectable_count: usize,
     initially_checked: &[usize],
 ) -> Result<MultiSelectMenuResult> {
+    multi_select_menu_with_tick(
+        session,
+        menu,
+        selectable_count,
+        initially_checked,
+        |_, _| false,
+    )
+}
+
+pub(crate) fn multi_select_menu_with_tick<F>(
+    session: &mut TerminalSession,
+    mut menu: MenuUi,
+    selectable_count: usize,
+    initially_checked: &[usize],
+    mut on_tick: F,
+) -> Result<MultiSelectMenuResult>
+where
+    F: FnMut(&mut MenuUi, usize) -> bool,
+{
     if menu.items.is_empty() {
         return Ok(MultiSelectMenuResult::Cancel);
     }
@@ -1122,8 +1242,10 @@ pub(crate) fn multi_select_menu(
     };
     let vis_pos = visible_position(&visible, focused).unwrap_or(0);
     state.select(Some(vis_pos));
+    let mut frame_index = 0usize;
 
     loop {
+        let ticking = on_tick(&mut menu, frame_index);
         session.terminal.draw(|frame| {
             let status_height = if menu.status.is_some() { 1 } else { 0 };
             let tab_height = if menu.tabs.len() > 1 { 1 } else { 0 };
@@ -1159,16 +1281,20 @@ pub(crate) fn multi_select_menu(
                 .iter()
                 .map(|&i| {
                     let item = &menu.items[i];
-                    let (checkbox, text) = if i < selectable_count {
+                    let checkbox = if i < selectable_count {
                         let chk = if checked.contains(&i) {
                             "[\u{2713}] "
                         } else {
                             "[ ] "
                         };
-                        (Some(chk), item.label.as_str())
+                        Some(chk)
                     } else {
-                        (None, item.label.as_str())
+                        None
                     };
+                    let label_width = panes[0]
+                        .width
+                        .saturating_sub(4 + checkbox.map_or(0, |value| value.len() as u16))
+                        as usize;
                     let base_style = if i < selectable_count && checked.contains(&i) {
                         Style::default()
                             .fg(Color::Cyan)
@@ -1176,24 +1302,21 @@ pub(crate) fn multi_select_menu(
                     } else {
                         menu_item_style(item)
                     };
-                    let line = if filter_active && !filter_text.is_empty() {
-                        let spans = if let Some(chk) = checkbox {
-                            let mut spans = vec![Span::styled(chk.to_string(), base_style)];
-                            spans.extend(highlighted_line(text, &filter_text, base_style).spans);
-                            spans
-                        } else {
-                            highlighted_line(text, &filter_text, base_style).spans
-                        };
-                        Line::from(spans)
-                    } else {
-                        let mut spans = Vec::new();
-                        if let Some(chk) = checkbox {
-                            spans.push(Span::styled(chk.to_string(), base_style));
-                        }
-                        spans.push(Span::styled(text.to_string(), base_style));
-                        Line::from(spans)
-                    };
-                    ListItem::new(line)
+                    let query = if filter_active { &filter_text } else { "" };
+                    let mut spans = Vec::new();
+                    if let Some(chk) = checkbox {
+                        spans.push(Span::styled(chk.to_string(), base_style));
+                    }
+                    let mut lines = menu_item_lines(
+                        item,
+                        query,
+                        base_style,
+                        label_width,
+                        checkbox.map_or(0, str::len),
+                        frame_index,
+                    );
+                    lines[0].spans.splice(0..0, spans);
+                    ListItem::new(lines)
                 })
                 .collect::<Vec<_>>();
 
@@ -1269,7 +1392,12 @@ pub(crate) fn multi_select_menu(
             );
         })?;
 
-        if let Event::Key(key) = event::read()? {
+        let Some(terminal_event) = read_menu_event(ticking)? else {
+            frame_index = frame_index.wrapping_add(1);
+            continue;
+        };
+
+        if let Event::Key(key) = terminal_event {
             if key.kind != KeyEventKind::Press {
                 continue;
             }
@@ -1451,6 +1579,90 @@ pub(crate) fn adjust_focused_on_filter(visible: &[usize], focused: &mut usize) {
     {
         *focused = first;
     }
+}
+
+pub(crate) fn fit_menu_label(label: &str, status: MenuItemStatus, max_width: usize) -> String {
+    if label.chars().count() <= max_width {
+        return label.to_string();
+    }
+
+    let Some((base, suffix)) = menu_status_suffix(label, status) else {
+        return fit_menu_text(label, max_width);
+    };
+    let suffix_width = suffix.chars().count();
+    let reserved_suffix_width = if status == MenuItemStatus::Checking {
+        " ...".chars().count()
+    } else {
+        suffix_width
+    };
+    if max_width <= reserved_suffix_width {
+        return suffix
+            .trim_start()
+            .chars()
+            .take(max_width)
+            .collect::<String>();
+    }
+
+    let base_width = max_width - reserved_suffix_width;
+    let mut fitted = base
+        .chars()
+        .take(base_width.saturating_sub(1))
+        .collect::<String>();
+    fitted.push('…');
+    fitted.push_str(suffix);
+    fitted
+}
+
+fn fit_menu_text(value: &str, max_width: usize) -> String {
+    if value.chars().count() <= max_width {
+        return value.to_string();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    if max_width == 1 {
+        return "…".to_string();
+    }
+    let mut fitted = value.chars().take(max_width - 1).collect::<String>();
+    fitted.push('…');
+    fitted
+}
+
+fn menu_status_suffix(label: &str, status: MenuItemStatus) -> Option<(&str, &str)> {
+    let suffix = match status {
+        MenuItemStatus::Checking => {
+            let suffix = label.rsplit_once(' ')?.1;
+            if !matches!(suffix, "." | ".." | "...") {
+                return None;
+            }
+            suffix
+        }
+        MenuItemStatus::UpToDate => "(up to date)",
+        MenuItemStatus::Updatable => "(updatable)",
+        MenuItemStatus::CheckFailed => "(check failed)",
+        _ => return None,
+    };
+    let base = label.strip_suffix(suffix)?.strip_suffix(' ')?;
+    Some((base, &label[base.len()..]))
+}
+
+pub(crate) fn styled_menu_label(
+    label: &str,
+    query: &str,
+    base_style: Style,
+    status: MenuItemStatus,
+) -> Line<'static> {
+    let Some((base, suffix)) = menu_status_suffix(label, status) else {
+        return highlighted_line(label, query, base_style);
+    };
+    let mut spans = highlighted_line(base, query, base_style).spans;
+    let suffix_style = if status == MenuItemStatus::Checking {
+        base_style
+    } else {
+        base_style.add_modifier(Modifier::ITALIC)
+    };
+    spans.push(Span::styled(suffix.to_string(), suffix_style));
+    Line::from(spans)
 }
 
 pub(crate) fn highlighted_line(text: &str, query: &str, base_style: Style) -> Line<'static> {
@@ -2226,6 +2438,7 @@ fn build_configure_items(
         };
         items.push(MenuItemUi {
             label: format!("{checkbox} {label}"),
+            subtitle: None,
             preview_lines: vec![preview],
             status: if enabled[i] {
                 MenuItemStatus::Installed
@@ -2240,6 +2453,7 @@ fn build_configure_items(
         items.push(MenuItemUi {
             label: "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
                 .to_string(),
+            subtitle: None,
             preview_lines: vec![],
             status: MenuItemStatus::Disabled,
             selectable: false,
@@ -2254,6 +2468,7 @@ fn build_configure_items(
             };
             items.push(MenuItemUi {
                 label: format!("{checkbox} {dir}"),
+                subtitle: None,
                 preview_lines: vec![preview],
                 status: MenuItemStatus::Installed,
                 selectable: true,
@@ -2264,6 +2479,7 @@ fn build_configure_items(
     items.push(MenuItemUi {
         label: "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
             .to_string(),
+        subtitle: None,
         preview_lines: vec![],
         status: MenuItemStatus::Disabled,
         selectable: false,
@@ -2271,6 +2487,7 @@ fn build_configure_items(
     });
     items.push(MenuItemUi {
         label: "Add custom...".to_string(),
+        subtitle: None,
         preview_lines: vec![if active_tab == 0 {
             "Enter an absolute path (e.g. /opt/skills or ~/skills).".to_string()
         } else {
@@ -2329,6 +2546,7 @@ fn build_provider_credential_items(
             ),
             MenuItemUi {
                 label: "Save provider".to_string(),
+                subtitle: None,
                 preview_lines: vec![
                     "Enter saves this credential and returns to the list.".to_string(),
                 ],
@@ -2338,6 +2556,7 @@ fn build_provider_credential_items(
             },
             MenuItemUi {
                 label: "Cancel".to_string(),
+                subtitle: None,
                 preview_lines: vec![
                     "Discard this provider form and return to the list.".to_string(),
                 ],
@@ -2351,6 +2570,7 @@ fn build_provider_credential_items(
         .iter()
         .map(|credential| MenuItemUi {
             label: format!("{} — {}", credential.provider.as_str(), credential.url),
+            subtitle: None,
             preview_lines: vec![
                 format!("Provider: {}", credential.provider.as_str()),
                 format!("Base URL: {}", credential.url),
@@ -2364,6 +2584,7 @@ fn build_provider_credential_items(
         .collect::<Vec<_>>();
     items.push(MenuItemUi {
         label: "(Add provider)".to_string(),
+        subtitle: None,
         preview_lines: vec![
             "Provide a provider type, base URL, and repository-read token.".to_string(),
             "The token is hidden in this UI and redacted from `configure --show`.".to_string(),
@@ -2378,6 +2599,7 @@ fn build_provider_credential_items(
 fn provider_form_item(label: &str, value: String, preview: &str) -> MenuItemUi {
     MenuItemUi {
         label: format!("{label:<12} │ {value}"),
+        subtitle: None,
         preview_lines: vec![
             preview.to_string(),
             "Use Up/Down to select a field.".to_string(),

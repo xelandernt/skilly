@@ -42,6 +42,11 @@ When scanning or listing skills, each skill has one of these statuses:
 -   **installed** — present and up to date.
 -   **updatable** — installed but a newer version is available.
 
+Interactive skill rows show provenance beneath the name. Update checks use an
+animated spinner while pending, then `✓` for unchanged skills and `!` for
+failed checks; `↑` marks an available update. These indicators do not change
+the installed skill's persisted status.
+
 ## Destinations
 
 skilly can install skills into several agent-specific directories:
