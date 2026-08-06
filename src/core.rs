@@ -1053,6 +1053,16 @@ fn infer_source(metadata: &BTreeMap<String, String>) -> String {
     SKILLY_UNKNOWN_SOURCE.to_string()
 }
 
+fn validate_source_metadata(parsed: &Mapping) -> Result<()> {
+    let metadata = frontmatter_metadata(parsed);
+    if metadata.get(SKILLY_SOURCE_METADATA_KEY).map(String::as_str) == Some("skillsmp") {
+        bail!(
+            "legacy SkillsMP provenance is not supported; reinstall this skill from its repository"
+        );
+    }
+    Ok(())
+}
+
 fn has_managed_metadata(metadata: &BTreeMap<String, String>) -> bool {
     metadata.contains_key(SKILLY_SOURCE_METADATA_KEY)
         || metadata.contains_key(SKILLY_REPOSITORY_PROVIDER_METADATA_KEY)
@@ -1306,6 +1316,11 @@ impl SkillData {
     /// Validate skill name, description length, and compatibility length.
     pub fn validate(&self) -> Result<()> {
         validate_skill_name(&self.name)?;
+        if self.source == "skillsmp" {
+            bail!(
+                "legacy SkillsMP provenance is not supported; reinstall this skill from its repository"
+            );
+        }
         if self.description.is_empty() || self.description.len() > MAX_DESCRIPTION_LENGTH {
             bail!("skill description must contain 1-{MAX_DESCRIPTION_LENGTH} characters");
         }
@@ -1348,6 +1363,7 @@ impl SkillData {
     ) -> Result<Self> {
         let (frontmatter, body) = split_frontmatter(text)?;
         let parsed = parse_frontmatter(&frontmatter)?;
+        validate_source_metadata(&parsed)?;
         let name = required_string_field(&parsed, "name")?;
         let description = required_string_field(&parsed, "description")?;
         Ok(Self::from_parsed_parts(
@@ -2736,22 +2752,6 @@ pub fn scan_project_with_file_system(
     Ok(matches)
 }
 
-pub fn dependency_updates_in(environment: &ProjectEnvironment) -> Result<Vec<SkillMatchData>> {
-    dependency_updates_with_file_system(&NATIVE_FILE_SYSTEM, environment)
-}
-
-pub fn dependency_updates_with_file_system(
-    file_system: &dyn FileSystem,
-    environment: &ProjectEnvironment,
-) -> Result<Vec<SkillMatchData>> {
-    Ok(scan_project_with_file_system(file_system, environment)?
-        .into_iter()
-        .filter(|item| {
-            scan_match_status(&item.available, item.installed.as_ref()) == STATUS_UPDATABLE
-        })
-        .collect())
-}
-
 pub fn available_dependency_skill_in(
     installed_skill: &SkillData,
     environment: &ProjectEnvironment,
@@ -2768,6 +2768,22 @@ pub fn available_dependency_skill_with_file_system(
         .into_iter()
         .map(|item| item.available)
         .find(|skill| skill.matches(installed_skill)))
+}
+
+/// Find the refreshed version of an installed repository skill.
+///
+/// Repository locations may contain more than one skill. The selected candidate
+/// must therefore match the installed skill's identity rather than discovery
+/// order.
+pub(crate) fn available_repository_update(
+    installed_skill: &SkillData,
+    discovered_skills: &[SkillData],
+) -> Result<Option<SkillData>> {
+    let refreshed = discovered_skills
+        .iter()
+        .find(|candidate| installed_skill.matches(candidate))
+        .context("repository source not found")?;
+    Ok((!repository_versions_match(installed_skill, refreshed)).then(|| refreshed.clone()))
 }
 
 /// Parse a GitHub URL into a structured skill location.
@@ -3990,6 +4006,54 @@ dev = ["dev-pkg>=1", "shared-pkg>=1"]
             repository_commit_sha: None,
             package_ecosystem: eco,
         }
+    }
+
+    fn make_repository_skill(name: &str, url: &str, commit_sha: &str) -> SkillData {
+        SkillData {
+            name: name.to_string(),
+            description: String::new(),
+            path: None,
+            body: String::new(),
+            raw: Vec::new(),
+            license: None,
+            compatibility: None,
+            metadata: BTreeMap::new(),
+            allowed_tools: None,
+            resources: Vec::new(),
+            resource_warnings: Vec::new(),
+            source: super::SKILLY_SOURCE_REPOSITORY.to_string(),
+            package_name: None,
+            package_version: None,
+            repository_provider: Some(super::RepositoryProvider::GitHub),
+            repository_url: Some(url.to_string()),
+            repository_commit_sha: Some(commit_sha.to_string()),
+            package_ecosystem: None,
+        }
+    }
+
+    #[test]
+    fn repository_update_matches_the_installed_skill_in_a_multi_skill_location() {
+        let installed = make_repository_skill(
+            "review",
+            "https://github.com/example/skills/tree/main/skills/review",
+            "0123456789abcdef0123456789abcdef01234567",
+        );
+        let unrelated = make_repository_skill(
+            "plan",
+            "https://github.com/example/skills/tree/main/skills/plan",
+            "89abcdef0123456789abcdef0123456789abcdef",
+        );
+        let refreshed = make_repository_skill(
+            "review",
+            "https://github.com/example/skills/tree/main/skills/review",
+            "fedcba98765432100123456789abcdef01234567",
+        );
+
+        let update =
+            super::available_repository_update(&installed, &[unrelated, refreshed.clone()])
+                .expect("repository source should contain the installed skill");
+
+        assert_eq!(update, Some(refreshed));
     }
 
     #[test]

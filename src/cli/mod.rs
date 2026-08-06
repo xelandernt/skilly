@@ -24,9 +24,9 @@ use crate::core::{
     ProjectSource, PythonSourceSettings, RepositoryLocationData, RepositoryProvider,
     SKILLY_SOURCE_REPOSITORY, SKILLY_UNKNOWN_SOURCE, STATUS_INSTALLABLE, STATUS_INSTALLED,
     STATUS_UPDATABLE, ScanDependencySelection, SkillData, SkillMatchData, SkillSourceMetadata,
-    available_dependency_skill_in, discover_repository_skills, parse_repository_location,
-    project_requirements, remove_skill, repository_versions_match, scan_match_status,
-    scan_project_in,
+    available_dependency_skill_in, available_repository_update as resolve_repository_update,
+    discover_repository_skills, parse_repository_location, project_requirements, remove_skill,
+    scan_match_status, scan_project_in,
 };
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -1681,41 +1681,40 @@ struct PendingSkillUpdate {
 }
 
 fn run_update(directory: &Path, config: ClientConfig, yes: bool) -> Result<()> {
-    let client = SkillsMpClient::new(config)?;
+    let client = Arc::new(SkillsMpClient::new(config)?);
     let installed_skills = discover_installed_skills_report(directory)?.valid_skills;
-    let environment = build_project_environment(directory, &ScanDependencySelection::default());
-
-    let mut updates = Vec::new();
-    for item in crate::core::dependency_updates_in(&environment)? {
-        let installed = item.installed.context("Missing installed skill")?;
-        updates.push(PendingSkillUpdate {
-            installed,
-            available: item.available,
-        });
+    let destination = ResolvedDestination {
+        label: "current".to_string(),
+        path: directory.to_path_buf(),
+        color: ratatui::style::Color::White,
+    };
+    let entries = installed_skills
+        .iter()
+        .cloned()
+        .map(|skill| ListedSkillEntry::Valid(Box::new(skill)))
+        .collect::<Vec<_>>();
+    let requests = build_update_check_requests(
+        std::slice::from_ref(&destination),
+        std::slice::from_ref(&entries),
+    );
+    let checks = UpdateChecks::start(requests, Arc::clone(&client));
+    while checks.progress().is_checking() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    let dependency_names = updates
-        .iter()
-        .map(|item| skill_directory_name(&item.installed))
-        .collect::<std::collections::BTreeSet<_>>();
+    let mut updates = Vec::new();
     let mut errors = Vec::new();
-    for installed in installed_skills
-        .into_iter()
-        .filter(|skill| skill.repository_url.is_some() && !skill.is_dependency())
-    {
-        if dependency_names.contains(&skill_directory_name(&installed)) {
-            continue;
-        }
-        match available_repository_update(&installed, &client) {
-            Ok(Some(available)) => updates.push(PendingSkillUpdate {
+    for installed in installed_skills {
+        match checks.state(&UpdateCheckKey::new(directory, &installed)) {
+            Some(UpdateCheckState::Updatable(available)) => updates.push(PendingSkillUpdate {
                 installed,
-                available,
+                available: *available,
             }),
-            Ok(None) => {}
-            Err(error) => errors.push(format!(
+            Some(UpdateCheckState::Failed(error)) => errors.push(format!(
                 "Could not check updates for {}: {error}",
                 skill_directory_name(&installed)
             )),
+            Some(UpdateCheckState::Checking | UpdateCheckState::Latest) | None => {}
         }
     }
 
@@ -1755,31 +1754,23 @@ fn run_update(directory: &Path, config: ClientConfig, yes: bool) -> Result<()> {
     }
 
     for update in &updates {
-        let updated = install_available_skill(
+        match install_available_skill(
             directory,
             &update.available,
             Some(&skill_directory_name(&update.installed)),
             true,
-        )?;
-        println!("{}", format_applied_update(&update.installed, &updated));
+        ) {
+            Ok(updated) => println!("{}", format_applied_update(&update.installed, &updated)),
+            Err(error) => errors.push(format!(
+                "Could not update {}: {error}",
+                skill_directory_name(&update.installed)
+            )),
+        }
+    }
+    for error in errors {
+        println!("{error}");
     }
     Ok(())
-}
-
-fn available_repository_update(
-    skill: &SkillData,
-    client: &SkillsMpClient,
-) -> Result<Option<SkillData>> {
-    if let (Some(repository_url), Some(provider)) =
-        (skill.repository_url.as_deref(), skill.repository_provider)
-    {
-        let refreshed = discover_repository_skills(client, repository_url, Some(provider))?
-            .into_iter()
-            .next()
-            .context("repository URL resolves to no skills")?;
-        return Ok((!repository_versions_match(skill, &refreshed)).then_some(refreshed));
-    }
-    Ok(None)
 }
 
 fn confirm_apply_updates() -> Result<bool> {
@@ -2323,17 +2314,14 @@ fn update_skill(directory: &Path, skill: &SkillData, client: &SkillsMpClient) ->
     if let (Some(repository_url), Some(provider)) =
         (skill.repository_url.as_deref(), skill.repository_provider)
     {
-        let refreshed = discover_repository_skills(client, repository_url, Some(provider))?
-            .into_iter()
-            .next()
-            .context("repository URL resolves to no skills")?;
-        if repository_versions_match(skill, &refreshed) {
+        let discovered = discover_repository_skills(client, repository_url, Some(provider))?;
+        let Some(refreshed) = resolve_repository_update(skill, &discovered)? else {
             return Ok(format!(
                 "{} is already up to date ({})",
                 skill_directory_name(skill),
                 skill.repository_commit_sha.as_deref().unwrap_or("unknown")
             ));
-        }
+        };
         let updated = install_available_skill(
             directory,
             &refreshed,
@@ -2366,11 +2354,8 @@ fn skill_update_available(
     if let (Some(repository_url), Some(provider)) =
         (skill.repository_url.as_deref(), skill.repository_provider)
     {
-        let refreshed = discover_repository_skills(client, repository_url, Some(provider))?
-            .into_iter()
-            .next()
-            .context("repository URL resolves to no skills")?;
-        return Ok(!repository_versions_match(skill, &refreshed));
+        let discovered = discover_repository_skills(client, repository_url, Some(provider))?;
+        return Ok(resolve_repository_update(skill, &discovered)?.is_some());
     }
     Ok(false)
 }

@@ -440,7 +440,7 @@ Use this skill carefully.
     assert skills[0].skill_markdown_path == skill_path.resolve()
 
 
-def test_legacy_github_metadata_does_not_restore_removed_provenance(
+def test_legacy_skillsmp_provenance_is_rejected(
     tmp_path: Path,
 ) -> None:
     skill_dir = tmp_path / "installed-skill"
@@ -459,12 +459,8 @@ Body
 """,
     )
 
-    skill = Skill.from_dir(skill_dir)
-
-    assert skill.is_installed() is True
-    assert skill.can_update() is False
-    assert not hasattr(skill, "github_url")
-    assert not hasattr(skill, "skillsmp_id")
+    with pytest.raises(RuntimeError, match="legacy SkillsMP provenance"):
+        Skill.from_dir(skill_dir)
 
 
 def test_install_rejects_paths_outside_skill_directory(tmp_path: Path) -> None:

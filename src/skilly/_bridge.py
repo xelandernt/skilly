@@ -204,6 +204,12 @@ def available_dependency_skill(
     )
 
 
+def available_repository_update(
+    installed: Skill, discovered: list[Skill]
+) -> Skill | None:
+    return _core.available_repository_update(installed, discovered)
+
+
 def parse_repository_location(
     repository_url: str,
     provider: RepositoryProvider | None = None,

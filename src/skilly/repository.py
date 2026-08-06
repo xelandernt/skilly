@@ -15,8 +15,8 @@ from .constants import (
 from .skills import (
     RepositoryDiscoveryClient,
     Skill,
+    available_repository_update,
     discover_installed_skills,
-    repository_versions_match,
 )
 
 if TYPE_CHECKING:
@@ -295,12 +295,7 @@ class SkillRepository:
                     "Repository URL resolves to no skills: "
                     f"{installed_skill.repository_url}"
                 )
-            refreshed = discovered[0]
-            return (
-                None
-                if repository_versions_match(installed_skill, refreshed)
-                else refreshed
-            )
+            return available_repository_update(installed_skill, discovered)
 
         return None
 
