@@ -3041,15 +3041,26 @@ pub fn discover_repository_skills<F: RepositorySnapshotFetcher>(
 ) -> Result<Vec<SkillData>> {
     let location = parse_repository_location(repository_url, provider)?;
     let snapshot = fetcher.fetch_repository_snapshot(&location)?;
+    discover_repository_skills_from_snapshot(&location, &snapshot)
+}
+
+/// Build skills from a repository snapshot that has already been fetched.
+///
+/// Keeping this separate from transport lets callers reuse one snapshot when
+/// multiple installed skills originate from the same repository revision.
+pub(crate) fn discover_repository_skills_from_snapshot(
+    location: &RepositoryLocationData,
+    snapshot: &RepositorySnapshotData,
+) -> Result<Vec<SkillData>> {
     let skill_dirs = find_repository_skill_dirs(&snapshot.files, &location.path);
     if skill_dirs.is_empty() {
-        bail!("no SKILL.md found at {repository_url}");
+        bail!("no SKILL.md found at {}", location.url);
     }
 
     skill_dirs
         .into_iter()
         .map(|skill_dir| {
-            let skill_url = build_repository_skill_url(&location, &skill_dir, &snapshot.ref_name);
+            let skill_url = build_repository_skill_url(location, &skill_dir, &snapshot.ref_name);
             build_skill_from_repository_files(
                 &snapshot.files,
                 &skill_dir,

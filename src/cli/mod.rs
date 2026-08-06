@@ -21,11 +21,12 @@ use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery, SkillsMpS
 use crate::config::{ProviderCredential, SkillyConfig};
 use crate::core::{
     MavenSourceSettings, NodeSourceSettings, ProjectDependencyOrigin, ProjectEnvironment,
-    ProjectSource, PythonSourceSettings, RepositoryProvider, SKILLY_SOURCE_REPOSITORY,
-    SKILLY_UNKNOWN_SOURCE, STATUS_INSTALLABLE, STATUS_INSTALLED, STATUS_UPDATABLE,
-    ScanDependencySelection, SkillData, SkillMatchData, SkillSourceMetadata,
-    available_dependency_skill_in, discover_repository_skills, project_requirements, remove_skill,
-    repository_versions_match, scan_match_status, scan_project_in,
+    ProjectSource, PythonSourceSettings, RepositoryLocationData, RepositoryProvider,
+    SKILLY_SOURCE_REPOSITORY, SKILLY_UNKNOWN_SOURCE, STATUS_INSTALLABLE, STATUS_INSTALLED,
+    STATUS_UPDATABLE, ScanDependencySelection, SkillData, SkillMatchData, SkillSourceMetadata,
+    available_dependency_skill_in, discover_repository_skills, parse_repository_location,
+    project_requirements, remove_skill, repository_versions_match, scan_match_status,
+    scan_project_in,
 };
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -1057,6 +1058,8 @@ fn build_update_check_requests(
     entries_by_tab: &[Vec<ListedSkillEntry>],
 ) -> Vec<UpdateCheckRequest> {
     let mut requests = Vec::new();
+    let mut repository_checks =
+        std::collections::BTreeMap::<RepositoryUpdateCheckGroup, Vec<RepositoryUpdateCheck>>::new();
     for (destination, entries) in destinations.iter().zip(entries_by_tab) {
         let mut dependencies = Vec::new();
         for entry in entries {
@@ -1069,10 +1072,24 @@ fn build_update_check_requests(
                 continue;
             }
             match (skill.repository_url.as_ref(), skill.repository_provider) {
-                (Some(_), Some(_)) => requests.push(UpdateCheckRequest::Repository {
-                    key,
-                    skill: skill.clone(),
-                }),
+                (Some(repository_url), Some(provider)) => {
+                    match parse_repository_location(repository_url, Some(provider)) {
+                        Ok(location) => {
+                            repository_checks
+                                .entry(RepositoryUpdateCheckGroup::from(&location))
+                                .or_default()
+                                .push(RepositoryUpdateCheck {
+                                    key,
+                                    skill: skill.clone(),
+                                    location,
+                                });
+                        }
+                        Err(error) => requests.push(UpdateCheckRequest::Failed {
+                            key,
+                            error: error.to_string(),
+                        }),
+                    }
+                }
                 (Some(_), None) => requests.push(UpdateCheckRequest::Failed {
                     key,
                     error: "repository provider is missing".to_string(),
@@ -1100,7 +1117,77 @@ fn build_update_check_requests(
             });
         }
     }
+    for checks in repository_checks.into_values() {
+        let location = shared_repository_location(&checks);
+        let skills = checks
+            .into_iter()
+            .map(|check| (check.key, check.skill))
+            .collect();
+        requests.push(UpdateCheckRequest::Repository { location, skills });
+    }
     requests
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct RepositoryUpdateCheckGroup {
+    provider: RepositoryProvider,
+    base_url: String,
+    namespace: String,
+    repository: String,
+    reference: Option<String>,
+}
+
+impl From<&RepositoryLocationData> for RepositoryUpdateCheckGroup {
+    fn from(location: &RepositoryLocationData) -> Self {
+        Self {
+            provider: location.provider,
+            base_url: location.base_url.clone(),
+            namespace: location.namespace.clone(),
+            repository: location.repo.clone(),
+            reference: location.r#ref.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RepositoryUpdateCheck {
+    key: UpdateCheckKey,
+    skill: Box<SkillData>,
+    location: RepositoryLocationData,
+}
+
+fn shared_repository_location(checks: &[RepositoryUpdateCheck]) -> RepositoryLocationData {
+    let mut location = checks[0].location.clone();
+    location.path = common_repository_path(checks.iter().map(|check| check.location.path.as_str()));
+    location
+}
+
+fn common_repository_path<'a>(paths: impl Iterator<Item = &'a str>) -> String {
+    let mut paths = paths;
+    let Some(first) = paths.next() else {
+        return ".".to_string();
+    };
+    let mut common = first
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect::<Vec<_>>();
+    for path in paths {
+        let parts = path
+            .split('/')
+            .filter(|part| !part.is_empty() && *part != ".")
+            .collect::<Vec<_>>();
+        let shared_length = common
+            .iter()
+            .zip(parts)
+            .take_while(|(left, right)| *left == right)
+            .count();
+        common.truncate(shared_length);
+    }
+    if common.is_empty() {
+        ".".to_string()
+    } else {
+        common.join("/")
+    }
 }
 
 fn run_list(
@@ -2924,20 +3011,21 @@ fn downloadable_skill_preview_lines(
 #[cfg(test)]
 mod tests {
     use super::args::{
-        Cli, Commands, CreateAction, ScanDependencyArgs, next_non_empty_tab_index,
-        next_selectable_index, next_tab_index, previous_non_empty_tab_index,
-        previous_selectable_index, previous_tab_index,
+        Cli, Commands, CreateAction, ResolvedDestination, ScanDependencyArgs,
+        next_non_empty_tab_index, next_selectable_index, next_tab_index,
+        previous_non_empty_tab_index, previous_selectable_index, previous_tab_index,
     };
     use super::tui::{
         DownloadableSkillMatch, MenuAction, MenuItemStatus, MenuItemUi, TextBuffer,
         adjust_focused_on_filter, build_visible_indices, create_action, filter_matches,
         filterable_count, fit_menu_label, menu_action, styled_menu_label, visible_position,
     };
-    use super::update_checks::{UpdateCheckProgress, UpdateCheckState};
+    use super::update_checks::{UpdateCheckProgress, UpdateCheckRequest, UpdateCheckState};
     use super::{
         APPLY_ALL_CHOICE, BACK_CHOICE, EXIT_CHOICE, INSTALL_ALL_CHOICE, INSTALL_CHOICE,
         PendingSkillUpdate, REMOVE_CHOICE, UPDATE_ALL_CHOICE, UPDATE_CHOICE, VIEW_FILES_CHOICE,
-        action_menu_default, downloadable_skill_actions, downloadable_skill_menu_status,
+        action_menu_default, build_update_check_requests, common_repository_path,
+        downloadable_skill_actions, downloadable_skill_menu_status,
         downloadable_skill_preview_lines, exit_menu_item, format_pending_update,
         installed_skill_actions, installed_skill_label, installed_skill_preview_lines,
         installed_skillsmp_match, listed_skill_label_with_update_state, listed_skill_menu_status,
@@ -2952,7 +3040,7 @@ mod tests {
     };
     use clap::Parser;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-    use ratatui::style::{Modifier, Style};
+    use ratatui::style::{Color, Modifier, Style};
     use serde_json::Value as JsonValue;
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
@@ -3309,6 +3397,52 @@ mod tests {
                 BACK_CHOICE,
                 EXIT_CHOICE
             ]
+        );
+    }
+
+    #[test]
+    fn update_checks_share_one_request_for_skills_from_the_same_repository() {
+        let destination = ResolvedDestination {
+            label: "test".to_string(),
+            path: PathBuf::from("/tmp/test-skills"),
+            color: Color::Blue,
+        };
+        let first = installed_skill(
+            None,
+            Some("https://github.com/example/repo/tree/main/skills/first"),
+        );
+        let second = SkillData {
+            name: "second".to_string(),
+            repository_url: Some(
+                "https://github.com/example/repo/tree/main/skills/second".to_string(),
+            ),
+            ..first.clone()
+        };
+
+        let requests = build_update_check_requests(
+            &[destination],
+            &[vec![
+                super::tui::ListedSkillEntry::Valid(Box::new(first)),
+                super::tui::ListedSkillEntry::Valid(Box::new(second)),
+            ]],
+        );
+
+        let [UpdateCheckRequest::Repository { location, skills }] = requests.as_slice() else {
+            panic!("expected one grouped repository update check");
+        };
+        assert_eq!(location.path, "skills");
+        assert_eq!(skills.len(), 2);
+    }
+
+    #[test]
+    fn shared_repository_path_is_the_deepest_common_ancestor() {
+        assert_eq!(
+            common_repository_path(["skills/python", "skills/rust"].into_iter()),
+            "skills"
+        );
+        assert_eq!(
+            common_repository_path(["skills/python", "examples/rust"].into_iter()),
+            "."
         );
     }
 

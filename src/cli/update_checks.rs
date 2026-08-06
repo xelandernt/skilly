@@ -1,6 +1,8 @@
-use super::available_repository_update;
 use crate::client::SkillsMpClient;
-use crate::core::{ProjectEnvironment, SkillData, scan_project_in};
+use crate::core::{
+    ProjectEnvironment, RepositoryLocationData, RepositorySnapshotFetcher, SkillData,
+    discover_repository_skills_from_snapshot, repository_versions_match, scan_project_in,
+};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -52,8 +54,8 @@ pub(super) enum UpdateCheckRequest {
         skills: Vec<(UpdateCheckKey, SkillData)>,
     },
     Repository {
-        key: UpdateCheckKey,
-        skill: Box<SkillData>,
+        location: RepositoryLocationData,
+        skills: Vec<(UpdateCheckKey, Box<SkillData>)>,
     },
     Failed {
         key: UpdateCheckKey,
@@ -67,7 +69,8 @@ impl UpdateCheckRequest {
             Self::Dependencies { skills, .. } => {
                 skills.iter().map(|(key, _)| key.clone()).collect()
             }
-            Self::Repository { key, .. } | Self::Failed { key, .. } => vec![key.clone()],
+            Self::Repository { skills, .. } => skills.iter().map(|(key, _)| key.clone()).collect(),
+            Self::Failed { key, .. } => vec![key.clone()],
         }
     }
 }
@@ -183,8 +186,8 @@ fn run_requests(
                         environment,
                         skills,
                     } => check_dependencies(states, cancelled, &environment, skills),
-                    UpdateCheckRequest::Repository { key, skill } => {
-                        check_repository(states, cancelled, client, key, &skill);
+                    UpdateCheckRequest::Repository { location, skills } => {
+                        check_repository(states, cancelled, client, &location, skills);
                     }
                     UpdateCheckRequest::Failed { key, error } => {
                         set_state(states, cancelled, key, UpdateCheckState::Failed(error));
@@ -239,15 +242,43 @@ fn check_repository(
     states: &Mutex<BTreeMap<UpdateCheckKey, UpdateCheckState>>,
     cancelled: &AtomicBool,
     client: &SkillsMpClient,
-    key: UpdateCheckKey,
-    skill: &SkillData,
+    location: &RepositoryLocationData,
+    skills: Vec<(UpdateCheckKey, Box<SkillData>)>,
 ) {
-    let state = match available_repository_update(skill, client) {
-        Ok(Some(available)) => UpdateCheckState::Updatable(Box::new(available)),
-        Ok(None) => UpdateCheckState::Current,
-        Err(error) => UpdateCheckState::Failed(error.to_string()),
+    let available = client
+        .fetch_repository_snapshot(location)
+        .and_then(|snapshot| discover_repository_skills_from_snapshot(location, &snapshot));
+    match available {
+        Ok(available) => {
+            for (key, installed) in skills {
+                let state = available
+                    .iter()
+                    .find(|candidate| installed.matches(candidate))
+                    .map_or_else(
+                        || UpdateCheckState::Failed("repository source not found".to_string()),
+                        |candidate| {
+                            if repository_versions_match(&installed, candidate) {
+                                UpdateCheckState::Current
+                            } else {
+                                UpdateCheckState::Updatable(Box::new(candidate.clone()))
+                            }
+                        },
+                    );
+                set_state(states, cancelled, key, state);
+            }
+        }
+        Err(error) => {
+            let message = error.to_string();
+            for (key, _) in skills {
+                set_state(
+                    states,
+                    cancelled,
+                    key,
+                    UpdateCheckState::Failed(message.clone()),
+                );
+            }
+        }
     };
-    set_state(states, cancelled, key, state);
 }
 
 fn set_state(
