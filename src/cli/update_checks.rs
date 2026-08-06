@@ -1,7 +1,7 @@
 use crate::client::SkillsMpClient;
 use crate::core::{
     ProjectEnvironment, RepositoryLocationData, RepositorySnapshotFetcher, SkillData,
-    discover_repository_skills_from_snapshot, repository_versions_match, scan_project_in,
+    available_repository_update, discover_repository_skills_from_snapshot, scan_project_in,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -251,19 +251,11 @@ fn check_repository(
     match available {
         Ok(available) => {
             for (key, installed) in skills {
-                let state = available
-                    .iter()
-                    .find(|candidate| installed.matches(candidate))
-                    .map_or_else(
-                        || UpdateCheckState::Failed("repository source not found".to_string()),
-                        |candidate| {
-                            if repository_versions_match(&installed, candidate) {
-                                UpdateCheckState::Latest
-                            } else {
-                                UpdateCheckState::Updatable(Box::new(candidate.clone()))
-                            }
-                        },
-                    );
+                let state = match available_repository_update(&installed, &available) {
+                    Ok(Some(candidate)) => UpdateCheckState::Updatable(Box::new(candidate)),
+                    Ok(None) => UpdateCheckState::Latest,
+                    Err(error) => UpdateCheckState::Failed(error.to_string()),
+                };
                 set_state(states, cancelled, key, state);
             }
         }

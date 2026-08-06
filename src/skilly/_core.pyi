@@ -275,6 +275,9 @@ def available_dependency_skill(
     sources: list[dict[str, object]] | None = ...,
     file_system: FileSystem | None = ...,
 ) -> Skill | None: ...
+def available_repository_update(
+    installed: Skill, discovered: list[Skill]
+) -> Skill | None: ...
 def parse_repository_location(
     repository_url: str,
     provider: RepositoryProvider | None = ...,

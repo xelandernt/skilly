@@ -478,7 +478,8 @@ mod tests {
     #[test]
     fn save_and_load_roundtrip() {
         remove_test_config();
-        let tmp = std::env::temp_dir().join("skilly-test-config.toml");
+        let tmp =
+            std::env::temp_dir().join(format!("skilly-test-config-{}.toml", std::process::id()));
         let _ = fs::remove_file(&tmp);
 
         let mut config = SkillyConfig::default();

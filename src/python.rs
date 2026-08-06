@@ -6,6 +6,7 @@ use crate::core::{
     SkillDirectoryFlavor, SkillResourceData, SkillSourceMetadata,
     available_dependency_skill_in as rust_available_dependency_skill,
     available_dependency_skill_with_file_system as rust_available_dependency_skill_with_file_system,
+    available_repository_update as rust_available_repository_update,
     default_skills_directory as rust_default_skills_directory,
     discover_installed_skills as rust_discover_installed_skills,
     discover_installed_skills_in as rust_discover_installed_skills_in,
@@ -1589,6 +1590,23 @@ fn available_dependency_skill_py(
 }
 
 #[pyfunction]
+#[pyo3(name = "available_repository_update")]
+fn available_repository_update_py(
+    py: Python<'_>,
+    installed: &PySkill,
+    discovered: Vec<PySkill>,
+) -> PyResult<Option<PySkill>> {
+    let discovered = discovered
+        .into_iter()
+        .map(|skill| skill.inner)
+        .collect::<Vec<_>>();
+    let available = py
+        .allow_threads(|| rust_available_repository_update(&installed.inner, &discovered))
+        .map_err(py_err)?;
+    Ok(available.map(PySkill::from_data))
+}
+
+#[pyfunction]
 #[pyo3(name = "parse_repository_location", signature = (repository_url, provider=None))]
 fn parse_repository_location_py(
     py: Python<'_>,
@@ -1735,6 +1753,7 @@ fn python_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(discover_package_source_skills_py, m)?)?;
     m.add_function(wrap_pyfunction!(scan_project_py, m)?)?;
     m.add_function(wrap_pyfunction!(available_dependency_skill_py, m)?)?;
+    m.add_function(wrap_pyfunction!(available_repository_update_py, m)?)?;
     m.add_function(wrap_pyfunction!(parse_repository_location_py, m)?)?;
     m.add_function(wrap_pyfunction!(discover_repository_skills_py, m)?)?;
     m.add_function(wrap_pyfunction!(repository_versions_match_py, m)?)?;

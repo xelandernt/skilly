@@ -372,6 +372,20 @@ Updated body
 """,
         path=tmp_path / "refreshed",
     )
+    unrelated = Skill.from_text(
+        """---
+name: other-skill
+description: Another repository skill.
+metadata:
+  skilly-source: repository
+  skilly-repository-provider: github
+  skilly-repository-url: https://github.com/example/project/tree/main/skills/other-skill
+  skilly-repository-commit-sha: fedcba98765432100123456789abcdef01234567
+---
+Body
+""",
+        path=tmp_path / "unrelated",
+    )
 
     class Transport:
         def get(
@@ -386,7 +400,7 @@ Updated body
 
     monkeypatch.setattr(
         "skilly.skills.bridge.discover_repository_skills",
-        lambda repository_url, *, provider=None, transport=None: [refreshed],
+        lambda repository_url, *, provider=None, transport=None: [unrelated, refreshed],
     )
 
     update = SkillRepository(

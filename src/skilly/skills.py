@@ -148,3 +148,9 @@ def parse_repository_location(
 
 def repository_versions_match(installed: Skill, available: Skill) -> bool:
     return bool(bridge.repository_versions_match(installed, available))
+
+
+def available_repository_update(
+    installed: Skill, discovered: list[Skill]
+) -> Skill | None:
+    return bridge.available_repository_update(installed, discovered)

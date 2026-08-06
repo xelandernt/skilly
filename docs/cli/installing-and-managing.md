@@ -50,16 +50,6 @@ Use `--overwrite` to replace an already-installed skill.
 | `--github-token <TOKEN>` | GitHub token for resolving SkillsMP skill contents. |
 | *(destination flags)* | See [destinations reference](destinations-and-configuration.md). |
 
-### Browse installed SkillsMP skills
-
-```shell
-skilly skillsmp list
-```
-
-Shows all SkillsMP-installed skills with their update status.
-
-`skilly skillsmp list` accepts `--github-token <TOKEN>` when checking updates.
-
 ## List installed skills
 
 ```shell
@@ -89,7 +79,10 @@ the filter and return to the full tree.
 skilly update
 ```
 
-Checks every installed repository- and SkillsMP-backed skill for newer versions.
+Checks every installed dependency- and repository-backed skill for newer
+versions. Repository checks support GitHub, Bitbucket Cloud, and Bitbucket Data
+Center. A failed source check or replacement is reported without stopping the
+remaining updates.
 
 | Option | Description |
 |---|---|
