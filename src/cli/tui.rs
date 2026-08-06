@@ -55,7 +55,10 @@ pub(crate) struct MenuTabUi {
 pub(crate) enum MenuItemStatus {
     Default,
     Installed,
+    Checking,
+    UpToDate,
     Updatable,
+    CheckFailed,
     Disabled,
 }
 
@@ -841,14 +844,35 @@ pub(crate) fn menu_item_style(item: &MenuItemUi) -> Style {
     match item.status {
         MenuItemStatus::Default => Style::default(),
         MenuItemStatus::Installed => Style::default().fg(Color::Green),
+        MenuItemStatus::Checking => Style::default().fg(Color::Cyan),
+        MenuItemStatus::UpToDate => Style::default().fg(Color::Green),
         MenuItemStatus::Updatable => Style::default()
             .fg(Color::Magenta)
             .add_modifier(Modifier::BOLD),
+        MenuItemStatus::CheckFailed => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         MenuItemStatus::Disabled => Style::default().fg(Color::DarkGray),
     }
 }
 
+fn read_menu_event(ticking: bool) -> Result<Option<Event>> {
+    if ticking && !event::poll(Duration::from_millis(LOADING_POLL_INTERVAL_MS))? {
+        return Ok(None);
+    }
+    Ok(Some(event::read()?))
+}
+
 pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result<SelectMenuResult> {
+    select_menu_with_tick(session, menu, |_, _| false)
+}
+
+pub(crate) fn select_menu_with_tick<F>(
+    session: &mut TerminalSession,
+    mut menu: MenuUi,
+    mut on_tick: F,
+) -> Result<SelectMenuResult>
+where
+    F: FnMut(&mut MenuUi, usize) -> bool,
+{
     if menu.items.is_empty() {
         return Ok(SelectMenuResult::Cancel);
     }
@@ -870,8 +894,10 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
     };
     let vis_pos = visible_position(&visible, selected).unwrap_or(0);
     state.select(Some(vis_pos));
+    let mut frame_index = 0usize;
 
     loop {
+        let ticking = on_tick(&mut menu, frame_index);
         session.terminal.draw(|frame| {
             let status_height = if menu.status.is_some() { 1 } else { 0 };
             let tab_height = if menu.tabs.len() > 1 { 1 } else { 0 };
@@ -906,11 +932,13 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
                 .map(|&i| {
                     let item = &menu.items[i];
                     let style = menu_item_style(item);
-                    let line = if filter_active && !filter_text.is_empty() {
-                        highlighted_line(&item.label, &filter_text, style)
-                    } else {
-                        Line::from(Span::styled(item.label.clone(), style))
-                    };
+                    let label = fit_menu_label(
+                        &item.label,
+                        item.status,
+                        panes[0].width.saturating_sub(4) as usize,
+                    );
+                    let query = if filter_active { &filter_text } else { "" };
+                    let line = styled_menu_label(&label, query, style, item.status);
                     ListItem::new(line)
                 })
                 .collect::<Vec<_>>();
@@ -980,7 +1008,12 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
             );
         })?;
 
-        if let Event::Key(key) = event::read()? {
+        let Some(terminal_event) = read_menu_event(ticking)? else {
+            frame_index = frame_index.wrapping_add(1);
+            continue;
+        };
+
+        if let Event::Key(key) = terminal_event {
             if key.kind != KeyEventKind::Press {
                 continue;
             }
@@ -1075,7 +1108,7 @@ pub(crate) fn select_menu(session: &mut TerminalSession, menu: MenuUi) -> Result
                     }
                 }
                 Some(MenuAction::Select) => {
-                    if filter_active && visible.is_empty() {
+                    if (filter_active && visible.is_empty()) || !menu.items[selected].selectable {
                         // no matches — ignore, must Esc first
                     } else {
                         return Ok(SelectMenuResult::Selected(selected));
@@ -1096,6 +1129,25 @@ pub(crate) fn multi_select_menu(
     selectable_count: usize,
     initially_checked: &[usize],
 ) -> Result<MultiSelectMenuResult> {
+    multi_select_menu_with_tick(
+        session,
+        menu,
+        selectable_count,
+        initially_checked,
+        |_, _| false,
+    )
+}
+
+pub(crate) fn multi_select_menu_with_tick<F>(
+    session: &mut TerminalSession,
+    mut menu: MenuUi,
+    selectable_count: usize,
+    initially_checked: &[usize],
+    mut on_tick: F,
+) -> Result<MultiSelectMenuResult>
+where
+    F: FnMut(&mut MenuUi, usize) -> bool,
+{
     if menu.items.is_empty() {
         return Ok(MultiSelectMenuResult::Cancel);
     }
@@ -1122,8 +1174,10 @@ pub(crate) fn multi_select_menu(
     };
     let vis_pos = visible_position(&visible, focused).unwrap_or(0);
     state.select(Some(vis_pos));
+    let mut frame_index = 0usize;
 
     loop {
+        let ticking = on_tick(&mut menu, frame_index);
         session.terminal.draw(|frame| {
             let status_height = if menu.status.is_some() { 1 } else { 0 };
             let tab_height = if menu.tabs.len() > 1 { 1 } else { 0 };
@@ -1169,6 +1223,11 @@ pub(crate) fn multi_select_menu(
                     } else {
                         (None, item.label.as_str())
                     };
+                    let label_width = panes[0]
+                        .width
+                        .saturating_sub(4 + checkbox.map_or(0, |value| value.len() as u16))
+                        as usize;
+                    let text = fit_menu_label(text, item.status, label_width);
                     let base_style = if i < selectable_count && checked.contains(&i) {
                         Style::default()
                             .fg(Color::Cyan)
@@ -1176,23 +1235,13 @@ pub(crate) fn multi_select_menu(
                     } else {
                         menu_item_style(item)
                     };
-                    let line = if filter_active && !filter_text.is_empty() {
-                        let spans = if let Some(chk) = checkbox {
-                            let mut spans = vec![Span::styled(chk.to_string(), base_style)];
-                            spans.extend(highlighted_line(text, &filter_text, base_style).spans);
-                            spans
-                        } else {
-                            highlighted_line(text, &filter_text, base_style).spans
-                        };
-                        Line::from(spans)
-                    } else {
-                        let mut spans = Vec::new();
-                        if let Some(chk) = checkbox {
-                            spans.push(Span::styled(chk.to_string(), base_style));
-                        }
-                        spans.push(Span::styled(text.to_string(), base_style));
-                        Line::from(spans)
-                    };
+                    let query = if filter_active { &filter_text } else { "" };
+                    let mut spans = Vec::new();
+                    if let Some(chk) = checkbox {
+                        spans.push(Span::styled(chk.to_string(), base_style));
+                    }
+                    spans.extend(styled_menu_label(&text, query, base_style, item.status).spans);
+                    let line = Line::from(spans);
                     ListItem::new(line)
                 })
                 .collect::<Vec<_>>();
@@ -1269,7 +1318,12 @@ pub(crate) fn multi_select_menu(
             );
         })?;
 
-        if let Event::Key(key) = event::read()? {
+        let Some(terminal_event) = read_menu_event(ticking)? else {
+            frame_index = frame_index.wrapping_add(1);
+            continue;
+        };
+
+        if let Event::Key(key) = terminal_event {
             if key.kind != KeyEventKind::Press {
                 continue;
             }
@@ -1451,6 +1505,75 @@ pub(crate) fn adjust_focused_on_filter(visible: &[usize], focused: &mut usize) {
     {
         *focused = first;
     }
+}
+
+pub(crate) fn fit_menu_label(label: &str, status: MenuItemStatus, max_width: usize) -> String {
+    if label.chars().count() <= max_width {
+        return label.to_string();
+    }
+
+    let Some((base, suffix)) = menu_status_suffix(label, status) else {
+        return label.to_string();
+    };
+    let suffix_width = suffix.chars().count();
+    let reserved_suffix_width = if status == MenuItemStatus::Checking {
+        " ...".chars().count()
+    } else {
+        suffix_width
+    };
+    if max_width <= reserved_suffix_width {
+        return suffix
+            .trim_start()
+            .chars()
+            .take(max_width)
+            .collect::<String>();
+    }
+
+    let base_width = max_width - reserved_suffix_width;
+    let mut fitted = base
+        .chars()
+        .take(base_width.saturating_sub(1))
+        .collect::<String>();
+    fitted.push('…');
+    fitted.push_str(suffix);
+    fitted
+}
+
+fn menu_status_suffix(label: &str, status: MenuItemStatus) -> Option<(&str, &str)> {
+    let suffix = match status {
+        MenuItemStatus::Checking => {
+            let suffix = label.rsplit_once(' ')?.1;
+            if !matches!(suffix, "." | ".." | "...") {
+                return None;
+            }
+            suffix
+        }
+        MenuItemStatus::UpToDate => "(up to date)",
+        MenuItemStatus::Updatable => "(updatable)",
+        MenuItemStatus::CheckFailed => "(check failed)",
+        _ => return None,
+    };
+    let base = label.strip_suffix(suffix)?.strip_suffix(' ')?;
+    Some((base, &label[base.len()..]))
+}
+
+pub(crate) fn styled_menu_label(
+    label: &str,
+    query: &str,
+    base_style: Style,
+    status: MenuItemStatus,
+) -> Line<'static> {
+    let Some((base, suffix)) = menu_status_suffix(label, status) else {
+        return highlighted_line(label, query, base_style);
+    };
+    let mut spans = highlighted_line(base, query, base_style).spans;
+    let suffix_style = if status == MenuItemStatus::Checking {
+        base_style
+    } else {
+        base_style.add_modifier(Modifier::ITALIC)
+    };
+    spans.push(Span::styled(suffix.to_string(), suffix_style));
+    Line::from(spans)
 }
 
 pub(crate) fn highlighted_line(text: &str, query: &str, base_style: Style) -> Line<'static> {

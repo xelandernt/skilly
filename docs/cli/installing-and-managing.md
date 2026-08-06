@@ -70,6 +70,15 @@ Shows every installed skill, its origin, and its status. Repository-backed
 skills display their provider (`github`, `bitbucket-cloud`, or
 `bitbucket-data-center`) as the origin.
 
+In an interactive terminal, Skilly checks every dependency- and
+repository-backed skill in the background while keeping the menu responsive.
+The status line shows animated progress, pending rows animate with `.`, `..`,
+and `...`, and completed row statuses appear on the right. Available updates
+show `(updatable)` in italic color, unchanged skills show `(up to date)`, and
+unsuccessful checks show `(check failed)` with the reason in the preview. Plain
+non-interactive output only lists locally installed skills and does not contact
+update sources.
+
 In an interactive terminal, select a skill and choose **View files** to inspect
 its `SKILL.md` and bundled resources. Press `/` to filter by filename;
 directories containing a matching file remain visible. Press `Esc` to clear

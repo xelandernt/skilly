@@ -1,5 +1,6 @@
 pub(crate) mod args;
 pub(crate) mod tui;
+mod update_checks;
 
 use crate::cli::args::{
     Cli, Commands, CreateOptions, DestinationArgs, ResolvedDestination, SkillsMpSubcommand,
@@ -9,24 +10,29 @@ use crate::cli::args::{
 use crate::cli::tui::{
     DownloadableSkillMatch, InstalledSkillDiscoveryReport, InvalidInstalledSkill, ListedSkillEntry,
     MenuItemStatus, MenuItemUi, MenuUi, MultiSelectMenuResult, MultiSelectResult, SelectMenuResult,
-    TerminalSession, is_interactive_terminal, multi_select_menu, parse_metadata, run_configure_tui,
-    run_create_tui, run_file_viewer, select_menu, show_loading_message,
+    TerminalSession, is_interactive_terminal, multi_select_menu, multi_select_menu_with_tick,
+    parse_metadata, run_configure_tui, run_create_tui, run_file_viewer, select_menu,
+    select_menu_with_tick, show_loading_message,
+};
+use crate::cli::update_checks::{
+    UpdateCheckKey, UpdateCheckProgress, UpdateCheckRequest, UpdateCheckState, UpdateChecks,
 };
 use crate::client::{ClientConfig, SkillsMpClient, SkillsMpSearchQuery, SkillsMpSkill};
 use crate::config::{ProviderCredential, SkillyConfig};
 use crate::core::{
     MavenSourceSettings, NodeSourceSettings, ProjectDependencyOrigin, ProjectEnvironment,
-    ProjectSource, PythonSourceSettings, RepositoryProvider, SKILLY_UNKNOWN_SOURCE,
-    STATUS_INSTALLABLE, STATUS_INSTALLED, STATUS_UPDATABLE, ScanDependencySelection, SkillData,
-    SkillMatchData, SkillSourceMetadata, available_dependency_skill_in, discover_repository_skills,
-    project_requirements, remove_skill, repository_versions_match, scan_match_status,
-    scan_project_in,
+    ProjectSource, PythonSourceSettings, RepositoryProvider, SKILLY_SOURCE_REPOSITORY,
+    SKILLY_UNKNOWN_SOURCE, STATUS_INSTALLABLE, STATUS_INSTALLED, STATUS_UPDATABLE,
+    ScanDependencySelection, SkillData, SkillMatchData, SkillSourceMetadata,
+    available_dependency_skill_in, discover_repository_skills, project_requirements, remove_skill,
+    repository_versions_match, scan_match_status, scan_project_in,
 };
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub(crate) const BACK_CHOICE: &str = "back";
 #[allow(dead_code)]
@@ -51,6 +57,7 @@ pub(crate) const DEFAULT_CREATE_INSTRUCTIONS: &str =
 pub(crate) const CREATE_HELP_TEXT: &str =
     "^S create | F2 create | ^X cancel | F10 cancel | Tab next field";
 pub(crate) const LOADING_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+const UPDATE_CHECKING_FRAMES: [&str; 4] = [".", "..", "...", ".."];
 pub(crate) const LOADING_POLL_INTERVAL_MS: u64 = 120;
 
 pub fn run(args: Vec<String>) -> i32 {
@@ -1045,6 +1052,57 @@ fn download_selected_skills(
     Ok(())
 }
 
+fn build_update_check_requests(
+    destinations: &[ResolvedDestination],
+    entries_by_tab: &[Vec<ListedSkillEntry>],
+) -> Vec<UpdateCheckRequest> {
+    let mut requests = Vec::new();
+    for (destination, entries) in destinations.iter().zip(entries_by_tab) {
+        let mut dependencies = Vec::new();
+        for entry in entries {
+            let ListedSkillEntry::Valid(skill) = entry else {
+                continue;
+            };
+            let key = UpdateCheckKey::new(&destination.path, skill);
+            if skill.is_dependency() {
+                dependencies.push((key, skill.as_ref().clone()));
+                continue;
+            }
+            match (skill.repository_url.as_ref(), skill.repository_provider) {
+                (Some(_), Some(_)) => requests.push(UpdateCheckRequest::Repository {
+                    key,
+                    skill: skill.clone(),
+                }),
+                (Some(_), None) => requests.push(UpdateCheckRequest::Failed {
+                    key,
+                    error: "repository provider is missing".to_string(),
+                }),
+                (None, Some(_)) => requests.push(UpdateCheckRequest::Failed {
+                    key,
+                    error: "repository URL is missing".to_string(),
+                }),
+                (None, None) if skill.source == SKILLY_SOURCE_REPOSITORY => {
+                    requests.push(UpdateCheckRequest::Failed {
+                        key,
+                        error: "repository update metadata is missing".to_string(),
+                    });
+                }
+                (None, None) => {}
+            }
+        }
+        if !dependencies.is_empty() {
+            requests.push(UpdateCheckRequest::Dependencies {
+                environment: build_project_environment(
+                    &destination.path,
+                    &ScanDependencySelection::default(),
+                ),
+                skills: dependencies,
+            });
+        }
+    }
+    requests
+}
+
 fn run_list(
     destination: &DestinationArgs,
     config: ClientConfig,
@@ -1069,13 +1127,14 @@ fn run_list(
         println!("{CONFIGURE_HINT}");
         return Ok(());
     }
-    let client = SkillsMpClient::new(config)?;
+    let client = Arc::new(SkillsMpClient::new(config)?);
     let mut session = TerminalSession::new()?;
     let mut messages = Vec::new();
     let mut status_message = None;
     let mut selected_indices = vec![0usize; destinations.len()];
     let mut checked_indices = vec![Vec::<usize>::new(); destinations.len()];
     let mut active_tab = 0usize;
+    let mut update_checks = None;
 
     loop {
         let reports_by_tab = destinations
@@ -1094,6 +1153,13 @@ fn run_list(
         if active_tab >= destinations.len() || empty_flags[active_tab] {
             active_tab = pick_best_list_tab(&destinations, &empty_flags);
         }
+        let checks = update_checks.get_or_insert_with(|| {
+            UpdateChecks::start(
+                build_update_check_requests(&destinations, &entries_by_tab),
+                Arc::clone(&client),
+            )
+        });
+        let mut restart_update_checks = false;
 
         let directory = &destinations[active_tab].path;
         let entries = &entries_by_tab[active_tab];
@@ -1104,20 +1170,26 @@ fn run_list(
         let exit_index = entries.len();
         let mut items = entries
             .iter()
-            .map(|entry| MenuItemUi {
-                label: listed_skill_label(entry),
-                preview_lines: listed_skill_preview_lines(entry),
-                status: listed_skill_menu_status(entry),
-                selectable: matches!(entry, ListedSkillEntry::Valid(_)),
-                filter_text: Some(match entry {
-                    ListedSkillEntry::Valid(skill) => skill.name.clone(),
-                    ListedSkillEntry::Invalid(invalid) => invalid.directory_name.clone(),
-                }),
+            .map(|entry| {
+                let state = update_check_state_for(checks, directory, entry);
+                MenuItemUi {
+                    label: listed_skill_label_with_update_state(entry, state.as_ref(), 0),
+                    preview_lines: listed_skill_preview_lines_with_update_state(
+                        entry,
+                        state.as_ref(),
+                    ),
+                    status: listed_skill_menu_status(entry, state.as_ref()),
+                    selectable: matches!(entry, ListedSkillEntry::Valid(_)),
+                    filter_text: Some(match entry {
+                        ListedSkillEntry::Valid(skill) => skill.name.clone(),
+                        ListedSkillEntry::Invalid(invalid) => invalid.directory_name.clone(),
+                    }),
+                }
             })
             .collect::<Vec<_>>();
         items.push(exit_menu_item("Exit list"));
 
-        match multi_select_menu(
+        match multi_select_menu_with_tick(
             &mut session,
             MenuUi {
                 title: menu_title_for_destination(
@@ -1136,6 +1208,16 @@ fn run_list(
             },
             selectable_count,
             &checked_indices[active_tab],
+            |menu, frame_index| {
+                refresh_list_menu(
+                    menu,
+                    entries,
+                    directory,
+                    checks,
+                    frame_index,
+                    status_message.as_deref(),
+                )
+            },
         )? {
             MultiSelectMenuResult::Cancel => break,
             MultiSelectMenuResult::NextTab => {
@@ -1152,14 +1234,11 @@ fn run_list(
                 selected_indices[active_tab] = index;
                 match entries[index].clone() {
                     ListedSkillEntry::Valid(selected) => {
-                        let update_available = update_available_or_remember_error(
-                            directory,
-                            &selected,
-                            &client,
-                            &mut status_message,
-                        );
+                        let state = checks.state(&UpdateCheckKey::new(directory, &selected));
+                        let update_available =
+                            matches!(state, Some(UpdateCheckState::Updatable(_)));
                         let actions = installed_skill_actions(update_available, REMOVE_CHOICE);
-                        match select_menu(
+                        match select_menu_with_tick(
                             &mut session,
                             MenuUi {
                                 title: menu_title_for_destination(
@@ -1174,8 +1253,9 @@ fn run_list(
                                     .iter()
                                     .map(|item| MenuItemUi {
                                         label: (*item).to_string(),
-                                        preview_lines: listed_skill_preview_lines(
+                                        preview_lines: listed_skill_preview_lines_with_update_state(
                                             &ListedSkillEntry::Valid(selected.clone()),
+                                            state.as_ref(),
                                         ),
                                         status: MenuItemStatus::Default,
                                         selectable: true,
@@ -1184,11 +1264,44 @@ fn run_list(
                                     .collect(),
                                 default: action_menu_default(&actions),
                                 preview_title: skill_directory_name(&selected),
-                                status: status_message.clone(),
+                                status: update_check_status(
+                                    checks.progress(),
+                                    0,
+                                    status_message.as_deref(),
+                                ),
                                 help_text: DEFAULT_HELP_TEXT.to_string(),
                                 empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
                                 tabs: destination_tabs(&destinations, &empty_flags),
                                 active_tab,
+                            },
+                            |menu, frame_index| {
+                                let progress = checks.progress();
+                                let selected_state =
+                                    checks.state(&UpdateCheckKey::new(directory, &selected));
+                                menu.status = if progress.is_checking() {
+                                    update_check_status(progress, frame_index, None)
+                                } else {
+                                    match selected_state {
+                                        Some(UpdateCheckState::Updatable(_))
+                                            if !update_available =>
+                                        {
+                                            Some(
+                                                "Update available; return to the list to update"
+                                                    .to_string(),
+                                            )
+                                        }
+                                        Some(UpdateCheckState::Failed(error)) => Some(format!(
+                                            "Update check failed: {}",
+                                            sanitize_tui_line(&error)
+                                        )),
+                                        _ => update_check_status(
+                                            progress,
+                                            frame_index,
+                                            status_message.as_deref(),
+                                        ),
+                                    }
+                                };
+                                progress.is_checking()
                             },
                         )? {
                             SelectMenuResult::Cancel => continue,
@@ -1206,11 +1319,27 @@ fn run_list(
                                     run_file_viewer(&mut session, &selected)?;
                                 }
                                 UPDATE_CHOICE => {
+                                    let state =
+                                        checks.state(&UpdateCheckKey::new(directory, &selected));
+                                    let Some(UpdateCheckState::Updatable(available)) = state else {
+                                        status_message = Some(
+                                            "Update is no longer available; return to the list"
+                                                .to_string(),
+                                        );
+                                        continue;
+                                    };
+                                    let updated = install_available_skill(
+                                        directory,
+                                        &available,
+                                        Some(&skill_directory_name(&selected)),
+                                        true,
+                                    )?;
                                     remember_status(
                                         &mut messages,
                                         &mut status_message,
-                                        update_skill(directory, &selected, &client)?,
+                                        format_applied_update(&selected, &updated),
                                     );
+                                    restart_update_checks = true;
                                 }
                                 REMOVE_CHOICE => {
                                     let removed =
@@ -1220,6 +1349,7 @@ fn run_list(
                                         &mut status_message,
                                         format!("Removed {}", skill_directory_name(&removed)),
                                     );
+                                    restart_update_checks = true;
                                 }
                                 _ => {}
                             },
@@ -1228,7 +1358,7 @@ fn run_list(
                     }
                     ListedSkillEntry::Invalid(selected) => {
                         let actions = invalid_installed_skill_actions(REMOVE_CHOICE);
-                        match select_menu(
+                        match select_menu_with_tick(
                             &mut session,
                             MenuUi {
                                 title: menu_title_for_destination(
@@ -1256,6 +1386,15 @@ fn run_list(
                                 tabs: destination_tabs(&destinations, &empty_flags),
                                 active_tab,
                             },
+                            |menu, frame_index| {
+                                let progress = checks.progress();
+                                menu.status = update_check_status(
+                                    progress,
+                                    frame_index,
+                                    status_message.as_deref(),
+                                );
+                                progress.is_checking()
+                            },
                         )? {
                             SelectMenuResult::Cancel => continue,
                             SelectMenuResult::NextTab => {
@@ -1276,6 +1415,7 @@ fn run_list(
                                         &mut status_message,
                                         format!("Removed invalid skill {removed_name}"),
                                     );
+                                    restart_update_checks = true;
                                 }
                                 _ => {}
                             },
@@ -1312,7 +1452,7 @@ fn run_list(
                 }
                 actions.push(BACK_CHOICE);
                 actions.push(EXIT_CHOICE);
-                match select_menu(
+                match select_menu_with_tick(
                     &mut session,
                     MenuUi {
                         title: menu_title_for_destination(
@@ -1337,6 +1477,12 @@ fn run_list(
                         empty_preview: DEFAULT_EMPTY_PREVIEW.to_string(),
                         tabs: destination_tabs(&destinations, &empty_flags),
                         active_tab,
+                    },
+                    |menu, frame_index| {
+                        let progress = checks.progress();
+                        menu.status =
+                            update_check_status(progress, frame_index, status_message.as_deref());
+                        progress.is_checking()
                     },
                 )? {
                     SelectMenuResult::Cancel => {
@@ -1386,6 +1532,7 @@ fn run_list(
                                         }
                                     }
                                 }
+                                restart_update_checks = true;
                             }
                             UPDATE_ALL_CHOICE => {
                                 for entry in &selected {
@@ -1412,12 +1559,16 @@ fn run_list(
                                         }
                                     }
                                 }
+                                restart_update_checks = true;
                             }
                             _ => {}
                         }
                     }
                 }
             }
+        }
+        if restart_update_checks {
+            update_checks = None;
         }
     }
 
@@ -1545,38 +1696,34 @@ fn confirm_apply_updates() -> Result<bool> {
 }
 
 fn format_pending_update(update: &PendingSkillUpdate) -> String {
-    if update.installed.is_dependency() {
-        return format!(
-            "{} [dependency]: {} {} -> {}",
-            skill_directory_name(&update.installed),
-            update
-                .available
-                .package_name
-                .as_deref()
-                .unwrap_or("unknown"),
-            update
-                .installed
-                .package_version
-                .as_deref()
-                .unwrap_or("unknown"),
-            update
-                .available
-                .package_version
-                .as_deref()
-                .unwrap_or("unknown")
-        );
-    }
-
     format!(
-        "{} [{}]: {} -> {}",
+        "{} [{}]: {}",
         skill_directory_name(&update.installed),
-        if let Some(provider) = update.installed.repository_provider {
+        if update.installed.is_dependency() {
+            "dependency"
+        } else if let Some(provider) = update.installed.repository_provider {
             provider.as_str()
         } else {
             "unknown"
         },
-        short_revision(update.installed.repository_commit_sha.as_deref()),
-        short_revision(update.available.repository_commit_sha.as_deref())
+        format_update_transition(&update.installed, &update.available)
+    )
+}
+
+fn format_update_transition(installed: &SkillData, available: &SkillData) -> String {
+    if installed.is_dependency() {
+        return format!(
+            "{} {} -> {}",
+            available.package_name.as_deref().unwrap_or("unknown"),
+            installed.package_version.as_deref().unwrap_or("unknown"),
+            available.package_version.as_deref().unwrap_or("unknown")
+        );
+    }
+
+    format!(
+        "{} -> {}",
+        short_revision(installed.repository_commit_sha.as_deref()),
+        short_revision(available.repository_commit_sha.as_deref())
     )
 }
 
@@ -2207,11 +2354,101 @@ fn listed_skill_label(entry: &ListedSkillEntry) -> String {
     }
 }
 
-fn listed_skill_menu_status(entry: &ListedSkillEntry) -> MenuItemStatus {
+fn listed_skill_label_with_update_state(
+    entry: &ListedSkillEntry,
+    state: Option<&UpdateCheckState>,
+    frame_index: usize,
+) -> String {
+    let label = listed_skill_label(entry);
+    let suffix = match state {
+        Some(UpdateCheckState::Checking) => {
+            UPDATE_CHECKING_FRAMES[frame_index % UPDATE_CHECKING_FRAMES.len()]
+        }
+        Some(UpdateCheckState::Current) => "(up to date)",
+        Some(UpdateCheckState::Updatable(_)) => "(updatable)",
+        Some(UpdateCheckState::Failed(_)) => "(check failed)",
+        None => return label,
+    };
+    format!("{label} {suffix}")
+}
+
+fn listed_skill_menu_status(
+    entry: &ListedSkillEntry,
+    state: Option<&UpdateCheckState>,
+) -> MenuItemStatus {
     match entry {
-        ListedSkillEntry::Valid(_) => MenuItemStatus::Default,
+        ListedSkillEntry::Valid(_) => match state {
+            Some(UpdateCheckState::Checking) => MenuItemStatus::Checking,
+            Some(UpdateCheckState::Updatable(_)) => MenuItemStatus::Updatable,
+            Some(UpdateCheckState::Failed(_)) => MenuItemStatus::CheckFailed,
+            Some(UpdateCheckState::Current) => MenuItemStatus::UpToDate,
+            None => MenuItemStatus::Default,
+        },
         ListedSkillEntry::Invalid(_) => MenuItemStatus::Disabled,
     }
+}
+
+fn update_check_state_for(
+    checks: &UpdateChecks,
+    directory: &Path,
+    entry: &ListedSkillEntry,
+) -> Option<UpdateCheckState> {
+    let ListedSkillEntry::Valid(skill) = entry else {
+        return None;
+    };
+    checks.state(&UpdateCheckKey::new(directory, skill))
+}
+
+fn update_check_status(
+    progress: UpdateCheckProgress,
+    frame_index: usize,
+    fallback: Option<&str>,
+) -> Option<String> {
+    if progress.total == 0 {
+        return fallback.map(str::to_string);
+    }
+    if progress.is_checking() {
+        let spinner = LOADING_FRAMES[frame_index % LOADING_FRAMES.len()];
+        return Some(format!(
+            "{spinner} Checking for updates... {}/{}",
+            progress.checked, progress.total
+        ));
+    }
+    fallback.map(str::to_string).or_else(|| {
+        let update_label = if progress.updates == 1 {
+            "update"
+        } else {
+            "updates"
+        };
+        let check_label = if progress.failures == 1 {
+            "check"
+        } else {
+            "checks"
+        };
+        Some(format!(
+            "Update check complete: {} {update_label} available, {} {check_label} failed",
+            progress.updates, progress.failures,
+        ))
+    })
+}
+
+fn refresh_list_menu(
+    menu: &mut MenuUi,
+    entries: &[ListedSkillEntry],
+    directory: &Path,
+    checks: &UpdateChecks,
+    frame_index: usize,
+    fallback_status: Option<&str>,
+) -> bool {
+    for (item, entry) in menu.items.iter_mut().zip(entries) {
+        let state = update_check_state_for(checks, directory, entry);
+        item.label = listed_skill_label_with_update_state(entry, state.as_ref(), frame_index);
+        item.preview_lines = listed_skill_preview_lines_with_update_state(entry, state.as_ref());
+        item.status = listed_skill_menu_status(entry, state.as_ref());
+    }
+    let progress = checks.progress();
+    menu.status = update_check_status(progress, frame_index, fallback_status);
+    progress.is_checking()
 }
 
 fn scan_choice_label(item: &SkillMatchData) -> String {
@@ -2555,10 +2792,48 @@ fn invalid_installed_skill_preview_lines(skill: &InvalidInstalledSkill) -> Vec<S
 }
 
 fn listed_skill_preview_lines(entry: &ListedSkillEntry) -> Vec<String> {
+    listed_skill_preview_lines_with_update_state(entry, None)
+}
+
+fn listed_skill_preview_lines_with_update_state(
+    entry: &ListedSkillEntry,
+    state: Option<&UpdateCheckState>,
+) -> Vec<String> {
     match entry {
-        ListedSkillEntry::Valid(skill) => installed_skill_preview_lines(skill),
+        ListedSkillEntry::Valid(skill) => {
+            let extra = match state {
+                Some(UpdateCheckState::Checking) => vec!["Update Status: checking".to_string()],
+                Some(UpdateCheckState::Current) => vec!["Update Status: current".to_string()],
+                Some(UpdateCheckState::Updatable(available)) => vec![
+                    "Update Status: updatable".to_string(),
+                    format!(
+                        "Available Update: {}",
+                        format_update_transition(skill, available)
+                    ),
+                ],
+                Some(UpdateCheckState::Failed(error)) => vec![
+                    "Update Status: check failed".to_string(),
+                    format!("Update Check Error: {}", sanitize_tui_line(error)),
+                ],
+                None => Vec::new(),
+            };
+            skill_preview_lines(skill, &extra)
+        }
         ListedSkillEntry::Invalid(skill) => invalid_installed_skill_preview_lines(skill),
     }
+}
+
+fn sanitize_tui_line(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 fn skillsmp_search_preview_lines(
@@ -2656,16 +2931,19 @@ mod tests {
     use super::tui::{
         DownloadableSkillMatch, MenuAction, MenuItemStatus, MenuItemUi, TextBuffer,
         adjust_focused_on_filter, build_visible_indices, create_action, filter_matches,
-        filterable_count, menu_action, visible_position,
+        filterable_count, fit_menu_label, menu_action, styled_menu_label, visible_position,
     };
+    use super::update_checks::{UpdateCheckProgress, UpdateCheckState};
     use super::{
         APPLY_ALL_CHOICE, BACK_CHOICE, EXIT_CHOICE, INSTALL_ALL_CHOICE, INSTALL_CHOICE,
         PendingSkillUpdate, REMOVE_CHOICE, UPDATE_ALL_CHOICE, UPDATE_CHOICE, VIEW_FILES_CHOICE,
         action_menu_default, downloadable_skill_actions, downloadable_skill_menu_status,
         downloadable_skill_preview_lines, exit_menu_item, format_pending_update,
         installed_skill_actions, installed_skill_label, installed_skill_preview_lines,
-        installed_skillsmp_match, retained_multi_select_indices, scan_choice_label,
-        scan_match_preview_lines, search_skill_label, skillsmp_search_preview_lines,
+        installed_skillsmp_match, listed_skill_label_with_update_state, listed_skill_menu_status,
+        listed_skill_preview_lines_with_update_state, retained_multi_select_indices,
+        scan_choice_label, scan_match_preview_lines, search_skill_label,
+        skillsmp_search_preview_lines, update_check_status,
     };
     use crate::client::SkillsMpSkill;
     use crate::core::{
@@ -2674,6 +2952,7 @@ mod tests {
     };
     use clap::Parser;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use ratatui::style::{Modifier, Style};
     use serde_json::Value as JsonValue;
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
@@ -3030,6 +3309,171 @@ mod tests {
                 BACK_CHOICE,
                 EXIT_CHOICE
             ]
+        );
+    }
+
+    #[test]
+    fn installed_list_animates_checking_and_suffixes_completed_states() {
+        let installed = installed_skill(None, Some("https://github.com/example/repo"));
+        let entry = super::tui::ListedSkillEntry::Valid(Box::new(installed.clone()));
+        let available = SkillData {
+            repository_commit_sha: Some("fedcba98765432100123456789abcdef01234567".to_string()),
+            ..installed
+        };
+
+        assert!(
+            listed_skill_label_with_update_state(&entry, Some(&UpdateCheckState::Checking), 0)
+                .ends_with(" .")
+        );
+        assert!(
+            listed_skill_label_with_update_state(&entry, Some(&UpdateCheckState::Checking), 1)
+                .ends_with(" ..")
+        );
+        assert!(
+            listed_skill_label_with_update_state(&entry, Some(&UpdateCheckState::Checking), 2)
+                .ends_with(" ...")
+        );
+        assert!(
+            listed_skill_label_with_update_state(&entry, Some(&UpdateCheckState::Checking), 3)
+                .ends_with(" ..")
+        );
+        assert!(
+            listed_skill_label_with_update_state(
+                &entry,
+                Some(&UpdateCheckState::Updatable(Box::new(available))),
+                0,
+            )
+            .ends_with(" (updatable)")
+        );
+        assert!(
+            listed_skill_label_with_update_state(
+                &entry,
+                Some(&UpdateCheckState::Failed("offline".to_string())),
+                0,
+            )
+            .ends_with(" (check failed)")
+        );
+        assert!(
+            listed_skill_label_with_update_state(&entry, Some(&UpdateCheckState::Current), 0)
+                .ends_with(" (up to date)")
+        );
+        assert_eq!(
+            listed_skill_menu_status(&entry, Some(&UpdateCheckState::Checking)),
+            MenuItemStatus::Checking
+        );
+        assert_eq!(
+            listed_skill_menu_status(
+                &entry,
+                Some(&UpdateCheckState::Failed("offline".to_string()))
+            ),
+            MenuItemStatus::CheckFailed
+        );
+        assert_eq!(
+            listed_skill_menu_status(&entry, Some(&UpdateCheckState::Current)),
+            MenuItemStatus::UpToDate
+        );
+
+        let narrow_checking = fit_menu_label(
+            "repository-skill: repository-skill [github] ...",
+            MenuItemStatus::Checking,
+            32,
+        );
+        assert_eq!(narrow_checking.chars().count(), 32);
+        assert!(narrow_checking.contains('…'));
+        assert!(narrow_checking.ends_with(" ..."));
+
+        let narrow_checking_start = fit_menu_label(
+            "repository-skill: repository-skill [github] .",
+            MenuItemStatus::Checking,
+            32,
+        );
+        assert_eq!(
+            narrow_checking_start.strip_suffix(" ."),
+            narrow_checking.strip_suffix(" ...")
+        );
+
+        let styled = styled_menu_label(
+            "repository-skill (up to date)",
+            "",
+            Style::default(),
+            MenuItemStatus::UpToDate,
+        );
+        assert_eq!(styled.spans.len(), 2);
+        assert!(
+            !styled.spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::ITALIC)
+        );
+        assert!(
+            styled.spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::ITALIC)
+        );
+
+        let checking = styled_menu_label(
+            "repository-skill ...",
+            "",
+            Style::default(),
+            MenuItemStatus::Checking,
+        );
+        assert!(
+            !checking.spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::ITALIC)
+        );
+    }
+
+    #[test]
+    fn failed_update_check_preview_is_single_line_and_actionable() {
+        let entry = super::tui::ListedSkillEntry::Valid(Box::new(installed_skill(
+            None,
+            Some("https://github.com/example/repo"),
+        )));
+
+        let preview = listed_skill_preview_lines_with_update_state(
+            &entry,
+            Some(&UpdateCheckState::Failed(
+                "network\nerror\u{1b}[31m".to_string(),
+            )),
+        );
+
+        assert!(
+            preview
+                .iter()
+                .any(|line| line == "Update Status: check failed")
+        );
+        assert!(
+            preview
+                .iter()
+                .any(|line| line == "Update Check Error: network error [31m")
+        );
+    }
+
+    #[test]
+    fn update_check_status_animates_progress_then_reports_summary() {
+        let checking = UpdateCheckProgress {
+            checked: 2,
+            total: 5,
+            updates: 1,
+            failures: 0,
+        };
+        let complete = UpdateCheckProgress {
+            checked: 5,
+            total: 5,
+            updates: 2,
+            failures: 1,
+        };
+
+        assert_eq!(
+            update_check_status(checking, 0, None).as_deref(),
+            Some("⠋ Checking for updates... 2/5")
+        );
+        assert_eq!(
+            update_check_status(complete, 0, None).as_deref(),
+            Some("Update check complete: 2 updates available, 1 check failed")
         );
     }
 

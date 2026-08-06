@@ -5,6 +5,8 @@ from importlib.metadata import version
 from pathlib import Path
 import subprocess
 
+import pytest
+
 from skilly._cli import run_cli
 from skilly.repository import SkillRepository
 from skilly.skills import Skill, resolve_skills_directory
@@ -236,6 +238,36 @@ def test_run_cli_list_prints_plain_output_without_terminal(
 
     assert exit_code == 0
     assert "sample-skill" in capfd.readouterr().out
+
+
+def test_run_cli_list_plain_output_does_not_check_repository_updates(
+    tmp_path: Path, capfd, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed = Skill.from_text(
+        """---
+name: repository-skill
+description: Installed repository skill.
+metadata:
+  skilly-source: repository
+  skilly-repository-provider: github
+  skilly-repository-url: https://github.com/example/project/tree/main/repository-skill
+  skilly-repository-commit-sha: 0123456789abcdef0123456789abcdef01234567
+---
+Body
+""",
+    )
+    SkillRepository().install(installed, directory=tmp_path)
+    monkeypatch.setenv("SKILLY_GITHUB_API_BASE_URL", "http://127.0.0.1:1")
+
+    exit_code = run_cli(["list", "--directory", str(tmp_path)])
+
+    assert exit_code == 0
+    output = capfd.readouterr().out
+    assert "repository-skill" in output
+    assert "[checking]" not in output
+    assert "(up to date)" not in output
+    assert "(updatable)" not in output
+    assert "(check failed)" not in output
 
 
 def test_run_cli_list_reports_invalid_child_directory_without_failing(
