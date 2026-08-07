@@ -122,8 +122,10 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 - `src/core.rs`: domain models, parsing, validation, filesystem-independent
   discovery, installation, scanning, and update logic.
-- `src/cli.rs`: CLI parsing and user interaction, including TUI and plain
-  non-TTY output.
+- `src/cli/`: CLI parsing, dispatch, command workflows, shared operations, and
+  plain non-TTY output.
+- `src/cli/tui/`: interactive terminal sessions, menus, forms, loading states,
+  and the skill file viewer.
 - `src/client.rs`: blocking SkillsMP and GitHub transport with bounded requests.
 - `src/lib.rs`: PyO3 bindings; keep domain decisions out of this layer.
 - `src/skilly/_bridge.py` and `src/skilly/_core.pyi`: typed Python/Rust boundary.
