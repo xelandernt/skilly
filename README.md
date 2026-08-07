@@ -70,7 +70,7 @@ skilly list
 | `scan`                    | Find skills provided by Python and Node project dependencies       |
 | `download <repository-url>` | Install one or more skills from a supported repository           |
 | `list`                    | Browse, update, or remove installed skills                         |
-| `update`                  | Preview available updates; `--yes` applies all                     |
+| `update`                  | Preview updates across configured directories; `--yes` applies all |
 | `remove <name>`           | Remove an installed skill by directory name                        |
 | `skillsmp search <query>` | Search SkillsMP and install a selected result                      |
 | `create`                  | Create a valid skill directory                                     |
@@ -93,7 +93,7 @@ See [installing and managing](https://xelandernt.github.io/skilly/cli/installing
 
 ### Destinations
 
-All management commands accept the same destination options:
+All management commands accept the same explicit destination options:
 
 ```shell
 uvx skilly list --local        # .agents/skills
@@ -109,6 +109,10 @@ example, `GitHub · owner/repo`). `list` checks known update sources in the
 background without blocking navigation: a spinner marks pending checks, while
 `✓`, `↑`, and `!` mark current, updatable, and failed checks. Plain
 non-interactive output remains local-only.
+
+Without a destination flag, `skilly update` checks every directory configured
+through `skilly configure`. Pass `--local`, `--global`, an agent flag, or
+`--directory <path>` to limit it to one destination.
 
 | Flags                | Resolved destination                                          |
 |----------------------|---------------------------------------------------------------|

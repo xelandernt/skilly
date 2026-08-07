@@ -23,6 +23,7 @@ use super::{
     skillsmp_search_preview_lines, skillsmp_search_source_label, update_check_status,
 };
 use crate::client::SkillsMpSkill;
+use crate::config::SkillyConfig;
 use crate::core::{
     NamedSelection, ProjectDependencyOrigin, RepositoryProvider, SKILLY_SOURCE_DEPENDENCY,
     SKILLY_SOURCE_REPOSITORY, SkillData, SkillMatchData,
@@ -280,6 +281,44 @@ fn destination_flags_resolve_for_directory_commands() {
         std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME should be set"))
             .join(".copilot/skills")
     );
+}
+
+#[test]
+fn global_agents_destination_resolves_to_the_global_directory() {
+    let cli =
+        Cli::try_parse_from(["skilly", "update", "--global"]).expect("update command should parse");
+    let Commands::Update { destination, .. } = cli.command else {
+        panic!("expected update command");
+    };
+
+    assert_eq!(
+        destination.resolve().expect("destination should resolve"),
+        PathBuf::from(std::env::var_os("HOME").expect("HOME should be set")).join(".agents/skills")
+    );
+}
+
+#[test]
+fn unscoped_update_resolves_every_configured_destination() {
+    let cli = Cli::try_parse_from(["skilly", "update"]).expect("update command should parse");
+    let Commands::Update { destination, .. } = cli.command else {
+        panic!("expected update command");
+    };
+    let mut config = SkillyConfig::default();
+    config.global.directories = vec!["~/.agents/skills".to_string()];
+    config.local.directories = vec![".agents/skills".to_string(), ".shared/skills".to_string()];
+
+    let destinations = destination
+        .resolve_configured_destinations(&config)
+        .expect("configured destinations should resolve");
+
+    assert_eq!(destinations.len(), 3);
+    let labels = destinations
+        .iter()
+        .map(|destination| destination.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(labels.contains(&"agents global"));
+    assert!(labels.contains(&"agents local"));
+    assert!(labels.contains(&"skills (local)"));
 }
 
 #[test]
@@ -694,6 +733,7 @@ fn downloadable_skill_actions_omit_update_when_versions_match() {
 #[test]
 fn pending_github_update_preview_uses_short_commits() {
     let update = PendingSkillUpdate {
+        directory: PathBuf::from(".agents/skills"),
         installed: installed_skill(
             None,
             Some("https://github.com/example/project/tree/main/skills/python"),

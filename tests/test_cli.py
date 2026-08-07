@@ -164,7 +164,10 @@ def test_run_cli_update_help_describes_options(capfd) -> None:
 
     assert exit_code == 0
     output = capfd.readouterr().out
-    assert "Check installed skill updates in bulk and optionally apply them" in output
+    assert (
+        "Check installed skill updates across configured directories by default"
+        in output
+    )
     assert "use `skilly list` to review or update one skill at a time" in output
     assert "--yes" in output
     assert "-y" in output
@@ -418,6 +421,7 @@ def test_run_cli_update_previews_dependency_skill_updates_by_default(
     monkeypatch,
     capfd,
 ) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     Path("pyproject.toml").write_text(
         """
@@ -471,7 +475,10 @@ Body
     assert refreshed.package_version == "1.2.3"
     output = capfd.readouterr().out
     assert "Available skill updates:" in output
-    assert "sample-skill [dependency]: sample-pkg 1.2.3 -> 1.2.4" in output
+    assert (
+        f"sample-skill [dependency]: sample-pkg 1.2.3 -> 1.2.4 ({install_directory})"
+        in output
+    )
     assert "Use `skilly list` to review or apply updates one skill at a time." in output
     assert "Re-run with --yes to apply these updates" in output
     assert venv_path.exists()
@@ -482,6 +489,7 @@ def test_run_cli_update_yes_updates_dependency_skill(
     monkeypatch,
     capfd,
 ) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     Path("pyproject.toml").write_text(
         """
@@ -533,7 +541,9 @@ Body
     assert exit_code == 0
     refreshed = SkillRepository().require("sample-skill", directory=install_directory)
     assert refreshed.package_version == "1.2.4"
-    assert "Updated sample-skill to 1.2.4" in capfd.readouterr().out
+    assert (
+        f"Updated sample-skill to 1.2.4 ({install_directory})" in capfd.readouterr().out
+    )
     assert venv_path.exists()
 
 

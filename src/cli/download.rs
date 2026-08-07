@@ -22,7 +22,7 @@ pub(super) fn run_download(
         bail!("use either --skill-name or --all when downloading multiple skills");
     }
     let interactive_destinations = if is_interactive_terminal() {
-        destination.resolve_interactive_destinations(skilly_config)?
+        destination.resolve_configured_destinations(skilly_config)?
     } else {
         Vec::new()
     };

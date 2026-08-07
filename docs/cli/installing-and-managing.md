@@ -79,10 +79,11 @@ the filter and return to the full tree.
 skilly update
 ```
 
-Checks every installed dependency- and repository-backed skill for newer
-versions. Repository checks support GitHub, Bitbucket Cloud, and Bitbucket Data
-Center. A failed source check or replacement is reported without stopping the
-remaining updates.
+Without a destination flag, checks every installed dependency- and
+repository-backed skill in every directory configured through `skilly configure`.
+Pass a destination flag to restrict the check to one directory. Repository checks
+support GitHub, Bitbucket Cloud, and Bitbucket Data Center. A failed source check
+or replacement is reported without stopping the remaining updates.
 
 | Option | Description |
 |---|---|

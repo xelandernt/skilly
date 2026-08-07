@@ -119,7 +119,7 @@ pub(crate) enum Commands {
         token: Option<String>,
     },
     #[command(
-        about = "Check installed skill updates in bulk and optionally apply them; use `skilly list` to review or update one skill at a time."
+        about = "Check installed skill updates across configured directories by default and optionally apply them; use `skilly list` to review or update one skill at a time."
     )]
     Update {
         #[command(flatten)]
@@ -319,6 +319,9 @@ impl DestinationArgs {
             return absolute_path(directory);
         }
         self.validate()?;
+        if !self.local && !self.global && !self.claude && !self.codex && !self.copilot {
+            return crate::core::default_skills_directory();
+        }
         let flavor = if self.claude {
             SkillDirectoryFlavor::Claude
         } else if self.codex {
@@ -326,12 +329,16 @@ impl DestinationArgs {
         } else if self.copilot {
             SkillDirectoryFlavor::Copilot
         } else {
-            return crate::core::default_skills_directory();
+            SkillDirectoryFlavor::Agents
         };
         absolute_path(&skills_directory(flavor, self.global)?)
     }
 
-    pub(crate) fn resolve_interactive_destinations(
+    /// Resolve the configured set when no explicit destination was requested.
+    ///
+    /// Interactive commands use this for their tabs; bulk update uses the same
+    /// contract outside a terminal.
+    pub(crate) fn resolve_configured_destinations(
         &self,
         config: &SkillyConfig,
     ) -> Result<Vec<ResolvedDestination>> {

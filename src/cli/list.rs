@@ -19,7 +19,7 @@ pub(super) fn run_list(
         return Ok(());
     }
 
-    let destinations = destination.resolve_interactive_destinations(skilly_config)?;
+    let destinations = destination.resolve_configured_destinations(skilly_config)?;
     if destinations.is_empty() {
         println!("{CONFIGURE_HINT}");
         return Ok(());

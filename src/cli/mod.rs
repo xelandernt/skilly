@@ -175,7 +175,7 @@ fn try_run(args: Vec<String>) -> Result<i32> {
             yes,
             token,
         } => run_update(
-            &destination.resolve()?,
+            &destination.resolve_configured_destinations(&skilly_config)?,
             ClientConfig::new(None, None, None, None)
                 .with_repository_token(token)
                 .with_repository_credentials(skilly_config.repositories.providers.clone()),

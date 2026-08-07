@@ -2,27 +2,38 @@ use super::*;
 
 #[derive(Debug, Clone)]
 pub(super) struct PendingSkillUpdate {
+    pub(super) directory: PathBuf,
     pub(super) installed: SkillData,
     pub(super) available: SkillData,
 }
 
-pub(super) fn run_update(directory: &Path, config: ClientConfig, yes: bool) -> Result<()> {
+pub(super) fn run_update(
+    destinations: &[ResolvedDestination],
+    config: ClientConfig,
+    yes: bool,
+) -> Result<()> {
+    if destinations.is_empty() {
+        println!("{CONFIGURE_HINT}");
+        return Ok(());
+    }
     let client = Arc::new(SkillsMpClient::new(config)?);
-    let installed_skills = discover_installed_skills_report(directory)?.valid_skills;
-    let destination = ResolvedDestination {
-        label: "current".to_string(),
-        path: directory.to_path_buf(),
-        color: ratatui::style::Color::White,
-    };
-    let entries = installed_skills
+    let installed_by_destination = destinations
         .iter()
-        .cloned()
-        .map(|skill| ListedSkillEntry::Valid(Box::new(skill)))
+        .map(|destination| {
+            discover_installed_skills_report(&destination.path).map(|report| report.valid_skills)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let entries_by_destination = installed_by_destination
+        .iter()
+        .map(|installed_skills| {
+            installed_skills
+                .iter()
+                .cloned()
+                .map(|skill| ListedSkillEntry::Valid(Box::new(skill)))
+                .collect::<Vec<_>>()
+        })
         .collect::<Vec<_>>();
-    let requests = build_update_check_requests(
-        std::slice::from_ref(&destination),
-        std::slice::from_ref(&entries),
-    );
+    let requests = build_update_check_requests(destinations, &entries_by_destination);
     let checks = UpdateChecks::start(requests, Arc::clone(&client));
     while checks.progress().is_checking() {
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -30,22 +41,28 @@ pub(super) fn run_update(directory: &Path, config: ClientConfig, yes: bool) -> R
 
     let mut updates = Vec::new();
     let mut errors = Vec::new();
-    for installed in installed_skills {
-        match checks.state(&UpdateCheckKey::new(directory, &installed)) {
-            Some(UpdateCheckState::Updatable(available)) => updates.push(PendingSkillUpdate {
-                installed,
-                available: *available,
-            }),
-            Some(UpdateCheckState::Failed(error)) => errors.push(format!(
-                "Could not check updates for {}: {error}",
-                skill_directory_name(&installed)
-            )),
-            Some(UpdateCheckState::Checking | UpdateCheckState::Latest) | None => {}
+    for (destination, installed_skills) in destinations.iter().zip(installed_by_destination) {
+        for installed in installed_skills {
+            match checks.state(&UpdateCheckKey::new(&destination.path, &installed)) {
+                Some(UpdateCheckState::Updatable(available)) => updates.push(PendingSkillUpdate {
+                    directory: destination.path.clone(),
+                    installed,
+                    available: *available,
+                }),
+                Some(UpdateCheckState::Failed(error)) => errors.push(format!(
+                    "Could not check updates for {} in {}: {error}",
+                    skill_directory_name(&installed),
+                    destination.path.display(),
+                )),
+                Some(UpdateCheckState::Checking | UpdateCheckState::Latest) | None => {}
+            }
         }
     }
 
     updates.sort_by(|left, right| {
-        skill_directory_name(&left.installed).cmp(&skill_directory_name(&right.installed))
+        left.directory.cmp(&right.directory).then_with(|| {
+            skill_directory_name(&left.installed).cmp(&skill_directory_name(&right.installed))
+        })
     });
 
     if updates.is_empty() {
@@ -58,7 +75,11 @@ pub(super) fn run_update(directory: &Path, config: ClientConfig, yes: bool) -> R
 
     println!("Available skill updates:");
     for update in &updates {
-        println!("{}", format_pending_update(update));
+        println!(
+            "{} ({})",
+            format_pending_update(update),
+            update.directory.display()
+        );
     }
     for error in &errors {
         println!("{error}");
@@ -81,15 +102,20 @@ pub(super) fn run_update(directory: &Path, config: ClientConfig, yes: bool) -> R
 
     for update in &updates {
         match install_available_skill(
-            directory,
+            &update.directory,
             &update.available,
             Some(&skill_directory_name(&update.installed)),
             true,
         ) {
-            Ok(updated) => println!("{}", format_applied_update(&update.installed, &updated)),
+            Ok(updated) => println!(
+                "{} ({})",
+                format_applied_update(&update.installed, &updated),
+                update.directory.display()
+            ),
             Err(error) => errors.push(format!(
-                "Could not update {}: {error}",
-                skill_directory_name(&update.installed)
+                "Could not update {} in {}: {error}",
+                skill_directory_name(&update.installed),
+                update.directory.display(),
             )),
         }
     }
