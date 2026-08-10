@@ -346,7 +346,6 @@ print(result.data.skills[0].repository_url)
 just install
 just lint
 just test
-just typecheck
 ```
 
 ## License
