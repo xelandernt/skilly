@@ -1,4 +1,6 @@
 use super::*;
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 #[derive(Debug, Clone)]
 pub(super) struct PendingSkillUpdate {
@@ -128,10 +130,64 @@ pub(super) fn run_update(
 pub(super) fn confirm_apply_updates() -> Result<bool> {
     print!("Apply these updates? [y/N] ");
     io::stdout().flush()?;
+    let _raw_mode = RawModeGuard::enable()?;
     let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
-    let normalized = answer.trim().to_ascii_lowercase();
-    Ok(normalized == "y" || normalized == "yes")
+    loop {
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if let Some(confirmed) = confirmation_key_result(key, &answer) {
+            print!("\r\n");
+            io::stdout().flush()?;
+            return Ok(confirmed);
+        }
+        match key.code {
+            KeyCode::Char(character)
+                if !key.modifiers.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                ) =>
+            {
+                answer.push(character);
+                print!("{character}");
+                io::stdout().flush()?;
+            }
+            KeyCode::Backspace if answer.pop().is_some() => {
+                print!("\u{8} \u{8}");
+                io::stdout().flush()?;
+            }
+            _ => {}
+        }
+    }
+}
+
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn enable() -> Result<Self> {
+        enable_raw_mode()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
+}
+
+pub(super) fn confirmation_key_result(key: KeyEvent, answer: &str) -> Option<bool> {
+    if key.kind != KeyEventKind::Press {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(false),
+        KeyCode::Esc => Some(false),
+        KeyCode::Enter => {
+            let normalized = answer.trim().to_ascii_lowercase();
+            Some(normalized == "y" || normalized == "yes")
+        }
+        _ => None,
+    }
 }
 
 pub(super) fn format_pending_update(update: &PendingSkillUpdate) -> String {

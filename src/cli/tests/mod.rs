@@ -15,10 +15,11 @@ use super::{
     APPLY_ALL_CHOICE, BACK_CHOICE, EXIT_CHOICE, INSTALL_ALL_CHOICE, INSTALL_CHOICE,
     PendingSkillUpdate, REMOVE_CHOICE, UPDATE_ALL_CHOICE, UPDATE_CHOICE, VIEW_FILES_CHOICE,
     action_menu_default, build_update_check_requests, common_repository_path,
-    downloadable_skill_actions, downloadable_skill_menu_status, downloadable_skill_preview_lines,
-    exit_menu_item, format_pending_update, installed_skill_actions, installed_skill_label,
-    installed_skill_preview_lines, installed_skillsmp_match, listed_skill_menu_status,
-    listed_skill_name, listed_skill_preview_lines_with_update_state, listed_skill_source_label,
+    confirmation_key_result, downloadable_skill_actions, downloadable_skill_menu_status,
+    downloadable_skill_preview_lines, exit_menu_item, format_pending_update,
+    installed_skill_actions, installed_skill_label, installed_skill_preview_lines,
+    installed_skillsmp_match, listed_skill_menu_status, listed_skill_name,
+    listed_skill_preview_lines_with_update_state, listed_skill_source_label,
     retained_multi_select_indices, scan_choice_label, scan_match_preview_lines, skill_source_label,
     skillsmp_search_preview_lines, skillsmp_search_source_label, update_check_status,
 };
@@ -240,6 +241,28 @@ fn create_action_maps_create_and_cancel_shortcuts() {
             KeyEventKind::Press,
         )),
         Some(CreateAction::Cancel)
+    );
+}
+
+#[test]
+fn update_confirmation_treats_ctrl_c_as_cancellation() {
+    assert_eq!(
+        confirmation_key_result(
+            KeyEvent::new_with_kind(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+                KeyEventKind::Press,
+            ),
+            "",
+        ),
+        Some(false)
+    );
+    assert_eq!(
+        confirmation_key_result(
+            KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Press),
+            "yes",
+        ),
+        Some(true)
     );
 }
 
